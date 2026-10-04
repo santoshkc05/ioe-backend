@@ -124,7 +124,8 @@ New sqlc queries, no migration:
 -- name: GetUserByIDForUpdate :one
 SELECT * FROM identity.users WHERE id = $1 FOR UPDATE;
 
--- name: GetUserByGoogleSubForUpdate :one  -- replaces GetUserByGoogleSub
+-- Replaces GetUserByGoogleSub.
+-- name: GetUserByGoogleSubForUpdate :one
 SELECT * FROM identity.users WHERE google_sub = $1 FOR UPDATE;
 
 -- name: SearchUsersByEmailPrefix :many
