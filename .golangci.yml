@@ -1,0 +1,70 @@
+version: "2"
+
+run:
+  timeout: 5m
+  build-tags:
+    - integration
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - contextcheck
+    - depguard
+    - errcheck
+    - errorlint
+    - gocritic
+    - gosec
+    - govet
+    - ineffassign
+    - misspell
+    - noctx
+    - revive
+    - sqlclosecheck
+    - staticcheck
+    - unused
+  settings:
+    depguard:
+      rules:
+        platform-independent-of-contexts:
+          list-mode: lax
+          files:
+            - "**/internal/platform/**"
+          deny:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
+              desc: platform must not depend on bounded contexts
+        identity-domain:
+          list-mode: strict
+          files:
+            - "**/internal/identity/domain/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+        identity-app:
+          list-mode: strict
+          files:
+            - "**/internal/identity/app/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/google/uuid
+            - github.com/santoshkc2200/ioe-backend/internal/identity/domain
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/clock
+  exclusions:
+    generated: strict
+    presets:
+      - comments
+      - common-false-positives
+      - std-error-handling
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/santoshkc2200/ioe-backend
