@@ -67,16 +67,3 @@ type TxRunner interface {
 type EnrollmentQuery interface {
 	IsActivelyEnrolled(ctx context.Context, courseID, userID id.ID) (bool, error)
 }
-
-// LectureContentView is a lecture's full content.
-//
-// TEMPORARY: Task 8 moves this to content_service.go; it lives here so the
-// package compiles until then.
-type LectureContentView struct {
-	LectureID       id.ID
-	CourseID        id.ID
-	Title           string
-	FreePreview     bool
-	ContentRevision int64
-	Blocks          []contentblocks.Block
-}
