@@ -1,0 +1,179 @@
+openapi: 3.1.0
+info:
+  title: IOE Backend API
+  version: 0.1.0
+  description: >
+    Single-tenant LMS backend. Authentication exchanges a Google ID token for an
+    access token (Bearer, 15 minutes) and a rotating refresh token held in an
+    HttpOnly cookie scoped to /v1/auth.
+servers:
+  - url: https://api.example.com
+paths:
+  /healthz:
+    get:
+      summary: Liveness
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+  /readyz:
+    get:
+      summary: Readiness (database reachable)
+      security: []
+      responses:
+        "200": { $ref: "#/components/responses/Status" }
+        "503": { $ref: "#/components/responses/Status" }
+  /v1/auth/google:
+    post:
+      summary: Sign in with a Google ID token
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [id_token]
+              properties:
+                id_token: { type: string, minLength: 1 }
+      responses:
+        "200":
+          description: Signed in
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/RefreshCookie" }
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/TokenResponse"
+                  - type: object
+                    required: [user]
+                    properties:
+                      user: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /v1/auth/refresh:
+    post:
+      summary: Rotate the refresh token and issue a new access token
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      security:
+        - refreshCookie: []
+      responses:
+        "200":
+          description: Refreshed
+          headers:
+            Set-Cookie: { $ref: "#/components/headers/RefreshCookie" }
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/TokenResponse" }
+        "401":
+          description: invalid_token or refresh_reuse_detected; the cookie is cleared
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /v1/auth/logout:
+    post:
+      summary: Revoke the session's refresh-token family
+      security: []
+      parameters:
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Logged out; the cookie is cleared
+        "403": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+  /v1/me:
+    get:
+      summary: Current user
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: The authenticated user
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+components:
+  securitySchemes:
+    bearer:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+    refreshCookie:
+      type: apiKey
+      in: cookie
+      name: __Secure-ioe_refresh
+  parameters:
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      description: Must exactly match a configured allowed origin.
+      schema: { type: string }
+  headers:
+    RefreshCookie:
+      description: >
+        __Secure-ioe_refresh=<token>; Path=/v1/auth; Max-Age=<seconds>; HttpOnly; Secure; SameSite=Strict
+      schema: { type: string }
+  responses:
+    Status:
+      description: Health status
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              status: { type: string, enum: [ok, unavailable] }
+    Problem:
+      description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+  schemas:
+    TokenResponse:
+      type: object
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string }
+        token_type: { type: string, const: Bearer }
+        expires_in: { type: integer, description: Seconds until the access token expires }
+    User:
+      type: object
+      required: [id, email, name, avatar_url, role]
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        name: { type: string }
+        avatar_url: { type: string }
+        role: { type: string, enum: [student, instructor, root_admin] }
+    Problem:
+      type: object
+      required: [type, title, status]
+      properties:
+        type:
+          type: string
+          enum:
+            - invalid_request
+            - invalid_token
+            - refresh_reuse_detected
+            - email_unverified
+            - origin_not_allowed
+            - not_found
+            - method_not_allowed
+            - payload_too_large
+            - unsupported_media_type
+            - rate_limited
+            - internal
+        title: { type: string }
+        status: { type: integer }
+        detail: { type: string }
+        instance: { type: string, description: Request ID }
