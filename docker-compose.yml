@@ -1,0 +1,63 @@
+name: ioe-backend
+
+services:
+  postgres:
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_DB: ioe
+      POSTGRES_USER: ioe
+      POSTGRES_PASSWORD: ioe
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ioe -d ioe"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  openobserve:
+    image: public.ecr.aws/zinclabs/openobserve:v1.0.4
+    environment:
+      ZO_ROOT_USER_EMAIL: ${ZO_ROOT_USER_EMAIL:-root@example.com}
+      ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-Complexpass#123}
+      ZO_DATA_DIR: /data
+    ports:
+      - "127.0.0.1:5080:5080"
+    volumes:
+      - o2data:/data
+
+  migrate:
+    profiles: [app]
+    build: .
+    command: ["migrate", "up"]
+    environment:
+      DATABASE_URL: postgres://ioe:ioe@postgres:5432/ioe?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    profiles: [app]
+    build: .
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://ioe:ioe@postgres:5432/ioe?sslmode=disable
+      HTTP_ADDR: ":8080"
+      OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5080/api/default
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      openobserve:
+        condition: service_started
+
+volumes:
+  pgdata:
+  o2data:
