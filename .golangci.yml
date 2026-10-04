@@ -35,6 +35,16 @@ linters:
               desc: platform must not depend on bounded contexts
             - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
               desc: platform must not depend on bounded contexts
+        platform-contentblocks:
+          list-mode: strict
+          files:
+            - "**/internal/platform/contentblocks/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/microcosm-cc/bluemonday
+            - golang.org/x/net/html
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
         identity-domain:
           list-mode: strict
           files:
