@@ -79,7 +79,7 @@ internal/identity/
   adapters/postgres/         sqlc queries, generated code, repository implementations
   adapters/google/           Google ID-token verifier
   adapters/jwt/              access-token issuer and verifier
-  adapters/http/             handlers and bearer-auth middleware
+  adapters/httpapi/          handlers and bearer-auth middleware
 migrations/                  goose SQL migrations
 api/openapi.yaml             public HTTP contract
 docs/superpowers/specs/      design documents
@@ -114,7 +114,7 @@ Identity's HTTP adapter exports a bearer-auth middleware that verifies the acces
 
 ### Transactions and events
 
-The platform `postgres` package provides `WithTx(ctx, func(pgx.Tx) error) error`. Identity repositories accept a `pgx.Tx`-backed querier. When sign-in creates a user, the user row and the `identity.UserRegistered` outbox message are written in the same transaction through Watermill's SQL publisher. A forwarder goroutine in `cmd/api` moves outbox messages to the Watermill Go-channel pub/sub. No subscriber exists yet; the forwarder proves the pipeline and gives later contexts an attachment point.
+There is no platform `WithTx` helper; identity's `TxRunner` (`internal/identity/adapters/postgres`) runs each use case in one PostgreSQL transaction via `pgx.BeginFunc` directly. Identity repositories accept a `pgx.Tx`-backed querier. When sign-in creates a user, the user row and the `identity.UserRegistered` outbox message are written in the same transaction through Watermill's SQL publisher. A forwarder goroutine in `cmd/api` moves outbox messages to the Watermill Go-channel pub/sub. No subscriber exists yet; the forwarder proves the pipeline and gives later contexts an attachment point.
 
 ## Identity Context
 
@@ -186,7 +186,9 @@ Error codes:
 | 403 | `email_unverified` | Google reports the email as unverified |
 | 403 | `origin_not_allowed` | missing or disallowed `Origin` on cookie-authenticated routes |
 | 404 | `not_found` | `/v1/me` user missing |
+| 405 | `method_not_allowed` | wrong HTTP method on a known route |
 | 413 | `payload_too_large` | body over 1 MiB |
+| 415 | `unsupported_media_type` | JSON body without `Content-Type: application/json` (also blocks cross-site form posts) |
 | 429 | `rate_limited` | auth rate limit exceeded |
 | 500 | `internal` | unexpected error; detail logged, not returned |
 
@@ -297,7 +299,7 @@ Middleware order, outermost first: request ID, panic recovery, access logging, s
 `internal/platform/telemetry` initializes tracer, meter, and logger providers with OTLP/HTTP exporters, configured by the standard variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (OpenObserve, e.g. `https://observe.example.com/api/<org>`), `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic <base64>`), `OTEL_SERVICE_NAME` (default `ioe-backend`), `OTEL_RESOURCE_ATTRIBUTES`. With `OTEL_SDK_DISABLED=true` or no endpoint, providers are no-ops. Shutdown flushes all providers. W3C `tracecontext` and `baggage` propagators are installed.
 
 - Traces: `otelmux` server spans named by route template, never the raw path; `otelpgx` database spans recording SQL text without arguments; outbox messages carry trace context in metadata so the forwarder and future consumers continue the trace.
-- Metrics: HTTP server metrics, Go runtime metrics, pgx pool statistics, and the counters `identity.signins` (attribute `result`: `created`, `existing`, `rejected`) and `identity.refresh_reuse_detected`.
+- Metrics: HTTP server metrics, Go runtime metrics, pgx pool statistics, and the counters `identity.signins` (attribute `result`: `created`, `existing`, `rejected`) and `identity.refresh_reuse_detected`, both recorded by the identity HTTP adapter (`internal/identity/adapters/httpapi`).
 - Logs: the slog bridge described above.
 - Sensitive data: span and metric attributes never include tokens, cookies, emails, or the `Authorization` header. The HTTP instrumentation is configured to omit request headers.
 - Outside local development, the endpoint uses HTTPS.
