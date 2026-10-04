@@ -18,6 +18,14 @@ See `AGENTS.md` for architecture rules and required checks, and `api/openapi.yam
 
 - `SNOWFLAKE_NODE_ID` (default `0`): Snowflake node ID (0-1023). Every running replica must use a different value.
 
+## Roles
+
+New users are students. Accounts whose email is in `BOOTSTRAP_ROOT_ADMIN_EMAILS` become root
+admins at sign-in. A root admin finds a user with `GET /v1/admin/users?email=<prefix>` and
+makes them an instructor (or a student again) with `PUT /v1/admin/users/{id}/role`. The user
+gets the new role at their next token refresh, within 15 minutes; a demoted instructor keeps
+managing the courses they own.
+
 ## Notifications
 
 Welcome emails are sent through the standalone notification service in `../notification`.

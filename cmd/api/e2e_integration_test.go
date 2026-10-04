@@ -79,6 +79,24 @@ func refreshCookie(t *testing.T, resp *http.Response) string {
 	return ""
 }
 
+// baseConfig is a working configuration with notifications disabled.
+func baseConfig(t *testing.T, google *googletest.Issuer) config.Config {
+	t.Helper()
+	return config.Config{
+		GoogleClientIDs:          []string{"web-client"},
+		GoogleJWKSURL:            google.JWKSURL(),
+		JWTIssuer:                "https://api.test",
+		JWTAudience:              "ioe",
+		JWTSigningKeyPEM:         signingKeyPEM(t),
+		JWTSigningKeyID:          "k1",
+		AllowedOrigins:           []string{appOrigin},
+		CookieSecure:             false,
+		AuthRateLimitPerMinute:   1000,
+		LogLevel:                 "info",
+		BootstrapRootAdminEmails: []string{"admin@example.com"},
+	}
+}
+
 func TestEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -97,21 +115,9 @@ func TestEndToEnd(t *testing.T) {
 	}))
 	defer notify.Close()
 
-	cfg := config.Config{
-		GoogleClientIDs:               []string{"web-client"},
-		GoogleJWKSURL:                 google.JWKSURL(),
-		JWTIssuer:                     "https://api.test",
-		JWTAudience:                   "ioe",
-		JWTSigningKeyPEM:              signingKeyPEM(t),
-		JWTSigningKeyID:               "k1",
-		AllowedOrigins:                []string{appOrigin},
-		CookieSecure:                  false,
-		AuthRateLimitPerMinute:        1000,
-		LogLevel:                      "info",
-		NotificationServiceBaseURL:    notify.URL,
-		NotificationServiceSendAPIKey: notifyKey,
-		BootstrapRootAdminEmails:      []string{"admin@example.com"},
-	}
+	cfg := baseConfig(t, google)
+	cfg.NotificationServiceBaseURL = notify.URL
+	cfg.NotificationServiceSendAPIKey = notifyKey
 	a, err := buildApp(ctx, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
 	if err != nil {
 		t.Fatal(err)
@@ -273,5 +279,84 @@ func TestEndToEnd(t *testing.T) {
 	case got := <-sent:
 		t.Fatalf("unexpected third email %+v", got)
 	case <-time.After(2 * time.Second):
+	}
+}
+
+func TestRoleManagementEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string, *http.Response) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		u := body["user"].(map[string]any)
+		return body["access_token"].(string), u["id"].(string), resp
+	}
+
+	studentAccess, studentID, resp := signIn("sub-student", "student@example.com")
+	studentCookie := refreshCookie(t, resp)
+	adminAccess, adminID, _ := signIn("sub-admin", "admin@example.com")
+
+	resp, _ = c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, bearer(studentAccess))
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("student create course before promotion: %d", resp.StatusCode)
+	}
+	resp, body := c.do(http.MethodGet, "/v1/admin/users?email=stu", "", bearer(studentAccess))
+	if resp.StatusCode != http.StatusForbidden || body["type"] != "forbidden" {
+		t.Fatalf("student search: %d %v", resp.StatusCode, body)
+	}
+
+	resp, body = c.do(http.MethodGet, "/v1/admin/users?email=STUDENT%40", "", bearer(adminAccess))
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin search: %d %v", resp.StatusCode, body)
+	}
+	users := body["users"].([]any)
+	if len(users) != 1 || users[0].(map[string]any)["id"] != studentID || users[0].(map[string]any)["role"] != "student" {
+		t.Fatalf("search result %v", users)
+	}
+
+	resp, body = c.do(http.MethodPut, "/v1/admin/users/"+studentID+"/role", `{"role":"instructor"}`, bearer(adminAccess))
+	if resp.StatusCode != http.StatusOK || body["role"] != "instructor" {
+		t.Fatalf("promote: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPut, "/v1/admin/users/"+adminID+"/role", `{"role":"student"}`, bearer(adminAccess))
+	if resp.StatusCode != http.StatusConflict || body["type"] != "role_not_assignable" {
+		t.Fatalf("self demotion: %d %v", resp.StatusCode, body)
+	}
+
+	resp, body = c.do(http.MethodPost, "/v1/auth/refresh", "", map[string]string{"Origin": appOrigin, "Cookie": "ioe_refresh=" + studentCookie})
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("refresh: %d %v", resp.StatusCode, body)
+	}
+	instructorAccess := body["access_token"].(string)
+	resp, body = c.do(http.MethodGet, "/v1/me", "", bearer(instructorAccess))
+	if resp.StatusCode != http.StatusOK || body["role"] != "instructor" {
+		t.Fatalf("me after refresh: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, bearer(instructorAccess))
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("instructor create course: %d %v", resp.StatusCode, body)
+	}
+
+	var changes int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM platform.outbox_messages WHERE payload->>'destination_topic' = 'identity.user_role_changed'").Scan(&changes); err != nil {
+		t.Fatal(err)
+	}
+	if changes != 1 {
+		t.Fatalf("role change events = %d, want 1", changes)
 	}
 }

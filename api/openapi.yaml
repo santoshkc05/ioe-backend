@@ -114,6 +114,62 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/admin/users:
+    get:
+      summary: Search users by email prefix
+      description: >
+        Root admins only. Case-insensitive prefix match on email; `%`, `_` and `\` match
+        literally. Returns at most 20 users ordered by email.
+      security:
+        - bearer: []
+      parameters:
+        - name: email
+          in: query
+          required: true
+          description: Email prefix; at least 3 characters after trimming whitespace.
+          schema: { type: string, minLength: 3 }
+      responses:
+        "200":
+          description: Matching users
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserList" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/admin/users/{userID}/role:
+    put:
+      summary: Set a user's role
+      description: >
+        Root admins only. Assigns `student` or `instructor`; a root admin's role cannot be
+        changed (409 `role_not_assignable`). Setting the current role is a no-op. The user
+        receives the new role in the access token issued at their next refresh.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetRoleRequest" }
+      responses:
+        "200":
+          description: The user with the resulting role
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/User" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /v1/courses:
     post:
       summary: Create a course
@@ -573,6 +629,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/ID" }
+    UserID:
+      name: userID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
   headers:
     RefreshCookie:
       description: >
@@ -624,6 +685,18 @@ components:
         name: { type: string }
         avatar_url: { type: string }
         role: { type: string, enum: [student, instructor, root_admin] }
+    UserList:
+      type: object
+      required: [users]
+      properties:
+        users:
+          type: array
+          items: { $ref: "#/components/schemas/User" }
+    SetRoleRequest:
+      type: object
+      required: [role]
+      properties:
+        role: { type: string, enum: [student, instructor] }
     ID:
       type: string
       pattern: '^[1-9][0-9]{0,18}$'
