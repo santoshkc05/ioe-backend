@@ -52,7 +52,7 @@ internal/courseauthoring/
   domain/      Course aggregate, Section, Lecture, LectureContent, Price, events, errors
   app/         CourseService, LectureContentService, ports, views (DTOs)
   adapters/postgres/   sqlc queries + sqlcgen, TxRunner, repositories, outbox publisher
-  adapters/httpapi/    handlers, wire DTOs, error mapping, Register(*http.ServeMux)
+  adapters/httpapi/    handlers, wire DTOs, error mapping, Register(*httpserver.Router)
 migrations/00003_courseauthoring.sql
 ```
 
@@ -97,7 +97,9 @@ Invariants:
 - Removing a section moves its lectures to unsectioned (`SectionID` zero).
 - Every mutation sets `UpdatedAt` from the injected clock.
 
-Operations (ported from Hitox `course.go`): `NewCourse`, `UpdateDetails`, `SetPrice`, `AddSection`, `RenameSection`, `RemoveSection`, `AddLecture`, `RenameLecture`, `RemoveLecture`, `ReorderLectures`, `MoveLectureToSection`, `SetLectureFreePreview`, `ReplaceLectureContent`, `Publish`, `Archive`, `IsManagedBy(auth.Principal)`. `Rehydrate` is used only by the repository.
+Operations (ported from Hitox `course.go`): `NewCourse`, `UpdateDetails`, `SetPrice`, `AddSection`, `RenameSection`, `RemoveSection`, `AddLecture`, `RenameLecture`, `RemoveLecture`, `ReorderLectures`, `MoveLectureToSection`, `SetLectureFreePreview`, `Publish`, `Archive`, `IsManagedBy(auth.Principal)`. `Rehydrate` is used only by the repository.
+
+The aggregate does not hold block content. Hitox's aggregate did, which forced its `Save` to diff and rewrite every lecture's blocks under row locks on every structural edit. Here content is read and written only through `LectureContentRepository`, so structural writes never touch `lecture_blocks`.
 
 ### Price
 
@@ -111,11 +113,11 @@ Operations (ported from Hitox `course.go`): `NewCourse`, `UpdateDetails`, `SetPr
 
 ### Lecture and content
 
-`Lecture{ID, SectionID id.ID (zero = unsectioned), Title, FreePreview bool, Order int, ContentRevision int64, Content LectureContent}`.
+`Lecture{ID, SectionID id.ID (zero = unsectioned), Title, FreePreview bool, Order int, HasText, HasVideo bool}`. `HasText`/`HasVideo` are read-only facts the repository hydrates from `lecture_blocks`; a new lecture's flags come from its initial content.
 
-`LectureContent` is an ordered `[]contentblocks.Block`. Block kinds: `text` (sanitized rich text, at most 1 MiB), `video` (URL or `media_asset_id`, plus `duration_ms`), `image`, `flashcard` (1-40 cards), `quiz` (opaque `quiz_id`). Each block has a server `ID id.ID` and a `ClientBlockID` (at most 64 characters, unique within the lecture). Validation, limits and sanitization are exactly Hitox's.
+`LectureContent` (`NewLectureContent(blocks)`) is the validated value the app builds before writing blocks. It is an ordered `[]contentblocks.Block`. Block kinds: `text` (sanitized rich text, at most 1 MiB), `video` (URL or `media_asset_id`, plus `duration_ms`), `image`, `flashcard` (1-40 cards), `quiz` (opaque `quiz_id`). Each block has a server `ID id.ID` and a `ClientBlockID` (at most 64 characters, unique within the lecture). Validation, limits and sanitization are exactly Hitox's.
 
-`HasText()` / `HasVideo()` derive from the blocks. The legacy request fields `text_body`, `video_url` and `video_duration_ms` are converted into a text block and a video block; the legacy response fields mirror the first text and first video block.
+`LectureContent.HasText()` / `HasVideo()` derive from the blocks. `AddLecture` with initial content adds the lecture to the aggregate, saves it, then writes the blocks with `ReplaceBlocks` in the same transaction. The legacy request fields `text_body`, `video_url` and `video_duration_ms` are converted into a text block and a video block; the legacy response fields mirror the first text and first video block.
 
 ### Events
 
@@ -143,7 +145,6 @@ type CourseRepository interface {
 type LectureContentRepository interface { // ported from Hitox; no tenant parameter
     FindLecture(ctx, courseID, lectureID id.ID) (LectureContentHeader, error)
     FindLectureForUpdate(ctx, courseID, lectureID id.ID) (LectureContentHeader, error)
-    ListBlockKeys(ctx, lectureID id.ID) ([]BlockKey, error)
     ListBlocks(ctx, lectureID id.ID) ([]contentblocks.Block, error)
     ApplyPatch(ctx, courseID, lectureID id.ID, baseRevision int64, plan BlockWritePlan) (int64, error) // ErrRevisionConflict
     ReplaceBlocks(ctx, courseID, lectureID id.ID, blocks []contentblocks.Block) (int64, error)         // bumps revision
@@ -177,7 +178,7 @@ Until enrollment ships, `cmd/api` wires `EnrollmentQuery` to an adapter that alw
 
 ### Content writes
 
-- `PATCH` (Hitox `LectureContentService.Patch`): validate sizes, duplicate IDs, order/delete overlap; check `set(order) == (existing ∪ upserts) − deletes` (`ErrBlockSetMismatch`); new blocks get Snowflake IDs; `ApplyPatch` compares and swaps `content_revision`. A conflict returns `ErrRevisionConflict` together with the current content view so the handler can return it. Missing `base_revision` is `ErrRevisionRequired`.
+- `PATCH` (Hitox `LectureContentService.Patch`): lock the lecture row with `FindLectureForUpdate` first, so concurrent patches on one lecture serialize and the loser sees a revision mismatch with a consistent current view; validate sizes, duplicate IDs, order/delete overlap; check `set(order) == (existing ∪ upserts) − deletes` (`ErrBlockSetMismatch`); new blocks get Snowflake IDs; `ApplyPatch` compares and swaps `content_revision`. A conflict returns `ErrRevisionConflict` together with the current content view so the handler can return it. Missing `base_revision` is `ErrRevisionRequired`.
 - `PUT` replaces the whole block list under `FindLectureForUpdate` and bumps `content_revision`, so a stale PATCH from another tab conflicts.
 - Both check that the course is a manager's and not archived. Neither loads the full aggregate nor bumps `courses.version`.
 
@@ -249,7 +250,7 @@ DROP SCHEMA courseauthoring CASCADE;
 
 - `owner_id` has no foreign key to `identity.users`; a context writes and references only its own schema.
 - `courses.version` guards structural writes; `lectures.content_revision` guards content writes.
-- The repository saves an aggregate by updating the course row with `WHERE version = $n`, then diffing sections and lectures (insert, update, delete) in the same transaction, as Hitox does.
+- The repository saves an aggregate by updating the course row with `WHERE version = $n`, then upserting sections, upserting lectures (never touching `content_revision`), deleting lectures not in the aggregate, and deleting sections not in the aggregate, in that order, in one transaction. It never writes `lecture_blocks`.
 - `sqlc.yaml` gains a second `sql` entry: `internal/courseauthoring/adapters/postgres/queries.sql` → `sqlcgen`.
 
 ## HTTP API (`internal/courseauthoring/adapters/httpapi`)
@@ -304,7 +305,7 @@ The `revision_conflict` 409 for `PATCH .../content` adds the lecture content res
 
 ## Composition (`cmd/api`)
 
-`registerCourseAuthoring` builds the postgres `TxRunner`, the two services (with the shared `*id.Generator` and clock), the deny-all `EnrollmentQuery` adapter, and the HTTP handler, then calls `Register(mux)`. The identity handler's `RequireAuth` is passed in as middleware; courseauthoring does not import identity.
+`registerCourseAuthoring` builds the postgres `TxRunner`, the two services (with the shared `*id.Generator` and clock), the deny-all `EnrollmentQuery` adapter, and the HTTP handler, then calls `Register(router)`. The identity handler's `RequireAuth` is passed in as middleware; courseauthoring does not import identity.
 
 ## Frontend follow-up (outside this repository)
 

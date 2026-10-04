@@ -68,13 +68,15 @@ PostgreSQL stores IDs as `BIGINT`. sqlc keeps generating `int64`; adapters conve
 
 ## Router (`internal/platform/httpserver`)
 
-`NewRouter(o Options) (*http.ServeMux, http.Handler)`:
+`NewRouter(o Options) (*Router, http.Handler)`. `Router` embeds `*http.ServeMux` (so `Handle`/`HandleFunc` are the standard ones) and adds one method, `WrapUnmatched(prefix string, mw Middleware)`, which applies `mw` to 404 and 405 responses for paths under `prefix`. Identity needs it: 405s under `/v1/auth/` must be `no-store` and rate-limited, as they are today.
+
 
 - Every route registers with a method pattern (`mux.Handle("POST /v1/auth/google", h)`); a pattern without a method is not allowed. Handlers read `r.PathValue("name")`.
 - The returned handler runs the existing outer chain (`RequestID`, `Recover`, `AccessLog`, `SecurityHeaders`, `CORS`, body limit), then `otelhttp`, then a `problemFallback` wrapper, then the mux.
 - `problemFallback` calls `mux.Handler(r)`. A non-empty pattern dispatches normally. An empty pattern means no route matched: it runs the mux's own handler against a capturing `ResponseWriter`, keeps the status and `Allow` header, discards the plain-text body, and writes problem+json (`not_found` or `method_not_allowed`). `AllowedMethods` and its method-probing loop are deleted.
 - `otelhttp` starts the span before routing, so `problemFallback` renames it from the pattern `mux.Handler` returned: `trace.SpanFromContext(ctx).SetName(pattern)` (patterns already start with the method, e.g. `"GET /v1/me"`). Unmatched requests are named `"<METHOD> unmatched"`.
-- `MountHealth` and identity's `Register` take `*http.ServeMux`. Identity wraps protected routes individually with `RequireAuth`, `requireOrigin` and `NoStore`, as today.
+- `MountHealth` and identity's `Register` take `*httpserver.Router`. Identity wraps routes individually with `RequireAuth`, `requireOrigin`, `NoStore` and the auth rate limiter, and calls `WrapUnmatched("/v1/auth/", noStore∘limiter)`.
+- Go's mux allows `HEAD` on every `GET` pattern, so `Allow` for a GET-only path becomes `GET, HEAD`.
 - `go.mod` drops `github.com/gorilla/mux` and `otelmux`.
 
 ## Configuration
