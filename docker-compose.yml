@@ -28,6 +28,66 @@ services:
     volumes:
       - o2data:/data
 
+  mailpit:
+    profiles: [app]
+    image: axllent/mailpit:v1.27.8
+    ports:
+      - "127.0.0.1:8025:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 2s
+      timeout: 3s
+      retries: 20
+
+  notification-db-setup:
+    profiles: [app]
+    image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      PGPASSWORD: ioe
+    command: ["psql", "-h", "postgres", "-U", "ioe", "-d", "ioe", "-v", "ON_ERROR_STOP=1", "-f", "/setup/notification-db-setup.sql"]
+    volumes:
+      - ./compose/notification-db-setup.sql:/setup/notification-db-setup.sql:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  notification-migrate:
+    profiles: [app]
+    build: ../notification
+    command: ["migrate"]
+    environment:
+      DATABASE_URL: postgres://notification:notification-local-dev@postgres:5432/ioe?sslmode=disable
+    depends_on:
+      notification-db-setup:
+        condition: service_completed_successfully
+
+  notification:
+    profiles: [app]
+    build: ../notification
+    command: ["serve"]
+    environment:
+      HTTP_ADDRESS: ":8080"
+      DATABASE_URL: postgres://notification:notification-local-dev@postgres:5432/ioe?sslmode=disable
+      # Local-only keys, documented in ../notification/README.md.
+      NOTIFICATION_SEND_API_KEYS: c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M
+      NOTIFICATION_READ_API_KEYS: cnJycnJycnJycnJycnJycnJycnJycnJycnJycnJycnI
+      PUSH_ENABLED: "false"
+      SMTP_HOST: mailpit
+      SMTP_PORT: "1025"
+      SMTP_FROM_ADDRESS: notifications@ioe.test
+      SMTP_FROM_NAME: IOE
+      SMTP_MESSAGE_ID_DOMAIN: mail.ioe.test
+      SMTP_TLS_MODE: insecure
+      ALLOW_INSECURE_SMTP: "true"
+      LOG_LEVEL: info
+    ports:
+      - "127.0.0.1:8081:8080"
+    depends_on:
+      notification-migrate:
+        condition: service_completed_successfully
+      mailpit:
+        condition: service_healthy
+
   migrate:
     profiles: [app]
     build: .
@@ -46,6 +106,8 @@ services:
       DATABASE_URL: postgres://ioe:ioe@postgres:5432/ioe?sslmode=disable
       HTTP_ADDR: ":8080"
       OTEL_EXPORTER_OTLP_ENDPOINT: http://openobserve:5080/api/default
+      NOTIFICATION_SERVICE_BASE_URL: http://notification:8080
+      NOTIFICATION_SERVICE_SEND_API_KEY: c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M
     read_only: true
     security_opt:
       - no-new-privileges:true
@@ -57,6 +119,8 @@ services:
         condition: service_completed_successfully
       openobserve:
         condition: service_started
+      notification:
+        condition: service_healthy
 
 volumes:
   pgdata:
