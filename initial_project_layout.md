@@ -1,0 +1,5 @@
+The application is build with Domain driven design concept with hexagonal architecture.
+
+Each Bounded context communicate through explicit interfaces/direct calls when they need an immediate response and domain/application events when they only need to notify other modules, while avoiding direct access to another bounded context’s internals or tables. Dependencies are wired centrally in the application bootstrap (main/app), interfaces are generally defined by the consuming module, shared infrastructure such as database connections, logging, configuration, and messaging lives in a platform layer, and the overall goal is one application and deployment, but strong internal boundaries so each bounded context can evolve independently and potentially become a separate service later if necessary. For transactional outbox pattern watermill https://github.com/ThreeDotsLabs/watermill library can be used. For making consistency SAGA orchestratration can be made.
+Tool to use: Go 1.27, sqlc, pgx, mux 
+
