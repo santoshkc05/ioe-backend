@@ -10,7 +10,7 @@ Approved in conversation on 2026-10-04. Pending written-spec review.
 
 The standalone notification service (`../notification`, module `github.com/santoshkc2200/notification-service`) durably enqueues caller-rendered email over HTTP (`POST /v1/notifications`), delivers it at least once through SMTP, and deduplicates requests by `Idempotency-Key`. It owns the PostgreSQL `notification` schema and runs its own goose migrations (`notification-service migrate`), tracked in `notification.goose_db_version`.
 
-`ioe-backend` publishes domain events through a Watermill SQL outbox (`platform.outbox_messages`). A forwarder moves committed messages to an in-process `gochannel`. Nothing consumes them yet. With the current default `gochannel.Config`, the forwarder acknowledges a SQL message as soon as it is handed to the channel, so a failing or absent subscriber loses the message. That is acceptable only while no consumer exists.
+`ioe-backend` publishes domain events through a Watermill SQL outbox (`platform.outbox_messages`). A forwarder moves committed messages to an in-process `gochannel`. Nothing consumes them yet. The forwarder acknowledges a SQL message as soon as the `gochannel` accepts it, so a failing or absent subscriber loses the message. That is acceptable only while no consumer exists.
 
 This spec adds the first consumer: a welcome email sent when a user registers.
 
@@ -36,7 +36,7 @@ This spec adds the first consumer: a welcome email sent when a user registers.
 | Topic | Decision |
 |---|---|
 | Consumer location | New bounded context `internal/notification` in `ioe-backend`; it owns no PostgreSQL schema |
-| Delivery guarantee | Keep the forwarder; `gochannel` blocks until subscribers ack; Watermill `Router` with `Retry` middleware |
+| Delivery guarantee | Keep the forwarder; replace its `gochannel` output with a synchronous in-process dispatcher; `Retry` middleware on the forwarder |
 | Event payload | `identity.UserRegistered` gains `Name` (additive JSON field `name`) |
 | Rendering | `ioe-backend` renders subject, text, and HTML from embedded Go templates |
 | Idempotency key | `ioe:identity.user_registered:<outbox message UUID>:welcome-v1` |
@@ -68,12 +68,27 @@ There is no `domain` package: the context holds no state and enforces no invaria
 
 ### Outbox delivery (`internal/platform/outbox`)
 
-- `NewForwarder` builds its `gochannel` with `BlockPublishUntilSubscriberAck: true`. The forwarder acknowledges a SQL message only after `Publish` returns, which now happens only after every subscriber has acked. A nack makes the `gochannel` resend the message.
-- New `NewRouter(logger *slog.Logger) (*message.Router, error)` returns a Watermill router with middleware, in order:
+The `gochannel` is removed. Even with `BlockPublishUntilSubscriberAck`, a closing `gochannel` or subscriber makes `Publish` return `nil`, so the forwarder would acknowledge a message that was never handled and a graceful shutdown during retries would lose it.
+
+- New `Dispatcher` type implements `message.Publisher`:
+
+  ```go
+  // Handler processes one forwarded message. Returning an error makes the
+  // forwarder retry the message; returning nil acknowledges it.
+  type Handler func(*message.Message) error
+
+  func (d *Dispatcher) Handle(topic string, h Handler)
+  func (d *Dispatcher) Publish(topic string, msgs ...*message.Message) error
+  func (d *Dispatcher) Close() error
+  ```
+
+  `Publish` calls every handler registered for the topic, in registration order, and returns the first error. A topic with no handlers returns `nil`, so the message is acknowledged exactly as today. `Handle` must be called before `Forwarder.Run`; the handler map is read-only afterwards.
+- `NewForwarder` passes the dispatcher as the forwarder's publisher and sets `forwarder.Config.Middlewares` to, in order:
   - `middleware.Recoverer`
   - `middleware.Retry{InitialInterval: 1s, MaxInterval: 1m, Multiplier: 2, MaxRetries: 5}`
-- When a retry cycle is exhausted, the router nacks, the `gochannel` resends, and a new cycle begins. A transient failure therefore delays delivery but never drops it.
-- Messages published to a `gochannel` topic with no subscribers are dropped. `cmd/api` must start the router and wait on `<-router.Running()` before starting the forwarder.
+- The SQL subscriber is configured with `ResendInterval: 5s`. When a retry cycle is exhausted, the forwarder nacks, the SQL subscriber resends after 5s, and a new cycle begins. A transient failure delays delivery but never drops it.
+- The forwarder acknowledges the SQL message only after `Publish` returns `nil`. On shutdown or crash the SQL subscriber stops without acknowledging, so the message is redelivered on the next start. The `Retry` middleware sees the SQL message's context and stops retrying when the subscriber closes. The message a handler receives is rebuilt by the forwarder with a background context, so handlers must bound their own work; the notification client's 10s timeout does this.
+- `Forwarder.Subscriber()` is replaced by `Forwarder.Handle(topic string, h Handler)`, which delegates to the dispatcher.
 
 ### Identity change
 
@@ -136,23 +151,23 @@ func (s *Service) SendWelcome(ctx context.Context, in WelcomeInput) error
 
 ### Event handler (`internal/notification/adapters/events`)
 
-- Subscribes to topic `identity.user_registered` as a router consumer handler (`AddConsumerHandler`) named `notification.welcome`.
+- Exposes `Welcome(msg *message.Message) error`, registered with `Forwarder.Handle("identity.user_registered", ...)`.
 - Decodes `{user_id, email, name}` into its own struct and calls `SendWelcome` with `EventID = msg.UUID`. The forwarder preserves the original message UUID, so it is stable across redeliveries.
 - Decision:
 
 | Outcome | Action |
 |---|---|
-| success | ack |
-| invalid JSON, or error wrapping `ErrPermanent` | log at error level (event ID and cause only), increment `notification_events_dropped_total{reason}`, ack |
+| success | return `nil` (acknowledged) |
+| invalid JSON, or error wrapping `ErrPermanent` | log at error level (event ID and cause only), increment OpenTelemetry counter `notification.events.dropped` with attribute `reason` (`invalid_payload` or `permanent`), return `nil` |
 | any other error | return it, so the message is retried |
 
 Acknowledging permanent failures prevents a single poison message from blocking the outbox indefinitely.
 
 ## Composition (`cmd/api`)
 
-- When notification configuration is present, `buildApp` creates the router, constructs the template renderer, the `notifysvc` client, the `notification/app` service, and registers the handler against `forwarder.Subscriber()`.
-- When it is absent, no handler is registered and startup logs a warning that notifications are disabled. Events are then dropped by the `gochannel` exactly as today.
-- Startup order: router `Run` in the errgroup, wait for `<-router.Running()`, then forwarder `Run`. Shutdown cancels the context; the forwarder stops first, then the router closes.
+- When notification configuration is present, `buildApp` constructs the template renderer, the `notifysvc` client, the `notification/app` service, and the event handler, and registers it with `forwarder.Handle` before returning.
+- When it is absent, no handler is registered and startup logs a warning that notifications are disabled. Events are then acknowledged without processing, exactly as today.
+- Startup and shutdown are unchanged: the forwarder runs in the errgroup and is closed on return.
 
 ## Configuration
 
@@ -198,7 +213,8 @@ Unit tests:
 Integration tests (`make test-integration`, real PostgreSQL):
 
 - Outbox: with a handler that fails twice then succeeds, the handler sees the message three times and succeeds once, and the forwarder's offset advances only after the success.
-- Outbox: when the router stops before acknowledging, a new forwarder and router redeliver the same message UUID.
+- Outbox: when the forwarder is closed while its handler is still failing, a new forwarder redelivers the same message UUID.
+- Outbox: a message for a topic with no handler is acknowledged and not redelivered.
 - End to end: Google sign-in for a new user results in exactly one `POST /v1/notifications` to an `httptest` fake of the notification service, with the expected idempotency key and recipient; a second sign-in by the same user sends nothing.
 
 Not covered by `make check` or `make test-integration`: the real notification service, Mailpit delivery, and notification migrations on PostgreSQL 17. These are verified manually with `docker compose --profile app up --build` and a sign-in that produces a message in Mailpit.
@@ -206,5 +222,6 @@ Not covered by `make check` or `make test-integration`: the real notification se
 ## Risks
 
 - Head-of-line blocking: while the notification service is unavailable, the forwarder blocks on the welcome event and no later outbox message is forwarded to any consumer. Acceptable with a single consumer. When a second consumer is added, move to per-consumer durable subscriptions.
+- Open transaction during retries: the Watermill SQL subscriber holds a transaction (and the offset row lock) while a message is being handled, including across retries. During a long notification-service outage this is a long-running transaction, which holds back vacuum. If PostgreSQL ends it (for example through `idle_in_transaction_session_timeout`), the message is not acknowledged and is redelivered, so correctness holds.
 - Idempotency window: the service reserves a key only while its row is retained (`RETENTION_PERIOD`, default 30 days). An outbox message redelivered after that window would send again. Outbox messages are forwarded within seconds to minutes, so this requires an outage longer than the retention period.
 - Compose couples the two repositories by relative path (`../notification`). Production deploys the service independently.
