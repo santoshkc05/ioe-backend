@@ -114,6 +114,428 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses:
+    post:
+      summary: Create a course
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateCourseRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Course" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/users/{ownerID}/courses:
+    get:
+      summary: List an owner's courses
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/OwnerID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CoursePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}:
+    get:
+      summary: Get a course. Drafts and archived courses are 404 to non-managers.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      description: The view query parameter is accepted and ignored.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Course" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      summary: Update course details
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/UpdateCourseDetailsRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/price:
+    post:
+      summary: Set the course price (NPR only)
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SetPriceRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Course" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/publish:
+    post:
+      summary: Publish a course
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/archive:
+    post:
+      summary: Archive a course
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/sections:
+    post:
+      summary: Add a section
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TitleRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Course" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/sections/{sectionID}:
+    patch:
+      summary: Rename a section
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/SectionID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TitleRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      summary: Remove a section
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/SectionID"
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures:
+    post:
+      summary: Add a lecture
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AddLectureRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Course" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}:
+    patch:
+      summary: Rename a lecture
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/TitleRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      summary: Remove a lecture
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures-order:
+    put:
+      summary: Reorder lectures
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReorderLecturesRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/section:
+    post:
+      summary: Move a lecture to a section (empty section_id = unsectioned)
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MoveLectureRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/free-preview:
+    post:
+      summary: Set whether a lecture is a free preview
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/FreePreviewRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/content:
+    get:
+      summary: Read lecture content. Non-preview lectures require enrollment (enrollment_required).
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      description: The view query parameter is accepted and ignored.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LectureContent" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    put:
+      summary: Replace lecture content (blocks, or legacy text_body/video_url)
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ReplaceContentRequest" }
+      responses:
+        "204": { description: No Content }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      summary: Patch lecture content against base_revision; a stale base_revision is revision_conflict
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/PatchContentRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ContentRevision" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409":
+          description: revision_conflict; the body carries the winning lecture content
+          content:
+            application/problem+json:
+              schema: { $ref: "#/components/schemas/LectureContentConflict" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -131,6 +553,26 @@ components:
       required: true
       description: Must exactly match a configured allowed origin.
       schema: { type: string }
+    CourseID:
+      name: courseID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
+    SectionID:
+      name: sectionID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
+    LectureID:
+      name: lectureID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
+    OwnerID:
+      name: ownerID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
   headers:
     RefreshCookie:
       description: >
@@ -177,11 +619,251 @@ components:
       type: object
       required: [id, email, name, avatar_url, role]
       properties:
-        id: { type: string, format: uuid }
+        id: { $ref: "#/components/schemas/ID" }
         email: { type: string, format: email }
         name: { type: string }
         avatar_url: { type: string }
         role: { type: string, enum: [student, instructor, root_admin] }
+    ID:
+      type: string
+      pattern: '^[1-9][0-9]{0,18}$'
+      description: Snowflake ID rendered as a decimal string.
+    Price:
+      type: object
+      required: [amount_minor, currency]
+      properties:
+        amount_minor: { type: integer, format: int64, minimum: 0, description: Paisa; 0 means free }
+        currency: { type: string, enum: ["", NPR], description: Empty when free }
+    Section:
+      type: object
+      required: [id, title, order]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        order: { type: integer }
+    Lecture:
+      type: object
+      required: [id, title, has_text, has_video, free_preview, order]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        section_id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        has_text: { type: boolean }
+        has_video: { type: boolean }
+        free_preview: { type: boolean }
+        order: { type: integer }
+    Course:
+      type: object
+      required: [id, owner_id, title, description, status, price, is_free, sections, lectures, thumbnail_url, level, created_at, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        owner_id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        description: { type: string }
+        status: { type: string, enum: [draft, published, archived] }
+        price: { $ref: "#/components/schemas/Price" }
+        is_free: { type: boolean }
+        sections:
+          type: array
+          items: { $ref: "#/components/schemas/Section" }
+        lectures:
+          type: array
+          items: { $ref: "#/components/schemas/Lecture" }
+        thumbnail_url: { type: string }
+        level: { type: string, enum: ["", beginner, intermediate, advanced] }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CoursePage:
+      type: object
+      required: [courses, total]
+      properties:
+        courses:
+          type: array
+          items: { $ref: "#/components/schemas/Course" }
+        total: { type: integer }
+    FlashcardCard:
+      type: object
+      required: [front, back]
+      properties:
+        client_card_id: { type: string }
+        front: { type: string }
+        back: { type: string }
+        hint: { type: string }
+        media_asset_id: { $ref: "#/components/schemas/ID" }
+        alignment: { type: string }
+        rotation: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+    ContentBlock:
+      type: object
+      required: [id, client_block_id, type, position]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        client_block_id: { type: string }
+        type: { type: string, enum: [text, video, quiz, image, flashcard] }
+        position: { type: integer }
+        body: { type: string }
+        url: { type: string }
+        duration_ms: { type: integer, format: int64 }
+        quiz_id: { $ref: "#/components/schemas/ID" }
+        media_asset_id: { $ref: "#/components/schemas/ID" }
+        alt: { type: string }
+        caption: { type: string }
+        layout: { type: string, enum: [inline, wide] }
+        alignment: { type: string, enum: [left, center, right] }
+        rotation: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        mode: { type: string, enum: [steps, recall] }
+        title: { type: string }
+        cards:
+          type: array
+          items: { $ref: "#/components/schemas/FlashcardCard" }
+    LectureContent:
+      type: object
+      required: [lecture_id, course_id, title, text_body, video_url, video_duration_ms, free_preview, content_revision, blocks]
+      properties:
+        lecture_id: { $ref: "#/components/schemas/ID" }
+        course_id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        text_body: { type: string, description: Body of the first text block }
+        video_url: { type: string, description: URL of the first video block }
+        video_duration_ms: { type: integer, format: int64 }
+        free_preview: { type: boolean }
+        content_revision: { type: integer, format: int64 }
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/ContentBlock" }
+    LectureContentConflict:
+      description: >
+        revision_conflict. Carries the winner's content as extension members; the problem
+        title replaces the lecture title.
+      allOf:
+        - $ref: "#/components/schemas/Problem"
+        - $ref: "#/components/schemas/LectureContent"
+    ContentRevision:
+      type: object
+      required: [content_revision]
+      properties:
+        content_revision: { type: integer, format: int64 }
+    CreateCourseRequest:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        owner_id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        description: { type: string }
+    UpdateCourseDetailsRequest:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        thumbnail_url: { type: string }
+        level: { type: string, enum: ["", beginner, intermediate, advanced] }
+    SetPriceRequest:
+      type: object
+      additionalProperties: false
+      required: [amount_minor, currency]
+      properties:
+        amount_minor: { type: integer, format: int64, minimum: 0 }
+        currency: { type: string, enum: ["", NPR] }
+    TitleRequest:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string }
+    AddLectureRequest:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string }
+        text_body: { type: string }
+        video_url: { type: string }
+        video_duration_ms: { type: integer, format: int64 }
+    ReorderLecturesRequest:
+      type: object
+      additionalProperties: false
+      required: [lecture_ids]
+      properties:
+        lecture_ids:
+          type: array
+          items: { $ref: "#/components/schemas/ID" }
+    MoveLectureRequest:
+      type: object
+      additionalProperties: false
+      required: [section_id]
+      properties:
+        section_id:
+          type: string
+          description: Section ID, or empty to unsection the lecture.
+          pattern: '^([1-9][0-9]{0,18})?$'
+    FreePreviewRequest:
+      type: object
+      additionalProperties: false
+      required: [free_preview]
+      properties:
+        free_preview: { type: boolean }
+    BlockInput:
+      type: object
+      additionalProperties: false
+      required: [type]
+      description: A content block. Order comes from position in the list or from the patch order, never from a position field.
+      properties:
+        client_block_id: { type: string }
+        type: { type: string, enum: [text, video, quiz, image, flashcard] }
+        body: { type: string }
+        url: { type: string }
+        duration_ms: { type: integer, format: int64 }
+        quiz_id: { type: string }
+        media_asset_id: { type: string }
+        alt: { type: string }
+        caption: { type: string }
+        layout: { type: string }
+        alignment: { type: string }
+        rotation: { type: integer }
+        width: { type: integer }
+        height: { type: integer }
+        mode: { type: string }
+        title: { type: string }
+        cards:
+          type: array
+          items: { $ref: "#/components/schemas/FlashcardCard" }
+    ReplaceContentRequest:
+      type: object
+      additionalProperties: false
+      description: >
+        Either blocks (an explicit empty list clears the lecture) or the legacy
+        text_body/video_url/video_duration_ms fields when blocks is absent.
+      properties:
+        blocks:
+          type: array
+          items: { $ref: "#/components/schemas/BlockInput" }
+        text_body: { type: string }
+        video_url: { type: string }
+        video_duration_ms: { type: integer, format: int64 }
+    PatchContentRequest:
+      type: object
+      additionalProperties: false
+      required: [base_revision, order]
+      description: >
+        The set of ids in order must equal (existing blocks plus upserts) minus deletes.
+        Limits: 500 order ids, 200 upserts, 500 deletes.
+      properties:
+        base_revision: { type: integer, format: int64 }
+        order:
+          type: array
+          items: { type: string }
+        upserts:
+          type: array
+          items: { $ref: "#/components/schemas/BlockInput" }
+        deletes:
+          type: array
+          items: { type: string }
     Problem:
       type: object
       required: [type, title, status]
@@ -200,6 +882,23 @@ components:
             - unsupported_media_type
             - rate_limited
             - internal
+            - forbidden
+            - enrollment_required
+            - concurrent_modification
+            - course_not_editable
+            - invalid_transition
+            - revision_conflict
+            - lecture_content_revision_required
+            - patch_too_large
+            - block_set_mismatch
+            - order_delete_overlap
+            - duplicate_client_block_id
+            - invalid_client_block_id
+            - unsafe_content
+            - duplicate_title
+            - empty_course
+            - unsupported_currency
+            - invalid_input
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
