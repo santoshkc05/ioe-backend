@@ -1,6 +1,7 @@
 package domain_test
 
 import (
+	"encoding/json"
 	"errors"
 	"testing"
 	"time"
@@ -94,5 +95,64 @@ func TestUserRegisteredName(t *testing.T) {
 	var e domain.Event = domain.UserRegistered{}
 	if e.EventName() != "identity.user_registered" {
 		t.Fatal(e.EventName())
+	}
+}
+
+func TestChangeRole(t *testing.T) {
+	by := id.ID(9)
+	later := t0.Add(time.Hour)
+	cases := []struct {
+		name        string
+		from, to    auth.Role
+		wantRole    auth.Role
+		wantChanged bool
+		wantErr     error
+	}{
+		{"promote", auth.RoleStudent, auth.RoleInstructor, auth.RoleInstructor, true, nil},
+		{"demote", auth.RoleInstructor, auth.RoleStudent, auth.RoleStudent, true, nil},
+		{"same role", auth.RoleInstructor, auth.RoleInstructor, auth.RoleInstructor, false, nil},
+		{"grant root admin", auth.RoleStudent, auth.RoleRootAdmin, auth.RoleStudent, false, domain.ErrInvalidRole},
+		{"unknown role", auth.RoleStudent, auth.Role("teacher"), auth.RoleStudent, false, domain.ErrInvalidRole},
+		{"wrong case", auth.RoleStudent, auth.Role("Instructor"), auth.RoleStudent, false, domain.ErrInvalidRole},
+		{"empty role", auth.RoleStudent, auth.Role(""), auth.RoleStudent, false, domain.ErrInvalidRole},
+		{"root admin target", auth.RoleRootAdmin, auth.RoleStudent, auth.RoleRootAdmin, false, domain.ErrRoleNotAssignable},
+		{"root admin target, invalid role", auth.RoleRootAdmin, auth.RoleRootAdmin, auth.RoleRootAdmin, false, domain.ErrInvalidRole},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			u := domain.NewUser(id.ID(1), domain.GoogleIdentity{Subject: "s"}, t0)
+			u.Role = c.from
+			ev, changed, err := u.ChangeRole(c.to, by, later)
+			if !errors.Is(err, c.wantErr) || changed != c.wantChanged || u.Role != c.wantRole {
+				t.Fatalf("role=%s changed=%v err=%v", u.Role, changed, err)
+			}
+			if !changed {
+				if ev != (domain.UserRoleChanged{}) || !u.UpdatedAt.Equal(t0) {
+					t.Fatalf("unchanged user mutated: event=%+v updated=%v", ev, u.UpdatedAt)
+				}
+				return
+			}
+			want := domain.UserRoleChanged{UserID: u.ID, PreviousRole: c.from, Role: c.to, ChangedBy: by, OccurredAt: later}
+			if ev != want || !u.UpdatedAt.Equal(later) {
+				t.Fatalf("event=%+v updated=%v", ev, u.UpdatedAt)
+			}
+		})
+	}
+}
+
+func TestUserRoleChangedEvent(t *testing.T) {
+	var e domain.Event = domain.UserRoleChanged{}
+	if e.EventName() != "identity.user_role_changed" {
+		t.Fatal(e.EventName())
+	}
+	b, err := json.Marshal(domain.UserRoleChanged{
+		UserID: id.ID(1), PreviousRole: auth.RoleStudent, Role: auth.RoleInstructor, ChangedBy: id.ID(2), OccurredAt: t0,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := `{"user_id":"1","previous_role":"student","role":"instructor","changed_by":"2","occurred_at":"2026-10-04T12:00:00Z"}`
+	if string(b) != want {
+		t.Fatalf("payload %s", b)
 	}
 }

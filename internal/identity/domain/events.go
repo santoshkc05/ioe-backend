@@ -3,6 +3,7 @@ package domain
 import (
 	"time"
 
+	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
@@ -20,3 +21,14 @@ type UserRegistered struct {
 }
 
 func (UserRegistered) EventName() string { return "identity.user_registered" }
+
+// UserRoleChanged records a root admin changing a user's role.
+type UserRoleChanged struct {
+	UserID       id.ID     `json:"user_id"`
+	PreviousRole auth.Role `json:"previous_role"`
+	Role         auth.Role `json:"role"`
+	ChangedBy    id.ID     `json:"changed_by"`
+	OccurredAt   time.Time `json:"occurred_at"`
+}
+
+func (UserRoleChanged) EventName() string { return "identity.user_role_changed" }

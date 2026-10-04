@@ -2,6 +2,7 @@
 package domain
 
 import (
+	"errors"
 	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
@@ -61,4 +62,28 @@ func (u *User) PromoteToRootAdmin(now time.Time) {
 	}
 	u.Role = auth.RoleRootAdmin
 	u.UpdatedAt = now
+}
+
+var (
+	ErrInvalidRole       = errors.New("role cannot be assigned")
+	ErrRoleNotAssignable = errors.New("user's role cannot be changed")
+)
+
+// ChangeRole makes the user a student or an instructor. Root admins come only from bootstrap
+// configuration, so their role never changes here. It returns changed=false and no event when
+// the user already has the role.
+func (u *User) ChangeRole(to auth.Role, by id.ID, now time.Time) (UserRoleChanged, bool, error) {
+	if to != auth.RoleStudent && to != auth.RoleInstructor {
+		return UserRoleChanged{}, false, ErrInvalidRole
+	}
+	if u.Role == auth.RoleRootAdmin {
+		return UserRoleChanged{}, false, ErrRoleNotAssignable
+	}
+	if u.Role == to {
+		return UserRoleChanged{}, false, nil
+	}
+	ev := UserRoleChanged{UserID: u.ID, PreviousRole: u.Role, Role: to, ChangedBy: by, OccurredAt: now}
+	u.Role = to
+	u.UpdatedAt = now
+	return ev, true, nil
 }
