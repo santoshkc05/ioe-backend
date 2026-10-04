@@ -15,6 +15,7 @@ type Event interface {
 type UserRegistered struct {
 	UserID     uuid.UUID `json:"user_id"`
 	Email      string    `json:"email"`
+	Name       string    `json:"name"`
 	OccurredAt time.Time `json:"occurred_at"`
 }
 

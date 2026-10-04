@@ -90,7 +90,7 @@ func (s *Service) signIn(ctx context.Context, r Repos, identity domain.GoogleIde
 		if err := r.Users.Insert(ctx, user); err != nil {
 			return Session{}, err
 		}
-		if err := r.Events.Publish(ctx, domain.UserRegistered{UserID: user.ID, Email: user.Email, OccurredAt: now}); err != nil {
+		if err := r.Events.Publish(ctx, domain.UserRegistered{UserID: user.ID, Email: user.Email, Name: user.Name, OccurredAt: now}); err != nil {
 			return Session{}, err
 		}
 		created = true

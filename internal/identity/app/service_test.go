@@ -74,7 +74,7 @@ func TestSignInCreatesStudentAndPublishesEvent(t *testing.T) {
 	if len(st.events) != 1 {
 		t.Fatalf("events = %d", len(st.events))
 	}
-	if ev, ok := st.events[0].(domain.UserRegistered); !ok || ev.UserID != s.User.ID || !ev.OccurredAt.Equal(t0) {
+	if ev, ok := st.events[0].(domain.UserRegistered); !ok || ev.UserID != s.User.ID || ev.Name != "Alice" || !ev.OccurredAt.Equal(t0) {
 		t.Fatalf("event %+v", st.events[0])
 	}
 	if len(st.tokens) != 1 {
