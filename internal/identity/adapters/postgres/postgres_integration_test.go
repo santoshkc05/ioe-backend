@@ -5,6 +5,8 @@ package postgres_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -51,7 +53,7 @@ func TestUserRepository(t *testing.T) {
 	}
 
 	err = runner.RunInTx(ctx, func(r app.Repos) error {
-		got, err := r.Users.FindByGoogleSubject(ctx, "sub-1")
+		got, err := r.Users.FindByGoogleSubjectForUpdate(ctx, "sub-1")
 		if err != nil {
 			return err
 		}
@@ -73,7 +75,7 @@ func TestUserRepository(t *testing.T) {
 		if _, err := r.Users.FindByID(ctx, testIDs(t).New()); !errors.Is(err, app.ErrNotFound) {
 			t.Errorf("missing id err = %v", err)
 		}
-		if _, err := r.Users.FindByGoogleSubject(ctx, "nope"); !errors.Is(err, app.ErrNotFound) {
+		if _, err := r.Users.FindByGoogleSubjectForUpdate(ctx, "nope"); !errors.Is(err, app.ErrNotFound) {
 			t.Errorf("missing sub err = %v", err)
 		}
 		return nil
@@ -218,5 +220,128 @@ func TestConcurrentRefreshOneWins(t *testing.T) {
 	}
 	if ok != 1 || reused != 1 {
 		t.Fatalf("ok=%d reused=%d", ok, reused)
+	}
+}
+
+func TestSearchUsersByEmailPrefix(t *testing.T) {
+	ctx := context.Background()
+	runner := postgres.NewTxRunner(pgtest.New(t))
+	gen := testIDs(t)
+	emails := []string{
+		"bob@example.com", "Alice@Example.com", "alina@example.com", "ALBERT@example.com",
+		"x%1@example.com", "x_2@example.com", "xa3@example.com", `y\z@example.com`, "yaz@example.com",
+	}
+	err := runner.RunInTx(ctx, func(r app.Repos) error {
+		for i, e := range emails {
+			u := domain.NewUser(gen.New(), domain.GoogleIdentity{Subject: fmt.Sprintf("sub-search-%d", i), Email: e}, now)
+			if err := r.Users.Insert(ctx, u); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	search := func(prefix string, limit int32) []string {
+		t.Helper()
+		var got []string
+		err := runner.RunInTx(ctx, func(r app.Repos) error {
+			users, err := r.Users.SearchByEmailPrefix(ctx, prefix, limit)
+			for _, u := range users {
+				got = append(got, u.Email)
+			}
+			return err
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	cases := []struct {
+		prefix string
+		limit  int32
+		want   []string
+	}{
+		{"AL", 20, []string{"ALBERT@example.com", "Alice@Example.com", "alina@example.com"}},
+		{"al", 2, []string{"ALBERT@example.com", "Alice@Example.com"}},
+		{"x%", 20, []string{"x%1@example.com"}},
+		{"x_", 20, []string{"x_2@example.com"}},
+		{`y\`, 20, []string{`y\z@example.com`}},
+		{"zzz", 20, nil},
+	}
+	for _, c := range cases {
+		if got := search(c.prefix, c.limit); !slices.Equal(got, c.want) {
+			t.Errorf("search %q limit %d = %v, want %v", c.prefix, c.limit, got, c.want)
+		}
+	}
+}
+
+func TestSignInLockWaitsForRoleChange(t *testing.T) {
+	ctx := context.Background()
+	runner := postgres.NewTxRunner(pgtest.New(t))
+	u := newUser("sub-lock")
+	if err := runner.RunInTx(ctx, func(r app.Repos) error { return r.Users.Insert(ctx, u) }); err != nil {
+		t.Fatal(err)
+	}
+
+	locked, release := make(chan struct{}), make(chan struct{})
+	roleDone := make(chan error, 1)
+	go func() {
+		roleDone <- runner.RunInTx(ctx, func(r app.Repos) error {
+			x, err := r.Users.FindByIDForUpdate(ctx, u.ID)
+			if err != nil {
+				return err
+			}
+			close(locked)
+			<-release
+			if _, _, err := x.ChangeRole(auth.RoleInstructor, id.ID(1), now); err != nil {
+				return err
+			}
+			return r.Users.Update(ctx, x)
+		})
+	}()
+	select {
+	case <-locked:
+	case err := <-roleDone:
+		t.Fatalf("role change ended before taking the lock: %v", err)
+	}
+
+	signInDone := make(chan error, 1)
+	go func() {
+		signInDone <- runner.RunInTx(ctx, func(r app.Repos) error {
+			x, err := r.Users.FindByGoogleSubjectForUpdate(ctx, "sub-lock")
+			if err != nil {
+				return err
+			}
+			x.RecordLogin(domain.GoogleIdentity{Subject: "sub-lock", Email: "later@example.com"}, now.Add(time.Minute))
+			return r.Users.Update(ctx, x)
+		})
+	}()
+	select {
+	case err := <-signInDone:
+		t.Fatalf("sign-in did not wait for the role change: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	close(release)
+	if err := <-roleDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-signInDone; err != nil {
+		t.Fatal(err)
+	}
+	var got domain.User
+	err := runner.RunInTx(ctx, func(r app.Repos) error {
+		var err error
+		got, err = r.Users.FindByID(ctx, u.ID)
+		return err
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Role != auth.RoleInstructor || got.Email != "later@example.com" {
+		t.Fatalf("after both commits: role=%s email=%s", got.Role, got.Email)
 	}
 }

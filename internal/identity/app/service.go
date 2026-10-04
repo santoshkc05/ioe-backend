@@ -77,7 +77,8 @@ func (s *Service) SignInWithGoogle(ctx context.Context, idToken string, client C
 
 func (s *Service) signIn(ctx context.Context, r Repos, identity domain.GoogleIdentity, client Client) (Session, error) {
 	now := s.clock.Now()
-	user, err := r.Users.FindByGoogleSubject(ctx, identity.Subject)
+	// Lock the row: Update writes every column, so an unlocked read could undo a concurrent role change.
+	user, err := r.Users.FindByGoogleSubjectForUpdate(ctx, identity.Subject)
 	created := false
 	switch {
 	case errors.Is(err, ErrNotFound):

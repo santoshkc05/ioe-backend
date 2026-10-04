@@ -1,8 +1,17 @@
--- name: GetUserByGoogleSub :one
-SELECT * FROM identity.users WHERE google_sub = $1;
+-- name: GetUserByGoogleSubForUpdate :one
+SELECT * FROM identity.users WHERE google_sub = $1 FOR UPDATE;
 
 -- name: GetUserByID :one
 SELECT * FROM identity.users WHERE id = $1;
+
+-- name: GetUserByIDForUpdate :one
+SELECT * FROM identity.users WHERE id = $1 FOR UPDATE;
+
+-- name: SearchUsersByEmailPrefix :many
+SELECT * FROM identity.users
+WHERE email ILIKE sqlc.arg(pattern)::text ESCAPE '\'
+ORDER BY email, id
+LIMIT sqlc.arg(max_results);
 
 -- name: InsertUser :exec
 INSERT INTO identity.users (id, google_sub, email, name, avatar_url, role, created_at, updated_at, last_login_at)

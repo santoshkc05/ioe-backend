@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
@@ -40,14 +41,40 @@ func (r *TxRunner) RunInTx(ctx context.Context, fn func(app.Repos) error) error 
 
 type users struct{ q *sqlcgen.Queries }
 
-func (u users) FindByGoogleSubject(ctx context.Context, sub string) (domain.User, error) {
-	row, err := u.q.GetUserByGoogleSub(ctx, sub)
+func (u users) FindByGoogleSubjectForUpdate(ctx context.Context, sub string) (domain.User, error) {
+	row, err := u.q.GetUserByGoogleSubForUpdate(ctx, sub)
 	return toUser(row, err)
 }
 
 func (u users) FindByID(ctx context.Context, id id.ID) (domain.User, error) {
 	row, err := u.q.GetUserByID(ctx, int64(id))
 	return toUser(row, err)
+}
+
+func (u users) FindByIDForUpdate(ctx context.Context, id id.ID) (domain.User, error) {
+	row, err := u.q.GetUserByIDForUpdate(ctx, int64(id))
+	return toUser(row, err)
+}
+
+// likeEscaper makes a string match itself literally in a LIKE pattern with ESCAPE '\'.
+var likeEscaper = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+
+func (u users) SearchByEmailPrefix(ctx context.Context, prefix string, limit int32) ([]domain.User, error) {
+	rows, err := u.q.SearchUsersByEmailPrefix(ctx, sqlcgen.SearchUsersByEmailPrefixParams{
+		Pattern: likeEscaper.Replace(prefix) + "%", MaxResults: limit,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.User, 0, len(rows))
+	for _, row := range rows {
+		x, err := toUser(row, nil)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, x)
+	}
+	return out, nil
 }
 
 func (u users) Insert(ctx context.Context, x domain.User) error {

@@ -20,10 +20,15 @@ var (
 )
 
 // UserRepository returns ErrNotFound for missing users and ErrConflict when Insert
-// would duplicate a Google subject.
+// would duplicate a Google subject. The ForUpdate finders lock the row until the
+// transaction ends, so a read-modify-Update cannot overwrite a concurrent change.
 type UserRepository interface {
-	FindByGoogleSubject(ctx context.Context, subject string) (domain.User, error)
+	FindByGoogleSubjectForUpdate(ctx context.Context, subject string) (domain.User, error)
 	FindByID(ctx context.Context, id id.ID) (domain.User, error)
+	FindByIDForUpdate(ctx context.Context, id id.ID) (domain.User, error)
+	// SearchByEmailPrefix matches case-insensitively, treats prefix literally, orders by
+	// email, and returns at most limit users.
+	SearchByEmailPrefix(ctx context.Context, prefix string, limit int32) ([]domain.User, error)
 	Insert(ctx context.Context, u domain.User) error
 	Update(ctx context.Context, u domain.User) error
 }

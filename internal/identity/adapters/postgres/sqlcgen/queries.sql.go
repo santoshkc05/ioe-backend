@@ -33,12 +33,12 @@ func (q *Queries) GetRefreshTokenByHashForUpdate(ctx context.Context, tokenHash 
 	return i, err
 }
 
-const getUserByGoogleSub = `-- name: GetUserByGoogleSub :one
-SELECT id, google_sub, email, name, avatar_url, role, created_at, updated_at, last_login_at FROM identity.users WHERE google_sub = $1
+const getUserByGoogleSubForUpdate = `-- name: GetUserByGoogleSubForUpdate :one
+SELECT id, google_sub, email, name, avatar_url, role, created_at, updated_at, last_login_at FROM identity.users WHERE google_sub = $1 FOR UPDATE
 `
 
-func (q *Queries) GetUserByGoogleSub(ctx context.Context, googleSub string) (IdentityUser, error) {
-	row := q.db.QueryRow(ctx, getUserByGoogleSub, googleSub)
+func (q *Queries) GetUserByGoogleSubForUpdate(ctx context.Context, googleSub string) (IdentityUser, error) {
+	row := q.db.QueryRow(ctx, getUserByGoogleSubForUpdate, googleSub)
 	var i IdentityUser
 	err := row.Scan(
 		&i.ID,
@@ -60,6 +60,27 @@ SELECT id, google_sub, email, name, avatar_url, role, created_at, updated_at, la
 
 func (q *Queries) GetUserByID(ctx context.Context, id int64) (IdentityUser, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
+	var i IdentityUser
+	err := row.Scan(
+		&i.ID,
+		&i.GoogleSub,
+		&i.Email,
+		&i.Name,
+		&i.AvatarURL,
+		&i.Role,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.LastLoginAt,
+	)
+	return i, err
+}
+
+const getUserByIDForUpdate = `-- name: GetUserByIDForUpdate :one
+SELECT id, google_sub, email, name, avatar_url, role, created_at, updated_at, last_login_at FROM identity.users WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetUserByIDForUpdate(ctx context.Context, id int64) (IdentityUser, error) {
+	row := q.db.QueryRow(ctx, getUserByIDForUpdate, id)
 	var i IdentityUser
 	err := row.Scan(
 		&i.ID,
@@ -165,6 +186,48 @@ type RevokeRefreshFamilyParams struct {
 func (q *Queries) RevokeRefreshFamily(ctx context.Context, arg RevokeRefreshFamilyParams) error {
 	_, err := q.db.Exec(ctx, revokeRefreshFamily, arg.FamilyID, arg.RevokedAt)
 	return err
+}
+
+const searchUsersByEmailPrefix = `-- name: SearchUsersByEmailPrefix :many
+SELECT id, google_sub, email, name, avatar_url, role, created_at, updated_at, last_login_at FROM identity.users
+WHERE email ILIKE $1::text ESCAPE '\'
+ORDER BY email, id
+LIMIT $2
+`
+
+type SearchUsersByEmailPrefixParams struct {
+	Pattern    string
+	MaxResults int32
+}
+
+func (q *Queries) SearchUsersByEmailPrefix(ctx context.Context, arg SearchUsersByEmailPrefixParams) ([]IdentityUser, error) {
+	rows, err := q.db.Query(ctx, searchUsersByEmailPrefix, arg.Pattern, arg.MaxResults)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IdentityUser
+	for rows.Next() {
+		var i IdentityUser
+		if err := rows.Scan(
+			&i.ID,
+			&i.GoogleSub,
+			&i.Email,
+			&i.Name,
+			&i.AvatarURL,
+			&i.Role,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LastLoginAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateUser = `-- name: UpdateUser :exec

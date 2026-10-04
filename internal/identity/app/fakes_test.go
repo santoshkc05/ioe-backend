@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ type memStore struct {
 	mu            sync.Mutex
 	state         *memState
 	conflictsLeft int
+	searchLimit   int32
 }
 
 func newMemStore() *memStore {
@@ -76,7 +78,7 @@ type memUsers struct {
 	store *memStore
 }
 
-func (u *memUsers) FindByGoogleSubject(_ context.Context, sub string) (domain.User, error) {
+func (u *memUsers) FindByGoogleSubjectForUpdate(_ context.Context, sub string) (domain.User, error) {
 	for _, x := range u.s.users {
 		if x.GoogleSubject == sub {
 			return x, nil
@@ -170,4 +172,32 @@ type fakeIssuer struct{}
 
 func (fakeIssuer) Issue(id id.ID, r auth.Role) (string, time.Duration, error) {
 	return "access:" + id.String() + ":" + string(r), 15 * time.Minute, nil
+}
+
+func (u *memUsers) FindByIDForUpdate(ctx context.Context, id id.ID) (domain.User, error) {
+	return u.FindByID(ctx, id)
+}
+
+func (u *memUsers) SearchByEmailPrefix(_ context.Context, prefix string, limit int32) ([]domain.User, error) {
+	u.store.searchLimit = limit
+	var out []domain.User
+	for _, x := range u.s.users {
+		if strings.HasPrefix(strings.ToLower(x.Email), strings.ToLower(prefix)) {
+			out = append(out, x)
+		}
+	}
+	slices.SortFunc(out, func(a, b domain.User) int {
+		return strings.Compare(strings.ToLower(a.Email), strings.ToLower(b.Email))
+	})
+	if len(out) > int(limit) {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+//nolint:unused // consumed by Task 3 tests
+func (m *memStore) lastSearchLimit() int32 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.searchLimit
 }
