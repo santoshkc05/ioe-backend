@@ -34,9 +34,9 @@ func TestRouterSpanUsesRouteTemplateAndOmitsSecrets(t *testing.T) {
 	t.Cleanup(func() { otel.SetTracerProvider(prev) })
 
 	r, h := httpserver.NewRouter(options())
-	r.HandleFunc("/v1/things/{id}", func(w http.ResponseWriter, _ *http.Request) {
+	r.HandleFunc("GET /v1/things/{id}", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
-	}).Methods(http.MethodGet)
+	})
 
 	rq := httptest.NewRequest(http.MethodGet, "/v1/things/123", nil)
 	rq.Header.Set("Authorization", "Bearer super-secret")
@@ -44,17 +44,27 @@ func TestRouterSpanUsesRouteTemplateAndOmitsSecrets(t *testing.T) {
 	h.ServeHTTP(httptest.NewRecorder(), rq)
 
 	spans := exp.GetSpans()
-	if len(spans) != 1 {
-		t.Fatalf("spans = %d", len(spans))
-	}
-	if !strings.Contains(spans[0].Name, "/v1/things/{id}") {
-		t.Fatalf("span name %q is not the route template", spans[0].Name)
+	if len(spans) != 1 || spans[0].Name != "GET /v1/things/{id}" {
+		t.Fatalf("spans = %+v", spans)
 	}
 	for _, a := range spans[0].Attributes {
 		v := a.Value.Emit()
 		if strings.Contains(v, "super-secret") || strings.Contains(v, "cookie-secret") {
 			t.Fatalf("attribute %s leaked a secret", a.Key)
 		}
+	}
+}
+
+func TestRouterUnmatchedSpanName(t *testing.T) {
+	exp := tracetest.NewInMemoryExporter()
+	prev := otel.GetTracerProvider()
+	otel.SetTracerProvider(sdktrace.NewTracerProvider(sdktrace.WithSyncer(exp)))
+	t.Cleanup(func() { otel.SetTracerProvider(prev) })
+
+	_, h := httpserver.NewRouter(options())
+	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/nope/123", nil))
+	if spans := exp.GetSpans(); len(spans) != 1 || spans[0].Name != "GET unmatched" {
+		t.Fatalf("spans = %+v", spans)
 	}
 }
 
@@ -72,49 +82,76 @@ func TestRouterNotFoundIsProblemWithHeaders(t *testing.T) {
 
 func TestRouterMethodNotAllowedIsProblemWithAllowHeader(t *testing.T) {
 	r, h := httpserver.NewRouter(options())
-	r.HandleFunc("/v1/items", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}).Methods(http.MethodGet)
+	r.HandleFunc("GET /v1/items", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.HandleFunc("POST /v1/sub/action", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
-	w := httptest.NewRecorder()
-	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/items", nil))
-	if w.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("code = %d, want 405", w.Code)
+	for path, wantAllow := range map[string]string{"/v1/items": "GET, HEAD", "/v1/sub/action": "POST"} {
+		method := http.MethodPost
+		if path == "/v1/sub/action" {
+			method = http.MethodGet
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(method, path, nil))
+		if w.Code != http.StatusMethodNotAllowed || w.Header().Get("Content-Type") != "application/problem+json" {
+			t.Fatalf("%s %s: %d %q", method, path, w.Code, w.Header().Get("Content-Type"))
+		}
+		if got := w.Header().Get("Allow"); got != wantAllow {
+			t.Fatalf("%s: allow = %q, want %q", path, got, wantAllow)
+		}
+		if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("X-Request-ID") == "" {
+			t.Fatalf("outer middleware skipped on 405: %v", w.Header())
+		}
+		var p struct {
+			Type   string `json:"type"`
+			Status int    `json:"status"`
+		}
+		if err := json.NewDecoder(w.Body).Decode(&p); err != nil || p.Type != "method_not_allowed" || p.Status != 405 {
+			t.Fatalf("problem = %+v, %v", p, err)
+		}
 	}
-	if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
-		t.Fatalf("content-type = %q", ct)
-	}
-	if allow := w.Header().Get("Allow"); allow != "GET" {
-		t.Fatalf("allow = %q, want GET", allow)
-	}
-	if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("X-Request-ID") == "" {
-		t.Fatalf("outer middleware skipped on 405: %v", w.Header())
-	}
-	var p struct {
-		Type   string `json:"type"`
-		Title  string `json:"title"`
-		Status int    `json:"status"`
-	}
-	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
-		t.Fatalf("decode problem: %v", err)
-	}
-	if p.Type != "method_not_allowed" || p.Status != http.StatusMethodNotAllowed {
-		t.Fatalf("problem payload = %+v", p)
-	}
+}
 
-	sub := r.PathPrefix("/v1/sub").Subrouter()
-	sub.MethodNotAllowedHandler = r.MethodNotAllowedHandler
-	sub.HandleFunc("/action", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}).Methods(http.MethodPost)
+func TestRouterWrapUnmatchedAppliesOnlyUnderPrefix(t *testing.T) {
+	r, h := httpserver.NewRouter(options())
+	r.HandleFunc("POST /v1/auth/google", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.HandleFunc("GET /v1/other", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
+	r.WrapUnmatched("/v1/auth/", func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			w.Header().Set("X-Wrapped", "1")
+			next.ServeHTTP(w, req)
+		})
+	})
 
-	w2 := httptest.NewRecorder()
-	h.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/v1/sub/action", nil))
-	if w2.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("code = %d, want 405", w2.Code)
+	cases := []struct {
+		method, path string
+		code         int
+		wrapped      bool
+	}{
+		{http.MethodGet, "/v1/auth/google", 405, true},
+		{http.MethodGet, "/v1/auth/missing", 404, true},
+		{http.MethodPost, "/v1/other", 405, false},
+		{http.MethodPost, "/v1/auth/google", 200, false},
 	}
-	if allow := w2.Header().Get("Allow"); allow != "POST" {
-		t.Fatalf("subrouter allow = %q, want POST", allow)
+	for _, c := range cases {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(c.method, c.path, nil))
+		if w.Code != c.code || (w.Header().Get("X-Wrapped") == "1") != c.wrapped {
+			t.Fatalf("%s %s: code %d wrapped %q", c.method, c.path, w.Code, w.Header().Get("X-Wrapped"))
+		}
+	}
+}
+
+func TestRouterNonCanonicalPathDoesNotBypassRouting(t *testing.T) {
+	r, h := httpserver.NewRouter(options())
+	r.HandleFunc("GET /v1/me", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
+	// The mux redirects unclean paths to the canonical one (307) and 404s a trailing
+	// slash. Neither may reach the handler directly.
+	for p, want := range map[string]int{"/v1//me": http.StatusTemporaryRedirect, "/v1/./me": http.StatusTemporaryRedirect, "/v1/me/": http.StatusNotFound} {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, p, nil))
+		if w.Code != want {
+			t.Fatalf("%s: code %d, want %d", p, w.Code, want)
+		}
 	}
 }
 

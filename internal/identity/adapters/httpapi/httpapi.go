@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gorilla/mux"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/metric"
@@ -81,25 +80,16 @@ func New(svc SessionService, verifier AccessTokenVerifier, cfg Config) (*Handler
 	return &Handler{svc: svc, verifier: verifier, cfg: cfg, origins: origins, signInCounter: signInCounter, reuse: reuse}, nil
 }
 
-// Register mounts the identity routes.
-func (h *Handler) Register(r *mux.Router) {
-	a := r.PathPrefix("/v1/auth").Subrouter()
+// Register mounts the identity routes. Auth routes and their 404/405 responses are
+// no-store and rate-limited per client IP.
+func (h *Handler) Register(r *httpserver.Router) {
 	limiter := h.cfg.AuthLimiter.Middleware(h.cfg.IPs)
-	auth405 := httpserver.NoStore(limiter(r.MethodNotAllowedHandler))
-	a.MethodNotAllowedHandler = auth405
-	a.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		if allowed := httpserver.AllowedMethods(r, req); len(allowed) > 0 {
-			auth405.ServeHTTP(w, req)
-			return
-		}
-		r.NotFoundHandler.ServeHTTP(w, req)
-	})
-	a.Use(httpserver.NoStore, mux.MiddlewareFunc(limiter))
-	a.HandleFunc("/google", h.signIn).Methods(http.MethodPost)
-	a.Handle("/refresh", h.requireOrigin(http.HandlerFunc(h.refresh))).Methods(http.MethodPost)
-	a.Handle("/logout", h.requireOrigin(http.HandlerFunc(h.logout))).Methods(http.MethodPost)
-
-	r.Handle("/v1/me", httpserver.NoStore(h.RequireAuth(http.HandlerFunc(h.me)))).Methods(http.MethodGet)
+	authRoute := func(next http.Handler) http.Handler { return httpserver.NoStore(limiter(next)) }
+	r.WrapUnmatched("/v1/auth/", authRoute)
+	r.Handle("POST /v1/auth/google", authRoute(http.HandlerFunc(h.signIn)))
+	r.Handle("POST /v1/auth/refresh", authRoute(h.requireOrigin(http.HandlerFunc(h.refresh))))
+	r.Handle("POST /v1/auth/logout", authRoute(h.requireOrigin(http.HandlerFunc(h.logout))))
+	r.Handle("GET /v1/me", httpserver.NoStore(h.RequireAuth(http.HandlerFunc(h.me))))
 }
 
 // RequireAuth rejects requests without a valid bearer access token and stores the principal.

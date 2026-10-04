@@ -6,7 +6,6 @@ import (
 	"log/slog"
 	"net/http"
 
-	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 
@@ -92,7 +91,7 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog
 	return nil
 }
 
-func registerIdentity(r *mux.Router, svc *identityapp.Service, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) error {
+func registerIdentity(r *httpserver.Router, svc *identityapp.Service, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) error {
 	h, err := httpapi.New(svc, tokens, httpapi.Config{
 		CookieSecure:   cfg.CookieSecure,
 		AllowedOrigins: cfg.AllowedOrigins,
