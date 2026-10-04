@@ -35,6 +35,8 @@ linters:
               desc: platform must not depend on bounded contexts
             - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
               desc: platform must not depend on bounded contexts
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
+              desc: platform must not depend on bounded contexts
         platform-contentblocks:
           list-mode: strict
           files:
@@ -65,19 +67,23 @@ linters:
             - github.com/santoshkc2200/ioe-backend/internal/platform/auth
             - github.com/santoshkc2200/ioe-backend/internal/platform/clock
             - github.com/santoshkc2200/ioe-backend/internal/platform/id
-        identity-independent-of-notification:
+        identity-independent:
           list-mode: lax
           files:
             - "**/internal/identity/**"
           deny:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
               desc: bounded contexts must not import each other
-        notification-independent-of-identity:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
+              desc: bounded contexts must not import each other
+        notification-independent:
           list-mode: lax
           files:
             - "**/internal/notification/**"
           deny:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
               desc: bounded contexts must not import each other
         notification-app:
           list-mode: strict
@@ -86,6 +92,37 @@ linters:
             - "!$test"
           allow:
             - $gostd
+        courseauthoring-domain:
+          list-mode: strict
+          files:
+            - "**/internal/courseauthoring/domain/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
+        courseauthoring-app:
+          list-mode: strict
+          files:
+            - "**/internal/courseauthoring/app/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/santoshkc2200/ioe-backend/internal/courseauthoring/domain
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/clock
+            - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
+        courseauthoring-independent:
+          list-mode: lax
+          files:
+            - "**/internal/courseauthoring/**"
+          deny:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
+              desc: bounded contexts must not import each other
   exclusions:
     generated: strict
     presets:

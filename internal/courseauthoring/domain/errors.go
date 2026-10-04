@@ -1,0 +1,18 @@
+// Package domain holds the course authoring model.
+package domain
+
+import "errors"
+
+var (
+	ErrInvalidPrice            = errors.New("price must not be negative")
+	ErrUnsupportedCurrency     = errors.New("only NPR prices are supported")
+	ErrInvalidLevel            = errors.New("level must be empty, beginner, intermediate or advanced")
+	ErrInvalidThumbnailURL     = errors.New("thumbnail_url must be empty or an absolute http(s) URL")
+	ErrDuplicateSectionTitle   = errors.New("section title already used in this course")
+	ErrSectionNotFound         = errors.New("section not found")
+	ErrLectureNotFound         = errors.New("lecture not found")
+	ErrInvalidLectureOrder     = errors.New("lecture order must list every lecture exactly once")
+	ErrCourseHasNoLectures     = errors.New("course has no lectures")
+	ErrCourseNotEditable       = errors.New("course is archived")
+	ErrInvalidStatusTransition = errors.New("invalid status transition")
+)
