@@ -29,6 +29,7 @@ type Config struct {
 	BootstrapRootAdminEmails      []string `env:"BOOTSTRAP_ROOT_ADMIN_EMAILS" envSeparator:","`
 	CookieSecure                  bool     `env:"COOKIE_SECURE" envDefault:"true"`
 	AuthRateLimitPerMinute        int      `env:"AUTH_RATE_LIMIT_PER_MINUTE" envDefault:"30"`
+	SnowflakeNodeID               int64    `env:"SNOWFLAKE_NODE_ID" envDefault:"0"`
 	TrustedProxyCIDRs             []string `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
 	LogLevel                      string   `env:"LOG_LEVEL" envDefault:"info"`
 	NotificationServiceBaseURL    string   `env:"NOTIFICATION_SERVICE_BASE_URL"`
@@ -112,6 +113,9 @@ func (c *Config) validate() error {
 	if c.AuthRateLimitPerMinute <= 0 {
 		errs = append(errs, errors.New("AUTH_RATE_LIMIT_PER_MINUTE: must be positive"))
 	}
+	if c.SnowflakeNodeID < 0 || c.SnowflakeNodeID > 1023 {
+		errs = append(errs, errors.New("SNOWFLAKE_NODE_ID: must be between 0 and 1023"))
+	}
 	if _, err := c.SlogLevel(); err != nil {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL: %w", err))
 	}
@@ -175,6 +179,9 @@ func withVarNames(err error) error {
 	// Heuristic mapping for known typed fields.
 	if strings.Contains(msg, `parsing "maybe"`) && !strings.Contains(msg, "COOKIE_SECURE") {
 		return fmt.Errorf("COOKIE_SECURE: %w", err)
+	}
+	if strings.Contains(msg, `"SnowflakeNodeID"`) && !strings.Contains(msg, "SNOWFLAKE_NODE_ID") {
+		return fmt.Errorf("SNOWFLAKE_NODE_ID: %w", err)
 	}
 	return err
 }

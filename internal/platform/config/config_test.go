@@ -87,6 +87,25 @@ func TestTrustedProxies(t *testing.T) {
 	}
 }
 
+func TestSnowflakeNodeID(t *testing.T) {
+	cfg, err := config.LoadFrom(validEnv())
+	if err != nil || cfg.SnowflakeNodeID != 0 {
+		t.Fatalf("default = %d, %v", cfg.SnowflakeNodeID, err)
+	}
+	for _, v := range []string{"-1", "1024", "x"} {
+		env := validEnv()
+		env["SNOWFLAKE_NODE_ID"] = v
+		if _, err := config.LoadFrom(env); err == nil || !strings.Contains(err.Error(), "SNOWFLAKE_NODE_ID") {
+			t.Fatalf("SNOWFLAKE_NODE_ID=%s: err = %v", v, err)
+		}
+	}
+	env := validEnv()
+	env["SNOWFLAKE_NODE_ID"] = "1023"
+	if cfg, err := config.LoadFrom(env); err != nil || cfg.SnowflakeNodeID != 1023 {
+		t.Fatalf("1023 = %d, %v", cfg.SnowflakeNodeID, err)
+	}
+}
+
 const localNotificationKey = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M"
 
 func TestNotificationsDisabledByDefault(t *testing.T) {

@@ -14,6 +14,10 @@ make run
 
 See `AGENTS.md` for architecture rules and required checks, and `api/openapi.yaml` for the HTTP contract.
 
+## Configuration
+
+- `SNOWFLAKE_NODE_ID` (default `0`): Snowflake node ID (0-1023). Every running replica must use a different value.
+
 ## Notifications
 
 Welcome emails are sent through the standalone notification service in `../notification`.
