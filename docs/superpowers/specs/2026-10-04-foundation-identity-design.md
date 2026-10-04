@@ -43,7 +43,7 @@ The full product spans many contexts (identity, profile, course authoring/catalo
 | Boundary enforcement | `depguard` rules in golangci-lint, run in CI |
 | Database | PostgreSQL 17, pgx v5, sqlc for queries |
 | Migrations | goose, SQL files under `migrations/` |
-| HTTP | gorilla/mux under `/v1`, RFC 9457 problem+json errors |
+| HTTP | gorilla/mux under `/v1`, RFC 9457 problem+json errors (Superseded by 2026-10-04-platform-snowflake-nethttp-design.md: net/http ServeMux) |
 | Auth model | Backend session exchange of a Google ID token |
 | Roles | Exactly one role per user: `student` (default), `instructor`, `root_admin` |
 | Root admin bootstrap | Email allowlist from `BOOTSTRAP_ROOT_ADMIN_EMAILS`, applied on every sign-in |
@@ -68,7 +68,7 @@ internal/platform/
   telemetry/                 OpenTelemetry SDK setup and shutdown
   postgres/                  pgx pool
   migrate/                   goose runner (embedded migrations)
-  httpserver/                mux router, middleware, server lifecycle
+  httpserver/                mux router, middleware, server lifecycle (Superseded by 2026-10-04-platform-snowflake-nethttp-design.md: net/http ServeMux)
   problem/                   RFC 9457 problem+json writer
   outbox/                    Watermill SQL publisher (in-transaction) and forwarder
   auth/                      Principal type and context accessors shared by all contexts
@@ -87,7 +87,7 @@ docs/superpowers/specs/      design documents
 
 ### Dependency rules
 
-- `domain` imports only the standard library, `github.com/google/uuid`, and `internal/platform/auth` (for the shared `Role` type).
+- `domain` imports only the standard library, `github.com/google/uuid`, and `internal/platform/auth` (for the shared `Role` type). (Superseded by 2026-10-04-platform-snowflake-nethttp-design.md: domain uses `internal/platform/id` instead of uuid.)
 - `app` imports its own `domain` and `internal/platform/{auth,clock}`.
 - `adapters` implement `app` ports and may import platform packages.
 - A bounded context never imports another context's `domain`, `app`, or `adapters`. When a later context needs identity data synchronously, it defines its own port and `cmd/api` wires an adapter backed by identity's application service.
@@ -101,6 +101,7 @@ docs/superpowers/specs/      design documents
 `internal/platform/auth` defines:
 
 ```go
+// Superseded by 2026-10-04-platform-snowflake-nethttp-design.md: UserID is id.ID (Snowflake int64).
 type Principal struct {
     UserID uuid.UUID
     Role   Role
@@ -120,7 +121,7 @@ There is no platform `WithTx` helper; identity's `TxRunner` (`internal/identity/
 
 ### Domain
 
-- `User`: `ID` (UUIDv7), `GoogleSubject`, `Email`, `Name`, `AvatarURL`, `Role`, `CreatedAt`, `UpdatedAt`, `LastLoginAt`.
+- `User`: `ID` (UUIDv7 — superseded by 2026-10-04-platform-snowflake-nethttp-design.md: Snowflake `id.ID`), `GoogleSubject`, `Email`, `Name`, `AvatarURL`, `Role`, `CreatedAt`, `UpdatedAt`, `LastLoginAt`.
 - Users are keyed by Google `sub`. Email is updated from the verified token on each sign-in and is never used as an identity key.
 - `RefreshToken`: `ID`, `UserID`, `FamilyID`, `TokenHash`, `FamilyExpiresAt`, `ExpiresAt`, `UsedAt`, `RevokedAt`, `CreatedAt`, `UserAgent`, `IP`.
 - Events: `UserRegistered{UserID, Email, OccurredAt}`.
@@ -207,6 +208,8 @@ Verification failures return a generic message; the specific reason is logged at
 **CSRF**: `/v1/auth/refresh` and `/v1/auth/logout` require an `Origin` header exactly matching an entry in `ALLOWED_ORIGINS`.
 
 ### Database schema
+
+Superseded by 2026-10-04-platform-snowflake-nethttp-design.md: ID columns are `bigint` (Snowflake `id.ID`).
 
 ```sql
 CREATE SCHEMA identity;
@@ -298,7 +301,7 @@ Middleware order, outermost first: request ID, panic recovery, access logging, s
 
 `internal/platform/telemetry` initializes tracer, meter, and logger providers with OTLP/HTTP exporters, configured by the standard variables: `OTEL_EXPORTER_OTLP_ENDPOINT` (OpenObserve, e.g. `https://observe.example.com/api/<org>`), `OTEL_EXPORTER_OTLP_HEADERS` (`Authorization=Basic <base64>`), `OTEL_SERVICE_NAME` (default `ioe-backend`), `OTEL_RESOURCE_ATTRIBUTES`. With `OTEL_SDK_DISABLED=true` or no endpoint, providers are no-ops. Shutdown flushes all providers. W3C `tracecontext` and `baggage` propagators are installed.
 
-- Traces: `otelmux` server spans named by route template, never the raw path; `otelpgx` database spans recording SQL text without arguments; outbox messages carry trace context in metadata so the forwarder and future consumers continue the trace.
+- Traces: `otelmux` server spans named by route template, never the raw path (Superseded by 2026-10-04-platform-snowflake-nethttp-design.md: `otelhttp`); `otelpgx` database spans recording SQL text without arguments; outbox messages carry trace context in metadata so the forwarder and future consumers continue the trace.
 - Metrics: HTTP server metrics, Go runtime metrics, pgx pool statistics, and the counters `identity.signins` (attribute `result`: `created`, `existing`, `rejected`, `invalid`, `error`) and `identity.refresh_reuse_detected`, both recorded by the identity HTTP adapter (`internal/identity/adapters/httpapi`).
 - Logs: the slog bridge described above.
 - Sensitive data: span and metric attributes never include tokens, cookies, emails, or the `Authorization` header. The HTTP instrumentation is configured to omit request headers.

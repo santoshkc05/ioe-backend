@@ -11,7 +11,7 @@ Modular monolith, domain-driven design, hexagonal architecture.
 cmd/api/              composition root (the only package that wires everything)
 internal/platform/    shared infrastructure; never imports a bounded context
 internal/<context>/
-  domain/             entities, value objects, events; stdlib + uuid + platform/auth only
+  domain/             entities, value objects, events; stdlib + platform/{id,auth} only
   app/                use cases and the ports they own; imports only its domain and platform/{auth,clock}
   adapters/           implementations of app ports (postgres, http, external services)
 migrations/           goose SQL; one PostgreSQL schema per context
