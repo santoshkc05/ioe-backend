@@ -16,23 +16,23 @@ import (
 
 // Config is the complete API server configuration.
 type Config struct {
-	HTTPAddr                 string   `env:"HTTP_ADDR" envDefault:":8080"`
-	DatabaseURL              string   `env:"DATABASE_URL,required,notEmpty"`
-	GoogleClientIDs          []string `env:"GOOGLE_CLIENT_IDS,required,notEmpty" envSeparator:","`
-	GoogleJWKSURL            string   `env:"GOOGLE_JWKS_URL" envDefault:"https://www.googleapis.com/oauth2/v3/certs"`
-	JWTIssuer                string   `env:"JWT_ISSUER,required,notEmpty"`
-	JWTAudience              string   `env:"JWT_AUDIENCE,required,notEmpty"`
-	JWTSigningKeyPEM         string   `env:"JWT_SIGNING_KEY,required,notEmpty"`
-	JWTSigningKeyID          string   `env:"JWT_SIGNING_KEY_ID,required,notEmpty"`
-	JWTVerifyKeys            string   `env:"JWT_VERIFY_KEYS"`
-	AllowedOrigins           []string `env:"ALLOWED_ORIGINS,required,notEmpty" envSeparator:","`
-	BootstrapRootAdminEmails []string `env:"BOOTSTRAP_ROOT_ADMIN_EMAILS" envSeparator:","`
-	CookieSecure             bool     `env:"COOKIE_SECURE" envDefault:"true"`
-	AuthRateLimitPerMinute   int      `env:"AUTH_RATE_LIMIT_PER_MINUTE" envDefault:"30"`
-	TrustedProxyCIDRs        []string `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
-	LogLevel                 string   `env:"LOG_LEVEL" envDefault:"info"`
-	NotificationServiceBaseURL    string `env:"NOTIFICATION_SERVICE_BASE_URL"`
-	NotificationServiceSendAPIKey string `env:"NOTIFICATION_SERVICE_SEND_API_KEY"`
+	HTTPAddr                      string   `env:"HTTP_ADDR" envDefault:":8080"`
+	DatabaseURL                   string   `env:"DATABASE_URL,required,notEmpty"`
+	GoogleClientIDs               []string `env:"GOOGLE_CLIENT_IDS,required,notEmpty" envSeparator:","`
+	GoogleJWKSURL                 string   `env:"GOOGLE_JWKS_URL" envDefault:"https://www.googleapis.com/oauth2/v3/certs"`
+	JWTIssuer                     string   `env:"JWT_ISSUER,required,notEmpty"`
+	JWTAudience                   string   `env:"JWT_AUDIENCE,required,notEmpty"`
+	JWTSigningKeyPEM              string   `env:"JWT_SIGNING_KEY,required,notEmpty"`
+	JWTSigningKeyID               string   `env:"JWT_SIGNING_KEY_ID,required,notEmpty"`
+	JWTVerifyKeys                 string   `env:"JWT_VERIFY_KEYS"`
+	AllowedOrigins                []string `env:"ALLOWED_ORIGINS,required,notEmpty" envSeparator:","`
+	BootstrapRootAdminEmails      []string `env:"BOOTSTRAP_ROOT_ADMIN_EMAILS" envSeparator:","`
+	CookieSecure                  bool     `env:"COOKIE_SECURE" envDefault:"true"`
+	AuthRateLimitPerMinute        int      `env:"AUTH_RATE_LIMIT_PER_MINUTE" envDefault:"30"`
+	TrustedProxyCIDRs             []string `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
+	LogLevel                      string   `env:"LOG_LEVEL" envDefault:"info"`
+	NotificationServiceBaseURL    string   `env:"NOTIFICATION_SERVICE_BASE_URL"`
+	NotificationServiceSendAPIKey string   `env:"NOTIFICATION_SERVICE_SEND_API_KEY"`
 }
 
 // Load reads the process environment.

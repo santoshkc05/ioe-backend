@@ -142,4 +142,3 @@ func TestNotificationConfigRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
-

@@ -33,6 +33,8 @@ linters:
           deny:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
               desc: platform must not depend on bounded contexts
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
+              desc: platform must not depend on bounded contexts
         identity-domain:
           list-mode: strict
           files:
@@ -53,6 +55,27 @@ linters:
             - github.com/santoshkc2200/ioe-backend/internal/identity/domain
             - github.com/santoshkc2200/ioe-backend/internal/platform/auth
             - github.com/santoshkc2200/ioe-backend/internal/platform/clock
+        identity-independent-of-notification:
+          list-mode: lax
+          files:
+            - "**/internal/identity/**"
+          deny:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
+              desc: bounded contexts must not import each other
+        notification-independent-of-identity:
+          list-mode: lax
+          files:
+            - "**/internal/notification/**"
+          deny:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
+              desc: bounded contexts must not import each other
+        notification-app:
+          list-mode: strict
+          files:
+            - "**/internal/notification/app/**"
+            - "!$test"
+          allow:
+            - $gostd
   exclusions:
     generated: strict
     presets:

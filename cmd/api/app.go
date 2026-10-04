@@ -2,17 +2,24 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
 	"github.com/gorilla/mux"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"go.opentelemetry.io/otel"
 
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/google"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/httpapi"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/jwt"
 	identitypg "github.com/santoshkc2200/ioe-backend/internal/identity/adapters/postgres"
 	identityapp "github.com/santoshkc2200/ioe-backend/internal/identity/app"
+	identitydomain "github.com/santoshkc2200/ioe-backend/internal/identity/domain"
+	notificationevents "github.com/santoshkc2200/ioe-backend/internal/notification/adapters/events"
+	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/notifysvc"
+	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/templates"
+	notificationapp "github.com/santoshkc2200/ioe-backend/internal/notification/app"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/config"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/httpserver"
@@ -53,7 +60,30 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err != nil {
 		return nil, err
 	}
+	if err := registerNotifications(fw, cfg, logger); err != nil {
+		return nil, errors.Join(err, fw.Close())
+	}
 	return &application{handler: handler, forwarder: fw}, nil
+}
+
+// registerNotifications subscribes the notification context to the events it consumes.
+func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog.Logger) error {
+	if !cfg.NotificationsEnabled() {
+		logger.Warn("notifications disabled: NOTIFICATION_SERVICE_BASE_URL and NOTIFICATION_SERVICE_SEND_API_KEY are not set")
+		return nil
+	}
+	renderer, err := templates.New()
+	if err != nil {
+		return err
+	}
+	mailer := notifysvc.New(cfg.NotificationServiceBaseURL, cfg.NotificationServiceSendAPIKey)
+	handlers, err := notificationevents.New(notificationapp.NewService(mailer, renderer), logger,
+		otel.Meter("github.com/santoshkc2200/ioe-backend/internal/notification"))
+	if err != nil {
+		return err
+	}
+	fw.Handle(identitydomain.UserRegistered{}.EventName(), handlers.Welcome)
+	return nil
 }
 
 func registerIdentity(r *mux.Router, svc *identityapp.Service, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) error {

@@ -22,7 +22,10 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/platform/postgres/pgtest"
 )
 
-const appOrigin = "https://app.test"
+const (
+	appOrigin = "https://app.test"
+	notifyKey = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M"
+)
 
 func signingKeyPEM(t *testing.T) string {
 	t.Helper()
@@ -81,23 +84,38 @@ func TestEndToEnd(t *testing.T) {
 	pool := pgtest.New(t)
 	google := googletest.NewIssuer(t)
 
+	type sentEmail struct{ key, recipient, auth string }
+	sent := make(chan sentEmail, 4)
+	notify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Recipient string `json:"recipient"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent <- sentEmail{key: r.Header.Get("Idempotency-Key"), recipient: body.Recipient, auth: r.Header.Get("Authorization")}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer notify.Close()
+
 	cfg := config.Config{
-		GoogleClientIDs:        []string{"web-client"},
-		GoogleJWKSURL:          google.JWKSURL(),
-		JWTIssuer:              "https://api.test",
-		JWTAudience:            "ioe",
-		JWTSigningKeyPEM:       signingKeyPEM(t),
-		JWTSigningKeyID:        "k1",
-		AllowedOrigins:         []string{appOrigin},
-		CookieSecure:           false,
-		AuthRateLimitPerMinute: 1000,
-		LogLevel:               "info",
+		GoogleClientIDs:               []string{"web-client"},
+		GoogleJWKSURL:                 google.JWKSURL(),
+		JWTIssuer:                     "https://api.test",
+		JWTAudience:                   "ioe",
+		JWTSigningKeyPEM:              signingKeyPEM(t),
+		JWTSigningKeyID:               "k1",
+		AllowedOrigins:                []string{appOrigin},
+		CookieSecure:                  false,
+		AuthRateLimitPerMinute:        1000,
+		LogLevel:                      "info",
+		NotificationServiceBaseURL:    notify.URL,
+		NotificationServiceSendAPIKey: notifyKey,
 	}
 	a, err := buildApp(ctx, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer a.forwarder.Close()
+	go func() { _ = a.forwarder.Run(ctx) }()
 	srv := httptest.NewServer(a.handler)
 	defer srv.Close()
 	c := client{t: t, base: srv.URL}
@@ -160,5 +178,20 @@ func TestEndToEnd(t *testing.T) {
 	}
 	if events != 1 {
 		t.Fatalf("outbox messages = %d, want 1 (one registration)", events)
+	}
+
+	select {
+	case got := <-sent:
+		if got.recipient != "e2e@example.com" || got.auth != "Bearer "+notifyKey ||
+			!strings.HasPrefix(got.key, "ioe:identity.user_registered:") || !strings.HasSuffix(got.key, ":welcome-v1") {
+			t.Fatalf("welcome email %+v", got)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("welcome email not enqueued")
+	}
+	select {
+	case got := <-sent:
+		t.Fatalf("unexpected second email %+v", got)
+	case <-time.After(2 * time.Second):
 	}
 }
