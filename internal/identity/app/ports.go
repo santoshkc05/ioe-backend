@@ -12,11 +12,15 @@ import (
 )
 
 var (
-	ErrInvalidToken    = errors.New("invalid token")
-	ErrRefreshReuse    = errors.New("refresh token reuse detected")
-	ErrEmailUnverified = errors.New("email not verified")
-	ErrNotFound        = errors.New("not found")
-	ErrConflict        = errors.New("conflict")
+	ErrInvalidToken       = errors.New("invalid token")
+	ErrRefreshReuse       = errors.New("refresh token reuse detected")
+	ErrEmailUnverified    = errors.New("email not verified")
+	ErrNotFound           = errors.New("not found")
+	ErrConflict           = errors.New("conflict")
+	ErrForbidden          = errors.New("forbidden")
+	ErrEmailQueryTooShort = errors.New("email query too short")
+	ErrInvalidRole        = domain.ErrInvalidRole
+	ErrRoleNotAssignable  = domain.ErrRoleNotAssignable
 )
 
 // UserRepository returns ErrNotFound for missing users and ErrConflict when Insert
