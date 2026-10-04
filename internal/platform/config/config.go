@@ -2,6 +2,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,8 @@ type Config struct {
 	AuthRateLimitPerMinute   int      `env:"AUTH_RATE_LIMIT_PER_MINUTE" envDefault:"30"`
 	TrustedProxyCIDRs        []string `env:"TRUSTED_PROXY_CIDRS" envSeparator:","`
 	LogLevel                 string   `env:"LOG_LEVEL" envDefault:"info"`
+	NotificationServiceBaseURL    string `env:"NOTIFICATION_SERVICE_BASE_URL"`
+	NotificationServiceSendAPIKey string `env:"NOTIFICATION_SERVICE_SEND_API_KEY"`
 }
 
 // Load reads the process environment.
@@ -77,6 +80,10 @@ func (c Config) TrustedProxies() []netip.Prefix {
 	return out
 }
 
+// NotificationsEnabled reports whether the notification service is configured.
+// LoadFrom guarantees that both variables are set or neither is.
+func (c Config) NotificationsEnabled() bool { return c.NotificationServiceBaseURL != "" }
+
 func (c *Config) normalize() {
 	c.GoogleClientIDs = cleanList(c.GoogleClientIDs)
 	c.AllowedOrigins = cleanList(c.AllowedOrigins)
@@ -108,7 +115,37 @@ func (c *Config) validate() error {
 	if _, err := c.SlogLevel(); err != nil {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL: %w", err))
 	}
+	errs = append(errs, c.validateNotifications()...)
 	return errors.Join(errs...)
+}
+
+func (c *Config) validateNotifications() []error {
+	hasURL, hasKey := c.NotificationServiceBaseURL != "", c.NotificationServiceSendAPIKey != ""
+	switch {
+	case !hasURL && !hasKey:
+		return nil
+	case !hasKey:
+		return []error{errors.New("NOTIFICATION_SERVICE_SEND_API_KEY: required when NOTIFICATION_SERVICE_BASE_URL is set")}
+	case !hasURL:
+		return []error{errors.New("NOTIFICATION_SERVICE_BASE_URL: required when NOTIFICATION_SERVICE_SEND_API_KEY is set")}
+	}
+	var errs []error
+	if !isBaseURL(c.NotificationServiceBaseURL) {
+		errs = append(errs, fmt.Errorf("NOTIFICATION_SERVICE_BASE_URL: %q is not an absolute http(s) URL without query or fragment", c.NotificationServiceBaseURL))
+	}
+	if key, err := base64.RawURLEncoding.DecodeString(c.NotificationServiceSendAPIKey); err != nil || len(key) < 32 {
+		errs = append(errs, errors.New("NOTIFICATION_SERVICE_SEND_API_KEY: must be unpadded base64url encoding at least 32 bytes"))
+	}
+	return errs
+}
+
+func isBaseURL(s string) bool {
+	u, err := url.Parse(s)
+	if err != nil {
+		return false
+	}
+	return (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" &&
+		u.RawQuery == "" && u.Fragment == "" && u.User == nil
 }
 
 func isOrigin(s string) bool {

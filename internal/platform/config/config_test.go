@@ -86,3 +86,60 @@ func TestTrustedProxies(t *testing.T) {
 		t.Fatalf("TrustedProxies = %v", got)
 	}
 }
+
+const localNotificationKey = "c3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3Nzc3M"
+
+func TestNotificationsDisabledByDefault(t *testing.T) {
+	cfg, err := config.LoadFrom(validEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.NotificationsEnabled() {
+		t.Fatal("notifications enabled without configuration")
+	}
+}
+
+func TestNotificationsEnabled(t *testing.T) {
+	env := validEnv()
+	env["NOTIFICATION_SERVICE_BASE_URL"] = "http://notification:8080"
+	env["NOTIFICATION_SERVICE_SEND_API_KEY"] = localNotificationKey
+	cfg, err := config.LoadFrom(env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.NotificationsEnabled() || cfg.NotificationServiceBaseURL != "http://notification:8080" || cfg.NotificationServiceSendAPIKey != localNotificationKey {
+		t.Fatalf("%+v", cfg)
+	}
+}
+
+func TestNotificationConfigRejectsInvalidValues(t *testing.T) {
+	cases := map[string]struct{ url, key, wantVar string }{
+		"url without key":       {"http://notification:8080", "", "NOTIFICATION_SERVICE_SEND_API_KEY"},
+		"key without url":       {"", localNotificationKey, "NOTIFICATION_SERVICE_BASE_URL"},
+		"url without scheme":    {"notification:8080", localNotificationKey, "NOTIFICATION_SERVICE_BASE_URL"},
+		"url with ftp scheme":   {"ftp://notification", localNotificationKey, "NOTIFICATION_SERVICE_BASE_URL"},
+		"url with query":        {"http://notification:8080?x=1", localNotificationKey, "NOTIFICATION_SERVICE_BASE_URL"},
+		"short key":             {"http://notification:8080", "c2hvcnQ", "NOTIFICATION_SERVICE_SEND_API_KEY"},
+		"padded key":            {"http://notification:8080", localNotificationKey + "=", "NOTIFICATION_SERVICE_SEND_API_KEY"},
+		"standard alphabet key": {"http://notification:8080", "+" + localNotificationKey[1:], "NOTIFICATION_SERVICE_SEND_API_KEY"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := validEnv()
+			if tc.url != "" {
+				env["NOTIFICATION_SERVICE_BASE_URL"] = tc.url
+			}
+			if tc.key != "" {
+				env["NOTIFICATION_SERVICE_SEND_API_KEY"] = tc.key
+			}
+			_, err := config.LoadFrom(env)
+			if err == nil || !strings.Contains(err.Error(), tc.wantVar) {
+				t.Fatalf("err = %v, want mention of %s", err, tc.wantVar)
+			}
+			if tc.key != "" && strings.Contains(err.Error(), tc.key) {
+				t.Fatalf("error echoes the key: %v", err)
+			}
+		})
+	}
+}
+
