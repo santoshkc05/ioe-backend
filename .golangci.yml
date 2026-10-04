@@ -64,6 +64,10 @@ linters:
       # behavior is asserted by the tests themselves.
       - linters: [noctx, gosec]
         path: _test\.go$
+      # The cmd/api e2e client helper closes response bodies internally
+      # (defer inside client.do); bodyclose cannot see through the helper.
+      - linters: [bodyclose]
+        path: cmd/api/e2e_integration_test\.go$
       - linters: [staticcheck]
         path: _test\.go$
         text: SA1019
