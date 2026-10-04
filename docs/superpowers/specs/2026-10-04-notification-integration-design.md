@@ -70,22 +70,22 @@ There is no `domain` package: the context holds no state and enforces no invaria
 
 The `gochannel` is removed. Even with `BlockPublishUntilSubscriberAck`, a closing `gochannel` or subscriber makes `Publish` return `nil`, so the forwarder would acknowledge a message that was never handled and a graceful shutdown during retries would lose it.
 
-- New `Dispatcher` type implements `message.Publisher`:
+- New unexported `dispatcher` type implements `message.Publisher`; only `Handler` and `Forwarder.Handle` are exported:
 
   ```go
   // Handler processes one forwarded message. Returning an error makes the
   // forwarder retry the message; returning nil acknowledges it.
   type Handler func(*message.Message) error
 
-  func (d *Dispatcher) Handle(topic string, h Handler)
-  func (d *Dispatcher) Publish(topic string, msgs ...*message.Message) error
-  func (d *Dispatcher) Close() error
+  func (f *Forwarder) Handle(topic string, h Handler)
+  func (d *dispatcher) Publish(topic string, msgs ...*message.Message) error
+  func (d *dispatcher) Close() error
   ```
 
   `Publish` calls every handler registered for the topic, in registration order, and returns the first error. A topic with no handlers returns `nil`, so the message is acknowledged exactly as today. `Handle` must be called before `Forwarder.Run`; the handler map is read-only afterwards.
 - `NewForwarder` passes the dispatcher as the forwarder's publisher and sets `forwarder.Config.Middlewares` to, in order:
-  - `middleware.Recoverer`
-  - `middleware.Retry{InitialInterval: 1s, MaxInterval: 1m, Multiplier: 2, MaxRetries: 5}`
+  - `middleware.Retry{InitialInterval: 1s, MaxInterval: 1m, Multiplier: 2, MaxRetries: 5}` (outer)
+  - `middleware.Recoverer` (inner, so a handler panic becomes an error that `Retry` retries)
 - The SQL subscriber is configured with `ResendInterval: 5s`. When a retry cycle is exhausted, the forwarder nacks, the SQL subscriber resends after 5s, and a new cycle begins. A transient failure delays delivery but never drops it.
 - The forwarder acknowledges the SQL message only after `Publish` returns `nil`. On shutdown or crash the SQL subscriber stops without acknowledging, so the message is redelivered on the next start. The `Retry` middleware sees the SQL message's context and stops retrying when the subscriber closes. The message a handler receives is rebuilt by the forwarder with a background context, so handlers must bound their own work; the notification client's 10s timeout does this.
 - `Forwarder.Subscriber()` is replaced by `Forwarder.Handle(topic string, h Handler)`, which delegates to the dispatcher.
