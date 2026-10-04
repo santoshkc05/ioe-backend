@@ -32,4 +32,3 @@ administrator creates a dedicated login role for it and runs
 `GRANT CONNECT, CREATE ON DATABASE <database> TO <role>;`. Never grant the application role
 access to that schema, and never manage it from `ioe-backend` migrations. Deploy
 `notification-service migrate` as its own job before `notification-service serve`.
-
