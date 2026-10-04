@@ -98,7 +98,7 @@ shorter than 3 characters after trimming.
 FindByIDForUpdate(ctx context.Context, id id.ID) (domain.User, error)
 FindByGoogleSubjectForUpdate(ctx context.Context, subject string) (domain.User, error)
 // SearchByEmailPrefix matches case-insensitively, treats prefix literally, and orders by email.
-SearchByEmailPrefix(ctx context.Context, prefix string, limit int) ([]domain.User, error)
+SearchByEmailPrefix(ctx context.Context, prefix string, limit int32) ([]domain.User, error)
 ```
 
 `FindByGoogleSubjectForUpdate` replaces `FindByGoogleSubject`, whose only caller is
@@ -130,13 +130,14 @@ SELECT * FROM identity.users WHERE google_sub = $1 FOR UPDATE;
 
 -- name: SearchUsersByEmailPrefix :many
 SELECT * FROM identity.users
-WHERE email LIKE sqlc.arg(pattern)::text ESCAPE '\'
+WHERE email ILIKE sqlc.arg(pattern)::text ESCAPE '\'
 ORDER BY email, id
 LIMIT sqlc.arg(max_results);
 ```
 
-The adapter escapes `\`, `%` and `_` in the prefix and appends `%`. `email` is `citext`, so the
-match is case-insensitive. The table is small; the existing `users_email_idx` is sufficient.
+The adapter escapes `\`, `%` and `_` in the prefix and appends `%`. `ILIKE` makes the match
+case-insensitive without relying on `citext` operator resolution for a `text` pattern. The
+table is small; the existing `users_email_idx` is sufficient.
 
 ## HTTP API (`internal/identity/adapters/httpapi`)
 
