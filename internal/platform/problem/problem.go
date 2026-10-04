@@ -38,3 +38,24 @@ func Write(w http.ResponseWriter, r *http.Request, status int, typ, title, detai
 		Instance: logging.RequestID(r.Context()),
 	})
 }
+
+// WriteWithExtensions sends a problem response with RFC 9457 extension members.
+// Keys that collide with standard members are ignored.
+func WriteWithExtensions(w http.ResponseWriter, r *http.Request, status int, typ, title, detail string, ext map[string]any) {
+	body := make(map[string]any, len(ext)+5)
+	for k, v := range ext {
+		body[k] = v
+	}
+	body["type"], body["title"], body["status"] = typ, title, status
+	delete(body, "detail")
+	delete(body, "instance")
+	if detail != "" {
+		body["detail"] = detail
+	}
+	if id := logging.RequestID(r.Context()); id != "" {
+		body["instance"] = id
+	}
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(body)
+}
