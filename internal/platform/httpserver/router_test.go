@@ -2,6 +2,7 @@ package httpserver_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -66,6 +67,54 @@ func TestRouterNotFoundIsProblemWithHeaders(t *testing.T) {
 	}
 	if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("X-Request-ID") == "" {
 		t.Fatalf("outer middleware skipped on 404: %v", w.Header())
+	}
+}
+
+func TestRouterMethodNotAllowedIsProblemWithAllowHeader(t *testing.T) {
+	r, h := httpserver.NewRouter(options())
+	r.HandleFunc("/v1/items", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}).Methods(http.MethodGet)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/v1/items", nil))
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", w.Code)
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/problem+json" {
+		t.Fatalf("content-type = %q", ct)
+	}
+	if allow := w.Header().Get("Allow"); allow != "GET" {
+		t.Fatalf("allow = %q, want GET", allow)
+	}
+	if w.Header().Get("X-Content-Type-Options") != "nosniff" || w.Header().Get("X-Request-ID") == "" {
+		t.Fatalf("outer middleware skipped on 405: %v", w.Header())
+	}
+	var p struct {
+		Type   string `json:"type"`
+		Title  string `json:"title"`
+		Status int    `json:"status"`
+	}
+	if err := json.NewDecoder(w.Body).Decode(&p); err != nil {
+		t.Fatalf("decode problem: %v", err)
+	}
+	if p.Type != "method_not_allowed" || p.Status != http.StatusMethodNotAllowed {
+		t.Fatalf("problem payload = %+v", p)
+	}
+
+	sub := r.PathPrefix("/v1/sub").Subrouter()
+	sub.MethodNotAllowedHandler = r.MethodNotAllowedHandler
+	sub.HandleFunc("/action", func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}).Methods(http.MethodPost)
+
+	w2 := httptest.NewRecorder()
+	h.ServeHTTP(w2, httptest.NewRequest(http.MethodGet, "/v1/sub/action", nil))
+	if w2.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", w2.Code)
+	}
+	if allow := w2.Header().Get("Allow"); allow != "POST" {
+		t.Fatalf("subrouter allow = %q, want POST", allow)
 	}
 }
 

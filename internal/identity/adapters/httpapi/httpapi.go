@@ -84,9 +84,17 @@ func New(svc SessionService, verifier AccessTokenVerifier, cfg Config) (*Handler
 // Register mounts the identity routes.
 func (h *Handler) Register(r *mux.Router) {
 	a := r.PathPrefix("/v1/auth").Subrouter()
-	a.NotFoundHandler = r.NotFoundHandler
-	a.MethodNotAllowedHandler = r.MethodNotAllowedHandler
-	a.Use(httpserver.NoStore, mux.MiddlewareFunc(h.cfg.AuthLimiter.Middleware(h.cfg.IPs)))
+	limiter := h.cfg.AuthLimiter.Middleware(h.cfg.IPs)
+	auth405 := httpserver.NoStore(limiter(r.MethodNotAllowedHandler))
+	a.MethodNotAllowedHandler = auth405
+	a.NotFoundHandler = http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		if allowed := httpserver.AllowedMethods(r, req); len(allowed) > 0 {
+			auth405.ServeHTTP(w, req)
+			return
+		}
+		r.NotFoundHandler.ServeHTTP(w, req)
+	})
+	a.Use(httpserver.NoStore, mux.MiddlewareFunc(limiter))
 	a.HandleFunc("/google", h.signIn).Methods(http.MethodPost)
 	a.Handle("/refresh", h.requireOrigin(http.HandlerFunc(h.refresh))).Methods(http.MethodPost)
 	a.Handle("/logout", h.requireOrigin(http.HandlerFunc(h.logout))).Methods(http.MethodPost)
@@ -149,9 +157,11 @@ type tokenResponse struct {
 func (h *Handler) signIn(w http.ResponseWriter, r *http.Request) {
 	var req signInRequest
 	if !httpserver.DecodeJSON(w, r, &req) {
+		h.recordSignInResult(r.Context(), "invalid")
 		return
 	}
 	if req.IDToken == "" {
+		h.recordSignInResult(r.Context(), "invalid")
 		problem.Write(w, r, http.StatusBadRequest, problem.TypeInvalidRequest, "Invalid Request", "id_token is required")
 		return
 	}
@@ -234,14 +244,21 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 }
 
 func (h *Handler) recordSignIn(ctx context.Context, sess app.Session, err error) {
-	result := "rejected"
+	var result string
 	switch {
+	case errors.Is(err, app.ErrInvalidToken) || errors.Is(err, app.ErrEmailUnverified):
+		result = "rejected"
 	case err != nil:
+		result = "error"
 	case sess.Created:
 		result = "created"
 	default:
 		result = "existing"
 	}
+	h.recordSignInResult(ctx, result)
+}
+
+func (h *Handler) recordSignInResult(ctx context.Context, result string) {
 	h.signInCounter.Add(ctx, 1, metric.WithAttributes(attribute.String("result", result)))
 }
 

@@ -15,12 +15,16 @@ paths:
       security: []
       responses:
         "200": { $ref: "#/components/responses/Status" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /readyz:
     get:
       summary: Readiness (database reachable)
       security: []
       responses:
         "200": { $ref: "#/components/responses/Status" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
         "503": { $ref: "#/components/responses/Status" }
   /v1/auth/google:
     post:
@@ -53,9 +57,11 @@ paths:
         "400": { $ref: "#/components/responses/Problem" }
         "401": { $ref: "#/components/responses/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "413": { $ref: "#/components/responses/Problem" }
         "415": { $ref: "#/components/responses/Problem" }
         "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /v1/auth/refresh:
     post:
       summary: Rotate the refresh token and issue a new access token
@@ -77,7 +83,9 @@ paths:
             application/problem+json:
               schema: { $ref: "#/components/schemas/Problem" }
         "403": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /v1/auth/logout:
     post:
       summary: Revoke the session's refresh-token family
@@ -88,7 +96,9 @@ paths:
         "204":
           description: Logged out; the cookie is cleared
         "403": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /v1/me:
     get:
       summary: Current user
@@ -102,6 +112,8 @@ paths:
               schema: { $ref: "#/components/schemas/User" }
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -135,6 +147,21 @@ components:
               status: { type: string, enum: [ok, unavailable] }
     Problem:
       description: Error
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    MethodNotAllowed:
+      description: Method Not Allowed
+      headers:
+        Allow:
+          description: Allowed HTTP methods for the target resource
+          required: true
+          schema: { type: string }
+      content:
+        application/problem+json:
+          schema: { $ref: "#/components/schemas/Problem" }
+    InternalError:
+      description: Internal Server Error
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }

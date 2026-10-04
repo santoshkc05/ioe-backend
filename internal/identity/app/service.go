@@ -72,7 +72,7 @@ func (s *Service) SignInWithGoogle(ctx context.Context, idToken string, client C
 	if err != nil {
 		return Session{}, err
 	}
-	return s.withAccessToken(sess)
+	return sess, nil
 }
 
 func (s *Service) signIn(ctx context.Context, r Repos, identity domain.GoogleIdentity, client Client) (Session, error) {
@@ -117,7 +117,7 @@ func (s *Service) signIn(ctx context.Context, r Repos, identity domain.GoogleIde
 	if err := r.Tokens.Insert(ctx, token); err != nil {
 		return Session{}, err
 	}
-	return Session{RefreshToken: raw, RefreshTokenTTL: token.ExpiresAt.Sub(now), User: user, Created: created}, nil
+	return s.withAccessToken(Session{RefreshToken: raw, RefreshTokenTTL: token.ExpiresAt.Sub(now), User: user, Created: created})
 }
 
 // Refresh exchanges a refresh token for a new access token and a rotated refresh token.
@@ -168,8 +168,8 @@ func (s *Service) Refresh(ctx context.Context, raw string, client Client) (Sessi
 		if err := r.Tokens.Insert(ctx, next); err != nil {
 			return err
 		}
-		sess = Session{RefreshToken: nextRaw, RefreshTokenTTL: next.ExpiresAt.Sub(now), User: user}
-		return nil
+		sess, err = s.withAccessToken(Session{RefreshToken: nextRaw, RefreshTokenTTL: next.ExpiresAt.Sub(now), User: user})
+		return err
 	})
 	if err != nil {
 		return Session{}, err
@@ -177,7 +177,7 @@ func (s *Service) Refresh(ctx context.Context, raw string, client Client) (Sessi
 	if reused {
 		return Session{}, ErrRefreshReuse
 	}
-	return s.withAccessToken(sess)
+	return sess, nil
 }
 
 // Logout revokes the token's family. Unknown or empty tokens succeed.

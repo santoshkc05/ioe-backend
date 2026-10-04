@@ -284,3 +284,53 @@ func TestGetMe(t *testing.T) {
 		t.Fatalf("err = %v", err)
 	}
 }
+
+type failingIssuer struct {
+	err error
+}
+
+func (f failingIssuer) Issue(uuid.UUID, auth.Role) (string, time.Duration, error) {
+	return "", 0, f.err
+}
+
+func TestRefreshAccessTokenIssuingFailureRollsBackRotation(t *testing.T) {
+	f := newFixture()
+	s := f.signIn(t, "alice")
+	f.clock.Advance(time.Minute)
+
+	failingSvc := app.NewService(f.store, google, failingIssuer{err: errors.New("signing key unavailable")}, f.clock, nil)
+	if _, err := failingSvc.Refresh(ctx, s.RefreshToken, client); err == nil || !strings.Contains(err.Error(), "signing key unavailable") {
+		t.Fatalf("expected signing key error, got: %v", err)
+	}
+
+	// Verify rotation was rolled back: old token not marked used, no successor token inserted
+	st := f.store.snapshot()
+	if len(st.tokens) != 1 {
+		t.Fatalf("tokens count = %d, want 1 (successor not inserted)", len(st.tokens))
+	}
+	for _, tok := range st.tokens {
+		if tok.UsedAt != nil {
+			t.Fatalf("old refresh token was marked used despite rollback: %+v", tok)
+		}
+	}
+
+	// Old refresh token must still be usable with a working issuer (no reuse detection triggered)
+	r := f.refresh(t, s.RefreshToken)
+	if r.RefreshToken == s.RefreshToken || r.AccessToken == "" {
+		t.Fatalf("refresh after failed attempt did not rotate properly: %+v", r)
+	}
+}
+
+func TestSignInAccessTokenIssuingFailureRollsBackRegistration(t *testing.T) {
+	store := newMemStore()
+	clk := clock.NewFake(t0)
+	failingSvc := app.NewService(store, google, failingIssuer{err: errors.New("signing key unavailable")}, clk, nil)
+	if _, err := failingSvc.SignInWithGoogle(ctx, "alice", client); err == nil || !strings.Contains(err.Error(), "signing key unavailable") {
+		t.Fatalf("expected signing key error, got: %v", err)
+	}
+
+	st := store.snapshot()
+	if len(st.users) != 0 || len(st.tokens) != 0 || len(st.events) != 0 {
+		t.Fatalf("transaction not rolled back: %+v", st)
+	}
+}

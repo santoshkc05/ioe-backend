@@ -37,6 +37,7 @@ var (
 
 type fakeService struct {
 	signInErr  error
+	signInSess *app.Session
 	refreshErr error
 	gotRefresh string
 	gotLogout  string
@@ -47,6 +48,9 @@ func (f *fakeService) SignInWithGoogle(_ context.Context, _ string, c app.Client
 	f.gotClient = c
 	if f.signInErr != nil {
 		return app.Session{}, f.signInErr
+	}
+	if f.signInSess != nil {
+		return *f.signInSess, nil
 	}
 	return session, nil
 }
@@ -306,19 +310,44 @@ func TestAuthRoutesRateLimited(t *testing.T) {
 	}
 }
 
-func TestSignInRecordsMetric(t *testing.T) {
-	reader := sdkmetric.NewManualReader()
-	prev := otel.GetMeterProvider()
-	otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
-	t.Cleanup(func() { otel.SetMeterProvider(prev) })
+func TestAuthRouteMethodNotAllowed(t *testing.T) {
+	h := newHandler(t, &fakeService{}, true, 100)
+	resp := do(h, http.MethodGet, "/v1/auth/google", "", nil)
+	defer resp.Body.Close()
 
-	resp := do(newHandler(t, &fakeService{}, true, 100), http.MethodPost, "/v1/auth/google", `{"id_token":"x"}`, jsonHeader)
-	resp.Body.Close()
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("code = %d, want 405", resp.StatusCode)
+	}
+	if pType := problemType(t, resp); pType != "method_not_allowed" {
+		t.Fatalf("problem type = %q, want method_not_allowed", pType)
+	}
+	if allow := resp.Header.Get("Allow"); allow != "POST" {
+		t.Fatalf("allow = %q, want POST", allow)
+	}
+	if cc := resp.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("cache-control = %q, want no-store", cc)
+	}
+}
 
+func TestAuthRouteMethodNotAllowedRateLimited(t *testing.T) {
+	h := newHandler(t, &fakeService{}, true, 2)
+	var last *http.Response
+	for range 3 {
+		last = do(h, http.MethodGet, "/v1/auth/google", "", nil)
+		last.Body.Close()
+	}
+	if last.StatusCode != http.StatusTooManyRequests {
+		t.Fatalf("third request %d, want 429", last.StatusCode)
+	}
+}
+
+func collectSignInMetrics(t *testing.T, reader *sdkmetric.ManualReader) map[string]int64 {
+	t.Helper()
 	var rm metricdata.ResourceMetrics
 	if err := reader.Collect(context.Background(), &rm); err != nil {
 		t.Fatal(err)
 	}
+	counts := make(map[string]int64)
 	for _, sm := range rm.ScopeMetrics {
 		for _, m := range sm.Metrics {
 			if m.Name != "identity.signins" {
@@ -326,11 +355,104 @@ func TestSignInRecordsMetric(t *testing.T) {
 			}
 			sum := m.Data.(metricdata.Sum[int64])
 			for _, dp := range sum.DataPoints {
-				if v, _ := dp.Attributes.Value(attribute.Key("result")); v.AsString() == "created" && dp.Value == 1 {
-					return
+				if v, ok := dp.Attributes.Value(attribute.Key("result")); ok {
+					counts[v.AsString()] += dp.Value
 				}
 			}
 		}
 	}
-	t.Fatalf("identity.signins{result=created} not recorded: %+v", rm)
+	return counts
+}
+
+func TestSignInRecordsMetric(t *testing.T) {
+	cases := []struct {
+		name       string
+		service    *fakeService
+		body       string
+		headers    map[string]string
+		wantResult string
+	}{
+		{
+			name:       "created",
+			service:    &fakeService{},
+			body:       `{"id_token":"x"}`,
+			headers:    jsonHeader,
+			wantResult: "created",
+		},
+		{
+			name: "existing",
+			service: &fakeService{
+				signInErr: nil,
+			},
+			body:       `{"id_token":"x"}`,
+			headers:    jsonHeader,
+			wantResult: "existing",
+		},
+		{
+			name:       "rejected invalid token",
+			service:    &fakeService{signInErr: app.ErrInvalidToken},
+			body:       `{"id_token":"x"}`,
+			headers:    jsonHeader,
+			wantResult: "rejected",
+		},
+		{
+			name:       "rejected unverified email",
+			service:    &fakeService{signInErr: app.ErrEmailUnverified},
+			body:       `{"id_token":"x"}`,
+			headers:    jsonHeader,
+			wantResult: "rejected",
+		},
+		{
+			name:       "invalid bad json",
+			service:    &fakeService{},
+			body:       `{"not json`,
+			headers:    jsonHeader,
+			wantResult: "invalid",
+		},
+		{
+			name:       "invalid missing id_token",
+			service:    &fakeService{},
+			body:       `{"id_token":""}`,
+			headers:    jsonHeader,
+			wantResult: "invalid",
+		},
+		{
+			name:       "invalid unsupported media type",
+			service:    &fakeService{},
+			body:       `{"id_token":"x"}`,
+			headers:    map[string]string{"Content-Type": "text/plain"},
+			wantResult: "invalid",
+		},
+		{
+			name:       "error internal unexpected",
+			service:    &fakeService{signInErr: errors.New("db explosion")},
+			body:       `{"id_token":"x"}`,
+			headers:    jsonHeader,
+			wantResult: "error",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reader := sdkmetric.NewManualReader()
+			prev := otel.GetMeterProvider()
+			otel.SetMeterProvider(sdkmetric.NewMeterProvider(sdkmetric.WithReader(reader)))
+			defer otel.SetMeterProvider(prev)
+
+			svc := tc.service
+			if tc.wantResult == "existing" {
+				s := session
+				s.Created = false
+				svc = &fakeService{signInSess: &s}
+			}
+
+			resp := do(newHandler(t, svc, true, 100), http.MethodPost, "/v1/auth/google", tc.body, tc.headers)
+			resp.Body.Close()
+
+			counts := collectSignInMetrics(t, reader)
+			if got := counts[tc.wantResult]; got != 1 {
+				t.Fatalf("result=%q count=%d, want 1; all counts=%v", tc.wantResult, got, counts)
+			}
+		})
+	}
 }
