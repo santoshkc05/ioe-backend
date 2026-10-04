@@ -122,7 +122,7 @@ The platform `postgres` package provides `WithTx(ctx, func(pgx.Tx) error) error`
 
 - `User`: `ID` (UUIDv7), `GoogleSubject`, `Email`, `Name`, `AvatarURL`, `Role`, `CreatedAt`, `UpdatedAt`, `LastLoginAt`.
 - Users are keyed by Google `sub`. Email is updated from the verified token on each sign-in and is never used as an identity key.
-- `RefreshToken`: `ID`, `UserID`, `FamilyID`, `TokenHash`, `ExpiresAt`, `UsedAt`, `RevokedAt`, `CreatedAt`, `UserAgent`, `IP`.
+- `RefreshToken`: `ID`, `UserID`, `FamilyID`, `TokenHash`, `FamilyExpiresAt`, `ExpiresAt`, `UsedAt`, `RevokedAt`, `CreatedAt`, `UserAgent`, `IP`.
 - Events: `UserRegistered{UserID, Email, OccurredAt}`.
 
 ### Application ports (owned by `app`)
@@ -141,14 +141,16 @@ The platform `postgres` package provides `WithTx(ctx, func(pgx.Tx) error) error`
 1. Verify the ID token: signature against Google's JWKS, `aud` in the configured client IDs, `iss` equal to `accounts.google.com` or `https://accounts.google.com`, unexpired, `email_verified == true`.
 2. In one transaction: find the user by `sub`; create it with role `student` and publish `UserRegistered` if absent; otherwise update email, name, avatar, and `last_login_at`.
 3. If the email (case-insensitive) is in the root-admin allowlist, set role `root_admin`. Removing an email from the allowlist does not demote an existing root admin.
-4. Create a refresh token in a new family.
+4. Create a refresh token in a new family with `family_expires_at` 30 days from now and `expires_at` 7 days from now.
 5. Return the access token, its lifetime, the user, and the raw refresh token.
 
 **Refresh(rawRefreshToken)**
 
 1. Hash the token and look it up. Unknown, expired, or revoked: fail with `invalid_token`.
 2. If the token was already used: revoke its whole family and fail with `refresh_reuse_detected`.
-3. Otherwise, in one transaction: mark it used and insert a successor in the same family whose expiry is the lesser of the family's original expiry (30 days from sign-in) and 7 days from now.
+3. Otherwise, in one transaction (holding a row lock on the presented token): mark it used and insert a successor in the same family whose expiry is the lesser of `family_expires_at` and 7 days from now.
+
+The reuse case commits the family revocation before returning the error; the revocation must not be rolled back with the failed request.
 4. Load the user to pick up the current role, then issue a new access token.
 
 **Logout(rawRefreshToken)**
@@ -226,17 +228,20 @@ CREATE TABLE identity.refresh_tokens (
   user_id     uuid NOT NULL REFERENCES identity.users (id) ON DELETE CASCADE,
   family_id   uuid NOT NULL,
   token_hash  bytea NOT NULL UNIQUE,
+  family_expires_at timestamptz NOT NULL,
   expires_at  timestamptz NOT NULL,
   used_at     timestamptz,
   revoked_at  timestamptz,
   created_at  timestamptz NOT NULL,
   user_agent  text NOT NULL DEFAULT '',
-  ip          inet
+  ip          text NOT NULL DEFAULT ''
 );
 CREATE INDEX refresh_tokens_family_idx ON identity.refresh_tokens (family_id);
 ```
 
 Email is not unique: Google `sub` is the identity, and an email can move between Google accounts.
+
+`family_expires_at` records the absolute 30-day family deadline so each rotated token's expiry can be capped by it. A new family's first token expires at the lesser of the family deadline and 7 days from issue. `ip` is stored as text produced by the server's own client-IP resolver, which avoids `inet` codec handling in sqlc; it is informational only.
 
 The `platform` schema holds the Watermill outbox table, created by a goose migration rather than Watermill's auto-initialization so the application role needs no DDL rights at runtime.
 
@@ -256,7 +261,8 @@ Environment variables, parsed once at startup. Missing or invalid required value
 | `JWT_ISSUER`, `JWT_AUDIENCE` | yes | access-token claims |
 | `JWT_SIGNING_KEY` | yes | Ed25519 private key, PEM |
 | `JWT_SIGNING_KEY_ID` | yes | `kid` of the signing key |
-| `JWT_VERIFY_KEYS` | no | extra PEM public keys for rotation, as `kid=pem` entries |
+| `JWT_VERIFY_KEYS` | no | extra PEM public keys for rotation, as `kid=pem` entries separated by `;` |
+| `GOOGLE_JWKS_URL` | no (`https://www.googleapis.com/oauth2/v3/certs`) | Google signing keys; overridden only in tests |
 | `ALLOWED_ORIGINS` | yes | CORS and CSRF origin allowlist |
 | `BOOTSTRAP_ROOT_ADMIN_EMAILS` | no | comma-separated emails |
 | `COOKIE_SECURE` | no (`true`) | `false` only for local HTTP development |
@@ -265,13 +271,15 @@ Environment variables, parsed once at startup. Missing or invalid required value
 | `LOG_LEVEL` | no (`info`) | slog level |
 | `OTEL_*` | no | standard OpenTelemetry SDK variables |
 
+PEM values may use literal `\n` sequences in place of newlines so they fit in single-line environment files.
+
 When `COOKIE_SECURE=false` the cookie drops the `__Secure-` prefix and the `Secure` attribute, because browsers reject a `__Secure-` cookie without `Secure`.
 
 Migrations run through `cmd/api migrate up|down|status`, not automatically at server start.
 
 ### HTTP server
 
-Middleware order, outermost first: OpenTelemetry server instrumentation, request ID, panic recovery, access logging, security headers, CORS, body limit. Route-level middleware adds rate limiting (auth routes) and bearer auth (protected routes).
+Middleware order, outermost first: request ID, panic recovery, access logging, security headers, CORS, body limit, then the router. OpenTelemetry server instrumentation runs as router middleware because it needs the matched route template for span names; unmatched requests (404/405) still receive headers, CORS handling, and logging from the outer chain. Route-level middleware adds rate limiting (auth routes) and bearer auth (protected routes).
 
 - Server timeouts: read header 5 s, read 15 s, write 30 s, idle 60 s.
 - Graceful shutdown on SIGINT/SIGTERM: stop accepting connections, drain for up to 20 s, stop the forwarder, flush telemetry, close the pool.
