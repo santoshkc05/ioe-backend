@@ -7,18 +7,27 @@ import (
 	"maps"
 	"slices"
 	"sync"
+	"testing"
 	"time"
-
-	"github.com/google/uuid"
 
 	"github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
+func testIDs(t *testing.T) *id.Generator {
+	t.Helper()
+	g, err := id.NewGenerator(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
 type memState struct {
-	users  map[uuid.UUID]domain.User
-	tokens map[uuid.UUID]domain.RefreshToken
+	users  map[id.ID]domain.User
+	tokens map[id.ID]domain.RefreshToken
 	events []domain.Event
 }
 
@@ -34,7 +43,7 @@ type memStore struct {
 }
 
 func newMemStore() *memStore {
-	return &memStore{state: &memState{users: map[uuid.UUID]domain.User{}, tokens: map[uuid.UUID]domain.RefreshToken{}}}
+	return &memStore{state: &memState{users: map[id.ID]domain.User{}, tokens: map[id.ID]domain.RefreshToken{}}}
 }
 
 func (m *memStore) RunInTx(_ context.Context, fn func(app.Repos) error) error {
@@ -54,7 +63,7 @@ func (m *memStore) snapshot() *memState {
 	return m.state.clone()
 }
 
-func (m *memStore) setRole(id uuid.UUID, r auth.Role) {
+func (m *memStore) setRole(id id.ID, r auth.Role) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	u := m.state.users[id]
@@ -76,7 +85,7 @@ func (u *memUsers) FindByGoogleSubject(_ context.Context, sub string) (domain.Us
 	return domain.User{}, app.ErrNotFound
 }
 
-func (u *memUsers) FindByID(_ context.Context, id uuid.UUID) (domain.User, error) {
+func (u *memUsers) FindByID(_ context.Context, id id.ID) (domain.User, error) {
 	x, ok := u.s.users[id]
 	if !ok {
 		return domain.User{}, app.ErrNotFound
@@ -122,14 +131,14 @@ func (m memTokens) FindByHashForUpdate(_ context.Context, hash []byte) (domain.R
 	return domain.RefreshToken{}, app.ErrNotFound
 }
 
-func (m memTokens) MarkUsed(_ context.Context, id uuid.UUID, at time.Time) error {
+func (m memTokens) MarkUsed(_ context.Context, id id.ID, at time.Time) error {
 	t := m.s.tokens[id]
 	t.UsedAt = &at
 	m.s.tokens[id] = t
 	return nil
 }
 
-func (m memTokens) RevokeFamily(_ context.Context, family uuid.UUID, at time.Time) error {
+func (m memTokens) RevokeFamily(_ context.Context, family id.ID, at time.Time) error {
 	for id, t := range m.s.tokens {
 		if t.FamilyID == family && t.RevokedAt == nil {
 			revokedAt := at
@@ -159,6 +168,6 @@ func (f fakeGoogle) Verify(_ context.Context, token string) (domain.GoogleIdenti
 
 type fakeIssuer struct{}
 
-func (fakeIssuer) Issue(id uuid.UUID, r auth.Role) (string, time.Duration, error) {
+func (fakeIssuer) Issue(id id.ID, r auth.Role) (string, time.Duration, error) {
 	return "access:" + id.String() + ":" + string(r), 15 * time.Minute, nil
 }

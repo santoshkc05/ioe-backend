@@ -42,8 +42,8 @@ linters:
             - "!$test"
           allow:
             - $gostd
-            - github.com/google/uuid
             - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
         identity-app:
           list-mode: strict
           files:
@@ -51,10 +51,10 @@ linters:
             - "!$test"
           allow:
             - $gostd
-            - github.com/google/uuid
             - github.com/santoshkc2200/ioe-backend/internal/identity/domain
             - github.com/santoshkc2200/ioe-backend/internal/platform/auth
             - github.com/santoshkc2200/ioe-backend/internal/platform/clock
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
         identity-independent-of-notification:
           list-mode: lax
           files:

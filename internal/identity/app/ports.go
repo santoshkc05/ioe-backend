@@ -6,10 +6,9 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 var (
@@ -24,7 +23,7 @@ var (
 // would duplicate a Google subject.
 type UserRepository interface {
 	FindByGoogleSubject(ctx context.Context, subject string) (domain.User, error)
-	FindByID(ctx context.Context, id uuid.UUID) (domain.User, error)
+	FindByID(ctx context.Context, id id.ID) (domain.User, error)
 	Insert(ctx context.Context, u domain.User) error
 	Update(ctx context.Context, u domain.User) error
 }
@@ -34,8 +33,8 @@ type UserRepository interface {
 type RefreshTokenRepository interface {
 	Insert(ctx context.Context, t domain.RefreshToken) error
 	FindByHashForUpdate(ctx context.Context, hash []byte) (domain.RefreshToken, error)
-	MarkUsed(ctx context.Context, id uuid.UUID, at time.Time) error
-	RevokeFamily(ctx context.Context, familyID uuid.UUID, at time.Time) error
+	MarkUsed(ctx context.Context, id id.ID, at time.Time) error
+	RevokeFamily(ctx context.Context, familyID id.ID, at time.Time) error
 }
 
 // EventPublisher records events in the current transaction.
@@ -62,5 +61,5 @@ type GoogleVerifier interface {
 
 // AccessTokenIssuer creates access tokens and reports their lifetime.
 type AccessTokenIssuer interface {
-	Issue(userID uuid.UUID, role auth.Role) (string, time.Duration, error)
+	Issue(userID id.ID, role auth.Role) (string, time.Duration, error)
 }

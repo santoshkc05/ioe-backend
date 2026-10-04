@@ -5,16 +5,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 var t0 = time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
 
 func TestNewUserIsStudent(t *testing.T) {
-	id := uuid.New()
+	id := id.ID(1)
 	u := domain.NewUser(id, domain.GoogleIdentity{Subject: "s", Email: "a@example.com", Name: "A", Picture: "p"}, t0)
 	if u.ID != id || u.Role != auth.RoleStudent || u.GoogleSubject != "s" || u.AvatarURL != "p" {
 		t.Fatalf("%+v", u)
@@ -25,7 +24,7 @@ func TestNewUserIsStudent(t *testing.T) {
 }
 
 func TestRecordLoginUpdatesProfileOnly(t *testing.T) {
-	u := domain.NewUser(uuid.New(), domain.GoogleIdentity{Subject: "s", Email: "a@example.com"}, t0)
+	u := domain.NewUser(id.ID(1), domain.GoogleIdentity{Subject: "s", Email: "a@example.com"}, t0)
 	later := t0.Add(time.Hour)
 	u.RecordLogin(domain.GoogleIdentity{Subject: "s", Email: "b@example.com", Name: "B", Picture: "q"}, later)
 	if u.Email != "b@example.com" || u.Name != "B" || u.AvatarURL != "q" || u.Role != auth.RoleStudent {
@@ -37,7 +36,7 @@ func TestRecordLoginUpdatesProfileOnly(t *testing.T) {
 }
 
 func TestPromoteToRootAdmin(t *testing.T) {
-	u := domain.NewUser(uuid.New(), domain.GoogleIdentity{Subject: "s"}, t0)
+	u := domain.NewUser(id.ID(1), domain.GoogleIdentity{Subject: "s"}, t0)
 	u.PromoteToRootAdmin(t0.Add(time.Minute))
 	if u.Role != auth.RoleRootAdmin || !u.UpdatedAt.Equal(t0.Add(time.Minute)) {
 		t.Fatalf("%+v", u)
@@ -45,7 +44,7 @@ func TestPromoteToRootAdmin(t *testing.T) {
 }
 
 func TestRefreshFamilyLifetimes(t *testing.T) {
-	tok := domain.NewRefreshFamily(uuid.New(), uuid.New(), uuid.New(), []byte("h"), t0, "ua", "ip")
+	tok := domain.NewRefreshFamily(id.ID(1), id.ID(2), id.ID(3), []byte("h"), t0, "ua", "ip")
 	if !tok.ExpiresAt.Equal(t0.Add(domain.RefreshIdleLifetime)) {
 		t.Fatalf("ExpiresAt %v", tok.ExpiresAt)
 	}
@@ -54,7 +53,7 @@ func TestRefreshFamilyLifetimes(t *testing.T) {
 	}
 
 	nearEnd := tok.FamilyExpiresAt.Add(-24 * time.Hour)
-	next := tok.Successor(uuid.New(), []byte("h2"), nearEnd, "ua", "ip")
+	next := tok.Successor(id.ID(2), []byte("h2"), nearEnd, "ua", "ip")
 	if next.FamilyID != tok.FamilyID || next.UserID != tok.UserID {
 		t.Fatalf("successor left family: %+v", next)
 	}
@@ -64,7 +63,7 @@ func TestRefreshFamilyLifetimes(t *testing.T) {
 }
 
 func TestRefreshCheck(t *testing.T) {
-	base := domain.NewRefreshFamily(uuid.New(), uuid.New(), uuid.New(), []byte("h"), t0, "", "")
+	base := domain.NewRefreshFamily(id.ID(1), id.ID(2), id.ID(3), []byte("h"), t0, "", "")
 	used, revoked := base, base
 	at := t0.Add(time.Minute)
 	used.UsedAt = &at

@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/gorilla/mux"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
@@ -19,6 +18,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/httpserver"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/problem"
 )
 
@@ -37,7 +37,7 @@ type SessionService interface {
 	SignInWithGoogle(ctx context.Context, idToken string, client app.Client) (app.Session, error)
 	Refresh(ctx context.Context, raw string, client app.Client) (app.Session, error)
 	Logout(ctx context.Context, raw string) error
-	GetMe(ctx context.Context, userID uuid.UUID) (domain.User, error)
+	GetMe(ctx context.Context, userID id.ID) (domain.User, error)
 }
 
 // AccessTokenVerifier validates bearer tokens.

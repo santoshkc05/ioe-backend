@@ -4,9 +4,8 @@ import (
 	"context"
 	"testing"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 func TestParseRole(t *testing.T) {
@@ -27,7 +26,7 @@ func TestPrincipalContext(t *testing.T) {
 	if _, ok := auth.PrincipalFrom(context.Background()); ok {
 		t.Fatal("empty context reported a principal")
 	}
-	p := auth.Principal{UserID: uuid.New(), Role: auth.RoleInstructor}
+	p := auth.Principal{UserID: id.ID(42), Role: auth.RoleInstructor}
 	got, ok := auth.PrincipalFrom(auth.WithPrincipal(context.Background(), p))
 	if !ok || got != p {
 		t.Fatalf("PrincipalFrom = %+v, %v; want %+v", got, ok, p)

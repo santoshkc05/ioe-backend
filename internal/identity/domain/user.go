@@ -4,9 +4,8 @@ package domain
 import (
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 // GoogleIdentity is the verified content of a Google ID token.
@@ -20,7 +19,7 @@ type GoogleIdentity struct {
 
 // User is an application account, keyed by Google subject.
 type User struct {
-	ID            uuid.UUID
+	ID            id.ID
 	GoogleSubject string
 	Email         string
 	Name          string
@@ -32,7 +31,7 @@ type User struct {
 }
 
 // NewUser creates a student account from a verified Google identity.
-func NewUser(id uuid.UUID, g GoogleIdentity, now time.Time) User {
+func NewUser(id id.ID, g GoogleIdentity, now time.Time) User {
 	return User{
 		ID:            id,
 		GoogleSubject: g.Subject,

@@ -23,6 +23,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/config"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/httpserver"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/outbox"
 )
 
@@ -37,6 +38,11 @@ type application struct {
 func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool *pgxpool.Pool) (*application, error) {
 	clk := clock.System{}
 
+	ids, err := id.NewGenerator(cfg.SnowflakeNodeID)
+	if err != nil {
+		return nil, err
+	}
+
 	keys, err := jwt.ParseKeys(cfg.JWTSigningKeyPEM, cfg.JWTSigningKeyID, cfg.JWTVerifyKeys)
 	if err != nil {
 		return nil, err
@@ -46,7 +52,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err != nil {
 		return nil, err
 	}
-	identity := identityapp.NewService(identitypg.NewTxRunner(pool), googleVerifier, tokens, clk, cfg.BootstrapRootAdminEmails)
+	identity := identityapp.NewService(identitypg.NewTxRunner(pool), googleVerifier, tokens, ids, clk, cfg.BootstrapRootAdminEmails)
 
 	router, handler := httpserver.NewRouter(httpserver.Options{
 		Logger: logger, AllowedOrigins: cfg.AllowedOrigins, ServiceName: serviceName,

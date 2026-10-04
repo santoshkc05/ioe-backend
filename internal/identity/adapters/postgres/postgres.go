@@ -18,6 +18,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/outbox"
 )
 
@@ -44,14 +45,14 @@ func (u users) FindByGoogleSubject(ctx context.Context, sub string) (domain.User
 	return toUser(row, err)
 }
 
-func (u users) FindByID(ctx context.Context, id uuid.UUID) (domain.User, error) {
-	row, err := u.q.GetUserByID(ctx, id)
+func (u users) FindByID(ctx context.Context, id id.ID) (domain.User, error) {
+	row, err := u.q.GetUserByID(ctx, int64(id))
 	return toUser(row, err)
 }
 
 func (u users) Insert(ctx context.Context, x domain.User) error {
 	err := u.q.InsertUser(ctx, sqlcgen.InsertUserParams{
-		ID: x.ID, GoogleSub: x.GoogleSubject, Email: x.Email, Name: x.Name, AvatarURL: x.AvatarURL,
+		ID: int64(x.ID), GoogleSub: x.GoogleSubject, Email: x.Email, Name: x.Name, AvatarURL: x.AvatarURL,
 		Role: string(x.Role), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt, LastLoginAt: x.LastLoginAt,
 	})
 	var pgErr *pgconn.PgError
@@ -63,7 +64,7 @@ func (u users) Insert(ctx context.Context, x domain.User) error {
 
 func (u users) Update(ctx context.Context, x domain.User) error {
 	return u.q.UpdateUser(ctx, sqlcgen.UpdateUserParams{
-		ID: x.ID, Email: x.Email, Name: x.Name, AvatarURL: x.AvatarURL,
+		ID: int64(x.ID), Email: x.Email, Name: x.Name, AvatarURL: x.AvatarURL,
 		Role: string(x.Role), UpdatedAt: x.UpdatedAt, LastLoginAt: x.LastLoginAt,
 	})
 }
@@ -80,7 +81,7 @@ func toUser(row sqlcgen.IdentityUser, err error) (domain.User, error) {
 		return domain.User{}, err
 	}
 	return domain.User{
-		ID: row.ID, GoogleSubject: row.GoogleSub, Email: row.Email, Name: row.Name, AvatarURL: row.AvatarURL,
+		ID: id.ID(row.ID), GoogleSubject: row.GoogleSub, Email: row.Email, Name: row.Name, AvatarURL: row.AvatarURL,
 		Role: role, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt, LastLoginAt: row.LastLoginAt,
 	}, nil
 }
@@ -89,7 +90,7 @@ type tokens struct{ q *sqlcgen.Queries }
 
 func (t tokens) Insert(ctx context.Context, x domain.RefreshToken) error {
 	return t.q.InsertRefreshToken(ctx, sqlcgen.InsertRefreshTokenParams{
-		ID: x.ID, UserID: x.UserID, FamilyID: x.FamilyID, TokenHash: x.TokenHash,
+		ID: int64(x.ID), UserID: int64(x.UserID), FamilyID: int64(x.FamilyID), TokenHash: x.TokenHash,
 		FamilyExpiresAt: x.FamilyExpiresAt, ExpiresAt: x.ExpiresAt, CreatedAt: x.CreatedAt,
 		UserAgent: x.UserAgent, IP: x.IP,
 	})
@@ -104,19 +105,19 @@ func (t tokens) FindByHashForUpdate(ctx context.Context, hash []byte) (domain.Re
 		return domain.RefreshToken{}, err
 	}
 	return domain.RefreshToken{
-		ID: row.ID, UserID: row.UserID, FamilyID: row.FamilyID, TokenHash: row.TokenHash,
+		ID: id.ID(row.ID), UserID: id.ID(row.UserID), FamilyID: id.ID(row.FamilyID), TokenHash: row.TokenHash,
 		FamilyExpiresAt: row.FamilyExpiresAt, ExpiresAt: row.ExpiresAt,
 		UsedAt: row.UsedAt, RevokedAt: row.RevokedAt, CreatedAt: row.CreatedAt,
 		UserAgent: row.UserAgent, IP: row.IP,
 	}, nil
 }
 
-func (t tokens) MarkUsed(ctx context.Context, id uuid.UUID, at time.Time) error {
-	return t.q.MarkRefreshTokenUsed(ctx, sqlcgen.MarkRefreshTokenUsedParams{ID: id, UsedAt: &at})
+func (t tokens) MarkUsed(ctx context.Context, id id.ID, at time.Time) error {
+	return t.q.MarkRefreshTokenUsed(ctx, sqlcgen.MarkRefreshTokenUsedParams{ID: int64(id), UsedAt: &at})
 }
 
-func (t tokens) RevokeFamily(ctx context.Context, familyID uuid.UUID, at time.Time) error {
-	return t.q.RevokeRefreshFamily(ctx, sqlcgen.RevokeRefreshFamilyParams{FamilyID: familyID, RevokedAt: &at})
+func (t tokens) RevokeFamily(ctx context.Context, familyID id.ID, at time.Time) error {
+	return t.q.RevokeRefreshFamily(ctx, sqlcgen.RevokeRefreshFamilyParams{FamilyID: int64(familyID), RevokedAt: &at})
 }
 
 type events struct{ tx pgx.Tx }

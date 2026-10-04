@@ -9,20 +9,32 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/postgres"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/postgres/pgtest"
 )
 
 var now = time.Now().UTC().Truncate(time.Microsecond)
 
+func testIDs(t *testing.T) *id.Generator {
+	t.Helper()
+	g, err := id.NewGenerator(0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
 func newUser(sub string) domain.User {
-	return domain.NewUser(uuid.Must(uuid.NewV7()), domain.GoogleIdentity{Subject: sub, Email: "Mixed@Example.com", Name: "N"}, now)
+	gen, err := id.NewGenerator(0)
+	if err != nil {
+		panic(err)
+	}
+	return domain.NewUser(gen.New(), domain.GoogleIdentity{Subject: sub, Email: "Mixed@Example.com", Name: "N"}, now)
 }
 
 func TestUserRepository(t *testing.T) {
@@ -58,7 +70,7 @@ func TestUserRepository(t *testing.T) {
 		if byID.Email != "new@example.com" || byID.Role != auth.RoleRootAdmin {
 			t.Errorf("after update %+v", byID)
 		}
-		if _, err := r.Users.FindByID(ctx, uuid.New()); !errors.Is(err, app.ErrNotFound) {
+		if _, err := r.Users.FindByID(ctx, testIDs(t).New()); !errors.Is(err, app.ErrNotFound) {
 			t.Errorf("missing id err = %v", err)
 		}
 		if _, err := r.Users.FindByGoogleSubject(ctx, "nope"); !errors.Is(err, app.ErrNotFound) {
@@ -74,11 +86,12 @@ func TestUserRepository(t *testing.T) {
 func TestRefreshTokenRepository(t *testing.T) {
 	ctx := context.Background()
 	runner := postgres.NewTxRunner(pgtest.New(t))
+	gen := testIDs(t)
 	u := newUser("sub-2")
-	famA, famB := uuid.New(), uuid.New()
-	a1 := domain.NewRefreshFamily(uuid.New(), famA, u.ID, []byte("hash-a1-0123456789012345678901"), now, "ua", "203.0.113.1")
-	a2 := a1.Successor(uuid.New(), []byte("hash-a2-0123456789012345678901"), now, "ua", "203.0.113.1")
-	b1 := domain.NewRefreshFamily(uuid.New(), famB, u.ID, []byte("hash-b1-0123456789012345678901"), now, "ua", "")
+	famA, famB := gen.New(), gen.New()
+	a1 := domain.NewRefreshFamily(gen.New(), famA, u.ID, []byte("hash-a1-0123456789012345678901"), now, "ua", "203.0.113.1")
+	a2 := a1.Successor(gen.New(), []byte("hash-a2-0123456789012345678901"), now, "ua", "203.0.113.1")
+	b1 := domain.NewRefreshFamily(gen.New(), famB, u.ID, []byte("hash-b1-0123456789012345678901"), now, "ua", "")
 
 	err := runner.RunInTx(ctx, func(r app.Repos) error {
 		if err := r.Users.Insert(ctx, u); err != nil {
@@ -168,13 +181,14 @@ func (stubGoogle) Verify(context.Context, string) (domain.GoogleIdentity, error)
 
 type stubIssuer struct{}
 
-func (stubIssuer) Issue(uuid.UUID, auth.Role) (string, time.Duration, error) {
+func (stubIssuer) Issue(id.ID, auth.Role) (string, time.Duration, error) {
 	return "access", time.Minute, nil
 }
 
 func TestConcurrentRefreshOneWins(t *testing.T) {
 	ctx := context.Background()
-	svc := app.NewService(postgres.NewTxRunner(pgtest.New(t)), stubGoogle{}, stubIssuer{}, clock.System{}, nil)
+	gen := testIDs(t)
+	svc := app.NewService(postgres.NewTxRunner(pgtest.New(t)), stubGoogle{}, stubIssuer{}, gen, clock.System{}, nil)
 	s, err := svc.SignInWithGoogle(ctx, "x", app.Client{})
 	if err != nil {
 		t.Fatal(err)

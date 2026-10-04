@@ -7,14 +7,13 @@ package sqlcgen
 import (
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type IdentityRefreshToken struct {
-	ID              uuid.UUID
-	UserID          uuid.UUID
-	FamilyID        uuid.UUID
+	ID              int64
+	UserID          int64
+	FamilyID        int64
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
@@ -26,7 +25,7 @@ type IdentityRefreshToken struct {
 }
 
 type IdentityUser struct {
-	ID          uuid.UUID
+	ID          int64
 	GoogleSub   string
 	Email       string
 	Name        string

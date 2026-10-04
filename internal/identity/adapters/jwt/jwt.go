@@ -12,6 +12,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 // TTL is the access-token lifetime.
@@ -35,7 +36,7 @@ func New(keys Keys, issuer, audience string, c clock.Clock) *Tokens {
 }
 
 // Issue signs an access token for the user.
-func (t *Tokens) Issue(userID uuid.UUID, role auth.Role) (string, time.Duration, error) {
+func (t *Tokens) Issue(userID id.ID, role auth.Role) (string, time.Duration, error) {
 	now := t.clock.Now()
 	tok := gojwt.NewWithClaims(gojwt.SigningMethodEdDSA, claims{
 		Role: string(role),
@@ -70,7 +71,7 @@ func (t *Tokens) Verify(raw string) (auth.Principal, error) {
 	if err != nil {
 		return auth.Principal{}, fmt.Errorf("%w: %w", app.ErrInvalidToken, err)
 	}
-	id, err := uuid.Parse(c.Subject)
+	id, err := id.Parse(c.Subject)
 	if err != nil {
 		return auth.Principal{}, fmt.Errorf("%w: subject: %w", app.ErrInvalidToken, err)
 	}

@@ -8,12 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 var (
@@ -34,9 +33,10 @@ type fixture struct {
 	svc   *app.Service
 }
 
-func newFixture(rootAdmins ...string) *fixture {
+func newFixture(t *testing.T, rootAdmins ...string) *fixture {
+	t.Helper()
 	f := &fixture{store: newMemStore(), clock: clock.NewFake(t0)}
-	f.svc = app.NewService(f.store, google, fakeIssuer{}, f.clock, rootAdmins)
+	f.svc = app.NewService(f.store, google, fakeIssuer{}, testIDs(t), f.clock, rootAdmins)
 	return f
 }
 
@@ -59,7 +59,7 @@ func (f *fixture) refresh(t *testing.T, raw string) app.Session {
 }
 
 func TestSignInCreatesStudentAndPublishesEvent(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	if !s.Created || s.User.Role != auth.RoleStudent || s.User.Email != "alice@example.com" {
 		t.Fatalf("%+v", s)
@@ -91,7 +91,7 @@ func TestSignInCreatesStudentAndPublishesEvent(t *testing.T) {
 }
 
 func TestSignInExistingUserMatchedBySubject(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	first := f.signIn(t, "alice")
 	f.clock.Advance(time.Hour)
 	second := f.signIn(t, "alice-new-email")
@@ -108,7 +108,7 @@ func TestSignInExistingUserMatchedBySubject(t *testing.T) {
 }
 
 func TestSignInBootstrapsRootAdminCaseInsensitively(t *testing.T) {
-	f := newFixture(" admin@example.com ")
+	f := newFixture(t, " admin@example.com ")
 	s := f.signIn(t, "admin")
 	if s.User.Role != auth.RoleRootAdmin || !strings.HasSuffix(s.AccessToken, ":root_admin") {
 		t.Fatalf("%+v %q", s.User, s.AccessToken)
@@ -116,11 +116,11 @@ func TestSignInBootstrapsRootAdminCaseInsensitively(t *testing.T) {
 }
 
 func TestExistingUserPromotedWhenAddedToAllowlist(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	if s := f.signIn(t, "admin"); s.User.Role != auth.RoleStudent {
 		t.Fatalf("role %s", s.User.Role)
 	}
-	svc := app.NewService(f.store, google, fakeIssuer{}, f.clock, []string{"admin@example.com"})
+	svc := app.NewService(f.store, google, fakeIssuer{}, testIDs(t), f.clock, []string{"admin@example.com"})
 	s, err := svc.SignInWithGoogle(ctx, "admin", client)
 	if err != nil || s.User.Role != auth.RoleRootAdmin {
 		t.Fatalf("%+v %v", s.User, err)
@@ -128,9 +128,9 @@ func TestExistingUserPromotedWhenAddedToAllowlist(t *testing.T) {
 }
 
 func TestRootAdminKeptWhenRemovedFromAllowlist(t *testing.T) {
-	f := newFixture("admin@example.com")
+	f := newFixture(t, "admin@example.com")
 	f.signIn(t, "admin")
-	svc := app.NewService(f.store, google, fakeIssuer{}, f.clock, nil)
+	svc := app.NewService(f.store, google, fakeIssuer{}, testIDs(t), f.clock, nil)
 	s, err := svc.SignInWithGoogle(ctx, "admin", client)
 	if err != nil || s.User.Role != auth.RoleRootAdmin {
 		t.Fatalf("%+v %v", s.User, err)
@@ -138,7 +138,7 @@ func TestRootAdminKeptWhenRemovedFromAllowlist(t *testing.T) {
 }
 
 func TestSignInRejectsUnverifiedEmail(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	_, err := f.svc.SignInWithGoogle(ctx, "unverified", client)
 	if !errors.Is(err, app.ErrEmailUnverified) {
 		t.Fatalf("err = %v", err)
@@ -149,14 +149,14 @@ func TestSignInRejectsUnverifiedEmail(t *testing.T) {
 }
 
 func TestSignInRejectsInvalidToken(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	if _, err := f.svc.SignInWithGoogle(ctx, "forged", client); !errors.Is(err, app.ErrInvalidToken) {
 		t.Fatalf("err = %v", err)
 	}
 }
 
 func TestSignInRetriesOnceOnConflict(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	f.store.conflictsLeft = 1
 	s := f.signIn(t, "alice")
 	if !s.Created || len(f.store.snapshot().users) != 1 {
@@ -165,7 +165,7 @@ func TestSignInRetriesOnceOnConflict(t *testing.T) {
 }
 
 func TestSignInGivesUpAfterSecondConflict(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	f.store.conflictsLeft = 2
 	if _, err := f.svc.SignInWithGoogle(ctx, "alice", client); !errors.Is(err, app.ErrConflict) {
 		t.Fatalf("err = %v", err)
@@ -173,7 +173,7 @@ func TestSignInGivesUpAfterSecondConflict(t *testing.T) {
 }
 
 func TestSignInTruncatesUserAgent(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	if _, err := f.svc.SignInWithGoogle(ctx, "alice", app.Client{UserAgent: strings.Repeat("x", 1000)}); err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +185,7 @@ func TestSignInTruncatesUserAgent(t *testing.T) {
 }
 
 func TestRefreshRotates(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	f.clock.Advance(time.Minute)
 	r := f.refresh(t, s.RefreshToken)
@@ -196,7 +196,7 @@ func TestRefreshRotates(t *testing.T) {
 }
 
 func TestRefreshUsesCurrentRole(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	f.store.setRole(s.User.ID, auth.RoleInstructor)
 	if r := f.refresh(t, s.RefreshToken); !strings.HasSuffix(r.AccessToken, ":instructor") {
@@ -205,7 +205,7 @@ func TestRefreshUsesCurrentRole(t *testing.T) {
 }
 
 func TestRefreshReuseRevokesFamily(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	r1 := f.refresh(t, s.RefreshToken)
 
@@ -218,7 +218,7 @@ func TestRefreshReuseRevokesFamily(t *testing.T) {
 }
 
 func TestRefreshIdleExpiry(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	f.clock.Advance(domain.RefreshIdleLifetime)
 	if _, err := f.svc.Refresh(ctx, s.RefreshToken, client); !errors.Is(err, app.ErrInvalidToken) {
@@ -227,7 +227,7 @@ func TestRefreshIdleExpiry(t *testing.T) {
 }
 
 func TestRefreshFamilyAbsoluteExpiry(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	tok := f.signIn(t, "alice").RefreshToken
 	var last app.Session
 	for range 4 {
@@ -245,7 +245,7 @@ func TestRefreshFamilyAbsoluteExpiry(t *testing.T) {
 }
 
 func TestRefreshUnknownOrEmpty(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	for _, raw := range []string{"", "nope"} {
 		if _, err := f.svc.Refresh(ctx, raw, client); !errors.Is(err, app.ErrInvalidToken) {
 			t.Fatalf("%q: err = %v", raw, err)
@@ -254,7 +254,7 @@ func TestRefreshUnknownOrEmpty(t *testing.T) {
 }
 
 func TestLogoutRevokesFamily(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	if err := f.svc.Logout(ctx, s.RefreshToken); err != nil {
 		t.Fatal(err)
@@ -265,7 +265,7 @@ func TestLogoutRevokesFamily(t *testing.T) {
 }
 
 func TestLogoutUnknownTokenSucceeds(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	for _, raw := range []string{"", "nope"} {
 		if err := f.svc.Logout(ctx, raw); err != nil {
 			t.Fatalf("%q: %v", raw, err)
@@ -274,13 +274,13 @@ func TestLogoutUnknownTokenSucceeds(t *testing.T) {
 }
 
 func TestGetMe(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	u, err := f.svc.GetMe(ctx, s.User.ID)
 	if err != nil || u.ID != s.User.ID {
 		t.Fatalf("%+v %v", u, err)
 	}
-	if _, err := f.svc.GetMe(ctx, uuid.New()); !errors.Is(err, app.ErrNotFound) {
+	if _, err := f.svc.GetMe(ctx, id.ID(999)); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -289,16 +289,16 @@ type failingIssuer struct {
 	err error
 }
 
-func (f failingIssuer) Issue(uuid.UUID, auth.Role) (string, time.Duration, error) {
+func (f failingIssuer) Issue(id.ID, auth.Role) (string, time.Duration, error) {
 	return "", 0, f.err
 }
 
 func TestRefreshAccessTokenIssuingFailureRollsBackRotation(t *testing.T) {
-	f := newFixture()
+	f := newFixture(t)
 	s := f.signIn(t, "alice")
 	f.clock.Advance(time.Minute)
 
-	failingSvc := app.NewService(f.store, google, failingIssuer{err: errors.New("signing key unavailable")}, f.clock, nil)
+	failingSvc := app.NewService(f.store, google, failingIssuer{err: errors.New("signing key unavailable")}, testIDs(t), f.clock, nil)
 	if _, err := failingSvc.Refresh(ctx, s.RefreshToken, client); err == nil || !strings.Contains(err.Error(), "signing key unavailable") {
 		t.Fatalf("expected signing key error, got: %v", err)
 	}
@@ -324,7 +324,7 @@ func TestRefreshAccessTokenIssuingFailureRollsBackRotation(t *testing.T) {
 func TestSignInAccessTokenIssuingFailureRollsBackRegistration(t *testing.T) {
 	store := newMemStore()
 	clk := clock.NewFake(t0)
-	failingSvc := app.NewService(store, google, failingIssuer{err: errors.New("signing key unavailable")}, clk, nil)
+	failingSvc := app.NewService(store, google, failingIssuer{err: errors.New("signing key unavailable")}, testIDs(t), clk, nil)
 	if _, err := failingSvc.SignInWithGoogle(ctx, "alice", client); err == nil || !strings.Contains(err.Error(), "signing key unavailable") {
 		t.Fatalf("expected signing key error, got: %v", err)
 	}

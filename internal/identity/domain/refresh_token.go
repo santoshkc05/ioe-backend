@@ -4,7 +4,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 const (
@@ -22,9 +22,9 @@ var (
 
 // RefreshToken is one link in a rotating refresh-token family. Only the hash is stored.
 type RefreshToken struct {
-	ID              uuid.UUID
-	UserID          uuid.UUID
-	FamilyID        uuid.UUID
+	ID              id.ID
+	UserID          id.ID
+	FamilyID        id.ID
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
@@ -36,7 +36,7 @@ type RefreshToken struct {
 }
 
 // NewRefreshFamily starts a family at sign-in.
-func NewRefreshFamily(id, familyID, userID uuid.UUID, hash []byte, now time.Time, userAgent, ip string) RefreshToken {
+func NewRefreshFamily(id, familyID, userID id.ID, hash []byte, now time.Time, userAgent, ip string) RefreshToken {
 	familyExpiresAt := now.Add(RefreshAbsoluteLifetime)
 	return RefreshToken{
 		ID:              id,
@@ -67,7 +67,7 @@ func (t RefreshToken) Check(now time.Time) error {
 }
 
 // Successor returns the rotated token in the same family.
-func (t RefreshToken) Successor(id uuid.UUID, hash []byte, now time.Time, userAgent, ip string) RefreshToken {
+func (t RefreshToken) Successor(id id.ID, hash []byte, now time.Time, userAgent, ip string) RefreshToken {
 	return RefreshToken{
 		ID:              id,
 		UserID:          t.UserID,

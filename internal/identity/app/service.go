@@ -6,10 +6,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
-
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 const maxUserAgentLen = 512
@@ -35,18 +34,19 @@ type Service struct {
 	tx         TxRunner
 	google     GoogleVerifier
 	tokens     AccessTokenIssuer
+	ids        *id.Generator
 	clock      clock.Clock
 	rootAdmins map[string]struct{}
 }
 
-func NewService(tx TxRunner, google GoogleVerifier, tokens AccessTokenIssuer, c clock.Clock, rootAdminEmails []string) *Service {
+func NewService(tx TxRunner, google GoogleVerifier, tokens AccessTokenIssuer, ids *id.Generator, c clock.Clock, rootAdminEmails []string) *Service {
 	admins := make(map[string]struct{}, len(rootAdminEmails))
 	for _, e := range rootAdminEmails {
 		if e = normalizeEmail(e); e != "" {
 			admins[e] = struct{}{}
 		}
 	}
-	return &Service{tx: tx, google: google, tokens: tokens, clock: c, rootAdmins: admins}
+	return &Service{tx: tx, google: google, tokens: tokens, ids: ids, clock: c, rootAdmins: admins}
 }
 
 // SignInWithGoogle verifies a Google ID token, creates or updates the user, and starts a session.
@@ -81,11 +81,7 @@ func (s *Service) signIn(ctx context.Context, r Repos, identity domain.GoogleIde
 	created := false
 	switch {
 	case errors.Is(err, ErrNotFound):
-		id, err := uuid.NewV7()
-		if err != nil {
-			return Session{}, err
-		}
-		user = domain.NewUser(id, identity, now)
+		user = domain.NewUser(s.ids.New(), identity, now)
 		s.applyBootstrap(&user, now)
 		if err := r.Users.Insert(ctx, user); err != nil {
 			return Session{}, err
@@ -108,12 +104,8 @@ func (s *Service) signIn(ctx context.Context, r Repos, identity domain.GoogleIde
 	if err != nil {
 		return Session{}, err
 	}
-	id, familyID, err := newIDs()
-	if err != nil {
-		return Session{}, err
-	}
 	ua, ip := clientMeta(client)
-	token := domain.NewRefreshFamily(id, familyID, user.ID, hash, now, ua, ip)
+	token := domain.NewRefreshFamily(s.ids.New(), s.ids.New(), user.ID, hash, now, ua, ip)
 	if err := r.Tokens.Insert(ctx, token); err != nil {
 		return Session{}, err
 	}
@@ -159,12 +151,8 @@ func (s *Service) Refresh(ctx context.Context, raw string, client Client) (Sessi
 		if err != nil {
 			return err
 		}
-		id, err := uuid.NewV7()
-		if err != nil {
-			return err
-		}
 		ua, ip := clientMeta(client)
-		next := current.Successor(id, nextHash, now, ua, ip)
+		next := current.Successor(s.ids.New(), nextHash, now, ua, ip)
 		if err := r.Tokens.Insert(ctx, next); err != nil {
 			return err
 		}
@@ -198,7 +186,7 @@ func (s *Service) Logout(ctx context.Context, raw string) error {
 }
 
 // GetMe returns the user's current record.
-func (s *Service) GetMe(ctx context.Context, userID uuid.UUID) (domain.User, error) {
+func (s *Service) GetMe(ctx context.Context, userID id.ID) (domain.User, error) {
 	var user domain.User
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
@@ -231,12 +219,4 @@ func clientMeta(c Client) (userAgent, ip string) {
 		userAgent = userAgent[:maxUserAgentLen]
 	}
 	return userAgent, c.IP
-}
-
-func newIDs() (id, familyID uuid.UUID, err error) {
-	if id, err = uuid.NewV7(); err != nil {
-		return
-	}
-	familyID, err = uuid.NewV7()
-	return
 }

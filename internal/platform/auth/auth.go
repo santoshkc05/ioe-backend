@@ -5,7 +5,7 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/google/uuid"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 // Role is a user's single application role.
@@ -29,7 +29,7 @@ func ParseRole(s string) (Role, error) {
 
 // Principal is the authenticated caller of a request.
 type Principal struct {
-	UserID uuid.UUID
+	UserID id.ID
 	Role   Role
 }
 

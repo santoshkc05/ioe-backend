@@ -3,7 +3,7 @@ package domain
 import (
 	"time"
 
-	"github.com/google/uuid"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 // Event is a domain event published through the outbox.
@@ -13,7 +13,7 @@ type Event interface {
 
 // UserRegistered is emitted once, when a Google account first signs in.
 type UserRegistered struct {
-	UserID     uuid.UUID `json:"user_id"`
+	UserID     id.ID     `json:"user_id"`
 	Email      string    `json:"email"`
 	Name       string    `json:"name"`
 	OccurredAt time.Time `json:"occurred_at"`

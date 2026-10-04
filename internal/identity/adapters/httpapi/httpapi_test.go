@@ -12,7 +12,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/google/uuid"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -23,12 +22,13 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/identity/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/httpserver"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 const origin = "https://app.example.com"
 
 var (
-	user = domain.User{ID: uuid.MustParse("01920000-0000-7000-8000-000000000001"), Email: "a@example.com",
+	user = domain.User{ID: id.ID(1840396745219883008), Email: "a@example.com",
 		Name: "A", AvatarURL: "https://img/a", Role: auth.RoleStudent}
 	session = app.Session{AccessToken: "acc", AccessTokenTTL: 15 * time.Minute, RefreshToken: "ref-1",
 		RefreshTokenTTL: 7 * 24 * time.Hour, User: user, Created: true}
@@ -70,8 +70,8 @@ func (f *fakeService) Logout(_ context.Context, raw string) error {
 	return nil
 }
 
-func (f *fakeService) GetMe(_ context.Context, id uuid.UUID) (domain.User, error) {
-	if id != user.ID {
+func (f *fakeService) GetMe(_ context.Context, uid id.ID) (domain.User, error) {
+	if uid != user.ID {
 		return domain.User{}, app.ErrNotFound
 	}
 	return user, nil

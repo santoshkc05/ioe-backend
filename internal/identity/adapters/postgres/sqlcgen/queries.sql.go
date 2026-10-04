@@ -8,8 +8,6 @@ package sqlcgen
 import (
 	"context"
 	"time"
-
-	"github.com/google/uuid"
 )
 
 const getRefreshTokenByHashForUpdate = `-- name: GetRefreshTokenByHashForUpdate :one
@@ -60,7 +58,7 @@ const getUserByID = `-- name: GetUserByID :one
 SELECT id, google_sub, email, name, avatar_url, role, created_at, updated_at, last_login_at FROM identity.users WHERE id = $1
 `
 
-func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (IdentityUser, error) {
+func (q *Queries) GetUserByID(ctx context.Context, id int64) (IdentityUser, error) {
 	row := q.db.QueryRow(ctx, getUserByID, id)
 	var i IdentityUser
 	err := row.Scan(
@@ -83,9 +81,9 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertRefreshTokenParams struct {
-	ID              uuid.UUID
-	UserID          uuid.UUID
-	FamilyID        uuid.UUID
+	ID              int64
+	UserID          int64
+	FamilyID        int64
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
@@ -115,7 +113,7 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
 
 type InsertUserParams struct {
-	ID          uuid.UUID
+	ID          int64
 	GoogleSub   string
 	Email       string
 	Name        string
@@ -146,7 +144,7 @@ UPDATE identity.refresh_tokens SET used_at = $2 WHERE id = $1
 `
 
 type MarkRefreshTokenUsedParams struct {
-	ID     uuid.UUID
+	ID     int64
 	UsedAt *time.Time
 }
 
@@ -160,7 +158,7 @@ UPDATE identity.refresh_tokens SET revoked_at = $2 WHERE family_id = $1 AND revo
 `
 
 type RevokeRefreshFamilyParams struct {
-	FamilyID  uuid.UUID
+	FamilyID  int64
 	RevokedAt *time.Time
 }
 
@@ -176,7 +174,7 @@ WHERE id = $1
 `
 
 type UpdateUserParams struct {
-	ID          uuid.UUID
+	ID          int64
 	Email       string
 	Name        string
 	AvatarURL   string

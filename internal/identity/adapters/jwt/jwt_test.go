@@ -12,12 +12,12 @@ import (
 	"time"
 
 	gojwt "github.com/golang-jwt/jwt/v5"
-	"github.com/google/uuid"
 
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/jwt"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 const (
@@ -56,8 +56,8 @@ func newTokens(t *testing.T, c clock.Clock) (*jwt.Tokens, jwt.Keys) {
 
 func TestIssueVerifyRoundTrip(t *testing.T) {
 	tokens, _ := newTokens(t, clock.System{})
-	id := uuid.New()
-	tok, ttl, err := tokens.Issue(id, auth.RoleInstructor)
+	uid := id.ID(1840396745219883008)
+	tok, ttl, err := tokens.Issue(uid, auth.RoleInstructor)
 	if err != nil || ttl != 15*time.Minute {
 		t.Fatalf("ttl=%v err=%v", ttl, err)
 	}
@@ -66,15 +66,66 @@ func TestIssueVerifyRoundTrip(t *testing.T) {
 		t.Fatalf("header %s", header)
 	}
 	p, err := tokens.Verify(tok)
-	if err != nil || p != (auth.Principal{UserID: id, Role: auth.RoleInstructor}) {
+	if err != nil || p != (auth.Principal{UserID: uid, Role: auth.RoleInstructor}) {
 		t.Fatalf("%+v %v", p, err)
 	}
+}
+
+func TestVerifyRejectsNonSnowflakeSubject(t *testing.T) {
+	tokens, keys := newTokens(t, clock.System{})
+	raw := signWithSubject(t, keys, "01920000-0000-7000-8000-000000000001")
+	if _, err := tokens.Verify(raw); !errors.Is(err, app.ErrInvalidToken) {
+		t.Fatalf("err = %v, want ErrInvalidToken", err)
+	}
+}
+
+func TestIssueUsesDecimalSubject(t *testing.T) {
+	tokens, keys := newTokens(t, clock.System{})
+	raw, _, err := tokens.Issue(id.ID(1840396745219883008), auth.RoleInstructor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The subject claim must be the decimal string, not a UUID.
+	parser := gojwt.NewParser()
+	var mc gojwt.MapClaims
+	if _, _, err := parser.ParseUnverified(raw, &mc); err != nil {
+		t.Fatal(err)
+	}
+	if mc["sub"] != "1840396745219883008" {
+		t.Fatalf("sub = %v", mc["sub"])
+	}
+	_ = keys
+	p, err := tokens.Verify(raw)
+	if err != nil || p.UserID != 1840396745219883008 || p.Role != auth.RoleInstructor {
+		t.Fatalf("principal = %+v, %v", p, err)
+	}
+}
+
+func signWithSubject(t *testing.T, keys jwt.Keys, sub string) string {
+	t.Helper()
+	now := clock.System{}.Now()
+	claims := gojwt.MapClaims{
+		"iss":  issuer,
+		"aud":  audience,
+		"sub":  sub,
+		"role": "student",
+		"iat":  now.Unix(),
+		"exp":  now.Add(time.Minute).Unix(),
+		"jti":  "j",
+	}
+	signed := gojwt.NewWithClaims(gojwt.SigningMethodEdDSA, claims)
+	signed.Header["kid"] = "k1"
+	s, err := signed.SignedString(keys.Signing)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
 }
 
 func TestVerifyRejects(t *testing.T) {
 	c := clock.NewFake(time.Now().UTC())
 	tokens, keys := newTokens(t, c)
-	id := uuid.New()
+	uid := id.ID(1840396745219883008)
 	sign := func(m gojwt.SigningMethod, key any, kid string, claims gojwt.MapClaims) string {
 		tok := gojwt.NewWithClaims(m, claims)
 		tok.Header["kid"] = kid
@@ -85,7 +136,7 @@ func TestVerifyRejects(t *testing.T) {
 		return s
 	}
 	valid := func() gojwt.MapClaims {
-		return gojwt.MapClaims{"iss": issuer, "aud": audience, "sub": id.String(), "role": "student",
+		return gojwt.MapClaims{"iss": issuer, "aud": audience, "sub": uid.String(), "role": "student",
 			"iat": c.Now().Unix(), "exp": c.Now().Add(time.Minute).Unix(), "jti": "j"}
 	}
 	otherPriv, _, _ := genKey(t)
@@ -146,7 +197,7 @@ func TestVerifyRejects(t *testing.T) {
 	}
 
 	t.Run("expired", func(t *testing.T) {
-		tok, _, err := tokens.Issue(id, auth.RoleStudent)
+		tok, _, err := tokens.Issue(uid, auth.RoleStudent)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -164,7 +215,7 @@ func TestVerifyAcceptsRotatedKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tok, _, err := jwt.New(oldKeys, issuer, audience, clock.System{}).Issue(uuid.New(), auth.RoleStudent)
+	tok, _, err := jwt.New(oldKeys, issuer, audience, clock.System{}).Issue(id.ID(1840396745219883008), auth.RoleStudent)
 	if err != nil {
 		t.Fatal(err)
 	}

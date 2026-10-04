@@ -3,7 +3,7 @@ CREATE EXTENSION IF NOT EXISTS citext;
 CREATE SCHEMA identity;
 
 CREATE TABLE identity.users (
-  id            uuid PRIMARY KEY,
+  id            bigint PRIMARY KEY,
   google_sub    text NOT NULL UNIQUE,
   email         citext NOT NULL,
   name          text NOT NULL DEFAULT '',
@@ -16,9 +16,9 @@ CREATE TABLE identity.users (
 CREATE INDEX users_email_idx ON identity.users (email);
 
 CREATE TABLE identity.refresh_tokens (
-  id                uuid PRIMARY KEY,
-  user_id           uuid NOT NULL REFERENCES identity.users (id) ON DELETE CASCADE,
-  family_id         uuid NOT NULL,
+  id                bigint PRIMARY KEY,
+  user_id           bigint NOT NULL REFERENCES identity.users (id) ON DELETE CASCADE,
+  family_id         bigint NOT NULL,
   token_hash        bytea NOT NULL UNIQUE,
   family_expires_at timestamptz NOT NULL,
   expires_at        timestamptz NOT NULL,
