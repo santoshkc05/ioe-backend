@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -109,6 +110,7 @@ func TestEndToEnd(t *testing.T) {
 		LogLevel:                      "info",
 		NotificationServiceBaseURL:    notify.URL,
 		NotificationServiceSendAPIKey: notifyKey,
+		BootstrapRootAdminEmails:      []string{"admin@example.com"},
 	}
 	a, err := buildApp(ctx, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
 	if err != nil {
@@ -180,6 +182,76 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatalf("outbox messages = %d, want 1 (one registration)", events)
 	}
 
+	adminToken := google.Sign(t, googletest.Claims("sub-admin", "admin@example.com", "web-client", time.Now()))
+	resp, body = c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+adminToken+`"}`, nil)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin sign in %d %v", resp.StatusCode, body)
+	}
+	adminAuth := map[string]string{"Authorization": "Bearer " + body["access_token"].(string)}
+	studentAuth := map[string]string{"Authorization": "Bearer " + access}
+
+	resp, body = c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, adminAuth)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create course %d %v", resp.StatusCode, body)
+	}
+	courseID := body["id"].(string)
+	resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"Free","text_body":"<p>free</p>"}`, adminAuth)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("add lecture %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"Paid","text_body":"<p>paid</p>"}`, adminAuth)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("add second lecture %d %v", resp.StatusCode, body)
+	}
+	lectures := body["lectures"].([]any)
+	freeID := lectures[0].(map[string]any)["id"].(string)
+	paidID := lectures[1].(map[string]any)["id"].(string)
+	resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures/"+freeID+"/free-preview", `{"free_preview":true}`, adminAuth)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("free preview %d", resp.StatusCode)
+	}
+
+	resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+paidID+"/content", "", adminAuth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("read content %d %v", resp.StatusCode, body)
+	}
+	rev := body["content_revision"].(float64)
+	first := body["blocks"].([]any)[0].(map[string]any)["client_block_id"].(string)
+	patch := fmt.Sprintf(`{"base_revision":%d,"order":["%s","n1"],"upserts":[{"client_block_id":"n1","type":"text","body":"<p>more</p>"}],"deletes":[]}`, int64(rev), first)
+	resp, body = c.do(http.MethodPatch, "/v1/courses/"+courseID+"/lectures/"+paidID+"/content", patch, adminAuth)
+	if resp.StatusCode != http.StatusOK || body["content_revision"].(float64) != rev+1 {
+		t.Fatalf("patch %d %v", resp.StatusCode, body)
+	}
+
+	resp, _ = c.do(http.MethodGet, "/v1/courses/"+courseID, "", studentAuth)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("student sees draft: %d", resp.StatusCode)
+	}
+	resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", adminAuth)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish %d", resp.StatusCode)
+	}
+	resp, _ = c.do(http.MethodGet, "/v1/courses/"+courseID, "", studentAuth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("student outline %d", resp.StatusCode)
+	}
+	resp, _ = c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+freeID+"/content", "", studentAuth)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("free preview read %d", resp.StatusCode)
+	}
+	resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+paidID+"/content", "", studentAuth)
+	if resp.StatusCode != http.StatusForbidden || body["type"] != "enrollment_required" {
+		t.Fatalf("paid read %d %v", resp.StatusCode, body)
+	}
+
+	var published int
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM platform.outbox_messages WHERE payload->>'destination_topic' = 'courseauthoring.course.published'").Scan(&published); err != nil {
+		t.Fatal(err)
+	}
+	if published != 1 {
+		t.Fatalf("published events = %d, want 1", published)
+	}
+
 	select {
 	case got := <-sent:
 		if got.recipient != "e2e@example.com" || got.auth != "Bearer "+notifyKey ||
@@ -191,7 +263,15 @@ func TestEndToEnd(t *testing.T) {
 	}
 	select {
 	case got := <-sent:
-		t.Fatalf("unexpected second email %+v", got)
+		if got.recipient != "admin@example.com" {
+			t.Fatalf("second welcome email %+v", got)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("admin welcome email not enqueued")
+	}
+	select {
+	case got := <-sent:
+		t.Fatalf("unexpected third email %+v", got)
 	case <-time.After(2 * time.Second):
 	}
 }

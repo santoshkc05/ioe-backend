@@ -9,6 +9,10 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 
+	courseauthoringenrollment "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/enrollment"
+	courseauthoringhttp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/httpapi"
+	courseauthoringpg "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/postgres"
+	courseauthoringapp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/app"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/google"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/httpapi"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/jwt"
@@ -57,9 +61,11 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 		Logger: logger, AllowedOrigins: cfg.AllowedOrigins, ServiceName: serviceName,
 	})
 	httpserver.MountHealth(router, pool.Ping)
-	if err := registerIdentity(router, identity, tokens, cfg, logger); err != nil {
+	identityHandler, err := registerIdentity(router, identity, tokens, cfg, logger)
+	if err != nil {
 		return nil, err
 	}
+	registerCourseAuthoring(router, pool, ids, clk, identityHandler.RequireAuth, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
 	if err != nil {
@@ -91,7 +97,7 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog
 	return nil
 }
 
-func registerIdentity(r *httpserver.Router, svc *identityapp.Service, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) error {
+func registerIdentity(r *httpserver.Router, svc *identityapp.Service, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) (*httpapi.Handler, error) {
 	h, err := httpapi.New(svc, tokens, httpapi.Config{
 		CookieSecure:   cfg.CookieSecure,
 		AllowedOrigins: cfg.AllowedOrigins,
@@ -100,8 +106,17 @@ func registerIdentity(r *httpserver.Router, svc *identityapp.Service, tokens *jw
 		AuthLimiter:    httpserver.NewRateLimiter(cfg.AuthRateLimitPerMinute),
 	})
 	if err != nil {
-		return err
+		return nil, err
 	}
 	h.Register(r)
-	return nil
+	return h, nil
+}
+
+func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) {
+	tx := courseauthoringpg.NewTxRunner(pool, clk)
+	courseauthoringhttp.New(
+		courseauthoringapp.NewCourseService(tx, ids, clk),
+		courseauthoringapp.NewContentService(tx, ids, courseauthoringenrollment.Deny{}),
+		courseauthoringhttp.Config{RequireAuth: requireAuth, ContentLimiter: httpserver.NewRateLimiter(60), Logger: logger},
+	).Register(r)
 }
