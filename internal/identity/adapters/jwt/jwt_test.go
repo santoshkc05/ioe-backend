@@ -121,7 +121,20 @@ func TestVerifyRejects(t *testing.T) {
 		},
 		"tampered": func() string {
 			tok := sign(gojwt.SigningMethodEdDSA, keys.Signing, "k1", valid())
-			return tok[:len(tok)-2] + "AA"
+			parts := strings.Split(tok, ".")
+			// Flip the first payload character (always real data bits, never
+			// padding) so the decoded claims always change and the signature
+			// can no longer match. Mutating trailing signature characters is
+			// not deterministic: if those bits are already zero the token is
+			// unchanged and still verifies.
+			p := []byte(parts[1])
+			if p[0] == 'A' {
+				p[0] = 'B'
+			} else {
+				p[0] = 'A'
+			}
+			parts[1] = string(p)
+			return strings.Join(parts, ".")
 		},
 	}
 	for name, mk := range cases {
