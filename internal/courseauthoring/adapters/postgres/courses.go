@@ -139,7 +139,8 @@ func (r courses) saveChildren(ctx context.Context, c *domain.Course) error {
 	sectionIDs := make([]int64, 0, len(c.Sections))
 	for _, s := range c.Sections {
 		if err := r.q.UpsertSection(ctx, sqlcgen.UpsertSectionParams{
-			ID: int64(s.ID), CourseID: int64(c.ID), Title: s.Title.String(), SortOrder: int32(s.Order),
+			ID: int64(s.ID), CourseID: int64(c.ID), Title: s.Title.String(),
+			SortOrder: int32(s.Order), //nolint:gosec // Order is a slice index, bounded by aggregate size
 		}); err != nil {
 			return err
 		}
@@ -154,7 +155,8 @@ func (r courses) saveChildren(ctx context.Context, c *domain.Course) error {
 		}
 		if err := r.q.UpsertLecture(ctx, sqlcgen.UpsertLectureParams{
 			ID: int64(l.ID), CourseID: int64(c.ID), SectionID: sectionID, Title: l.Title.String(),
-			FreePreview: l.FreePreview, SortOrder: int32(l.Order), CreatedAt: c.UpdatedAt,
+			FreePreview: l.FreePreview, CreatedAt: c.UpdatedAt,
+			SortOrder: int32(l.Order), //nolint:gosec // Order is a slice index, bounded by aggregate size
 		}); err != nil {
 			return err
 		}
