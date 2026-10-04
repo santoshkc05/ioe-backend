@@ -101,8 +101,8 @@ FindByGoogleSubjectForUpdate(ctx context.Context, subject string) (domain.User, 
 SearchByEmailPrefix(ctx context.Context, prefix string, limit int) ([]domain.User, error)
 ```
 
-`Service.signIn` uses `FindByGoogleSubjectForUpdate`. `FindByGoogleSubject` is removed if
-nothing else uses it.
+`FindByGoogleSubjectForUpdate` replaces `FindByGoogleSubject`, whose only caller is
+`Service.signIn`; the `GetUserByGoogleSub` query is replaced the same way.
 
 New `AdminService`, built with `NewAdminService(tx TxRunner, c clock.Clock)`:
 
@@ -124,7 +124,7 @@ New sqlc queries, no migration:
 -- name: GetUserByIDForUpdate :one
 SELECT * FROM identity.users WHERE id = $1 FOR UPDATE;
 
--- name: GetUserByGoogleSubForUpdate :one
+-- name: GetUserByGoogleSubForUpdate :one  -- replaces GetUserByGoogleSub
 SELECT * FROM identity.users WHERE google_sub = $1 FOR UPDATE;
 
 -- name: SearchUsersByEmailPrefix :many
