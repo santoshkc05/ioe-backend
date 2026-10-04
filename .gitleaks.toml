@@ -1,0 +1,16 @@
+# Gitleaks configuration for ioe-backend.
+#
+# Extends the default rule set and allowlists exactly one known false
+# positive: the OpenObserve local-dev default password `Complexpass#123`.
+# That value is OpenObserve's own publicly documented default, used here
+# only as a docker-compose fallback default
+# (`ZO_ROOT_USER_PASSWORD: ${ZO_ROOT_USER_PASSWORD:-Complexpass#123}`)
+# for local development. It is not a real credential.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "OpenObserve local-dev default password (public documented default, compose fallback only)"
+regexTarget = "secret"
+regexes = ['''Complexpass#123''']

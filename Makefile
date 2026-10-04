@@ -26,7 +26,7 @@ vuln:
 	go run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
 secrets:
-	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git --redact --no-banner .
+	go run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git --redact --no-banner --config .gitleaks.toml .
 
 tidy-check:
 	go mod tidy -diff
