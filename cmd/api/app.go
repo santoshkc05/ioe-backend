@@ -55,13 +55,15 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err != nil {
 		return nil, err
 	}
-	identity := identityapp.NewService(identitypg.NewTxRunner(pool), googleVerifier, tokens, ids, clk, cfg.BootstrapRootAdminEmails)
+	identityTx := identitypg.NewTxRunner(pool)
+	identity := identityapp.NewService(identityTx, googleVerifier, tokens, ids, clk, cfg.BootstrapRootAdminEmails)
+	identityAdmin := identityapp.NewAdminService(identityTx, clk)
 
 	router, handler := httpserver.NewRouter(httpserver.Options{
 		Logger: logger, AllowedOrigins: cfg.AllowedOrigins, ServiceName: serviceName,
 	})
 	httpserver.MountHealth(router, pool.Ping)
-	identityHandler, err := registerIdentity(router, identity, tokens, cfg, logger)
+	identityHandler, err := registerIdentity(router, identity, identityAdmin, tokens, cfg, logger)
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +99,8 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog
 	return nil
 }
 
-func registerIdentity(r *httpserver.Router, svc *identityapp.Service, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) (*httpapi.Handler, error) {
-	h, err := httpapi.New(svc, tokens, httpapi.Config{
+func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *identityapp.AdminService, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) (*httpapi.Handler, error) {
+	h, err := httpapi.New(svc, admin, tokens, httpapi.Config{
 		CookieSecure:   cfg.CookieSecure,
 		AllowedOrigins: cfg.AllowedOrigins,
 		Logger:         logger,

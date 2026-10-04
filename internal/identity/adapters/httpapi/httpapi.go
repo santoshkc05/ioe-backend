@@ -22,9 +22,13 @@ import (
 )
 
 const (
-	typeInvalidToken    = "invalid_token"
-	typeRefreshReuse    = "refresh_reuse_detected"
-	typeEmailUnverified = "email_unverified"
+	typeInvalidToken       = "invalid_token"
+	typeRefreshReuse       = "refresh_reuse_detected"
+	typeEmailUnverified    = "email_unverified"
+	typeForbidden          = "forbidden"
+	typeInvalidRole        = "invalid_role"
+	typeEmailQueryTooShort = "email_query_too_short"
+	typeRoleNotAssignable  = "role_not_assignable"
 
 	secureCookieName   = "__Secure-ioe_refresh"
 	insecureCookieName = "ioe_refresh"
@@ -37,6 +41,12 @@ type SessionService interface {
 	Refresh(ctx context.Context, raw string, client app.Client) (app.Session, error)
 	Logout(ctx context.Context, raw string) error
 	GetMe(ctx context.Context, userID id.ID) (domain.User, error)
+}
+
+// AdminService is the identity user-management service as used by HTTP.
+type AdminService interface {
+	SearchUsers(ctx context.Context, p auth.Principal, prefix string) ([]domain.User, error)
+	SetRole(ctx context.Context, p auth.Principal, userID id.ID, role auth.Role) (domain.User, error)
 }
 
 // AccessTokenVerifier validates bearer tokens.
@@ -56,6 +66,7 @@ type Config struct {
 // Handler serves identity routes.
 type Handler struct {
 	svc           SessionService
+	admin         AdminService
 	verifier      AccessTokenVerifier
 	cfg           Config
 	origins       map[string]struct{}
@@ -63,7 +74,7 @@ type Handler struct {
 	reuse         metric.Int64Counter
 }
 
-func New(svc SessionService, verifier AccessTokenVerifier, cfg Config) (*Handler, error) {
+func New(svc SessionService, admin AdminService, verifier AccessTokenVerifier, cfg Config) (*Handler, error) {
 	meter := otel.Meter("github.com/santoshkc2200/ioe-backend/internal/identity")
 	signInCounter, err := meter.Int64Counter("identity.signins", metric.WithDescription("Google sign-in attempts by result"))
 	if err != nil {
@@ -77,7 +88,7 @@ func New(svc SessionService, verifier AccessTokenVerifier, cfg Config) (*Handler
 	for _, o := range cfg.AllowedOrigins {
 		origins[o] = struct{}{}
 	}
-	return &Handler{svc: svc, verifier: verifier, cfg: cfg, origins: origins, signInCounter: signInCounter, reuse: reuse}, nil
+	return &Handler{svc: svc, admin: admin, verifier: verifier, cfg: cfg, origins: origins, signInCounter: signInCounter, reuse: reuse}, nil
 }
 
 // Register mounts the identity routes. Auth routes and their 404/405 responses are
@@ -90,6 +101,9 @@ func (h *Handler) Register(r *httpserver.Router) {
 	r.Handle("POST /v1/auth/refresh", authRoute(h.requireOrigin(http.HandlerFunc(h.refresh))))
 	r.Handle("POST /v1/auth/logout", authRoute(h.requireOrigin(http.HandlerFunc(h.logout))))
 	r.Handle("GET /v1/me", httpserver.NoStore(h.RequireAuth(http.HandlerFunc(h.me))))
+	admin := func(next http.HandlerFunc) http.Handler { return httpserver.NoStore(h.RequireAuth(next)) }
+	r.Handle("GET /v1/admin/users", admin(h.searchUsers))
+	r.Handle("PUT /v1/admin/users/{userID}/role", admin(h.setRole))
 }
 
 // RequireAuth rejects requests without a valid bearer access token and stores the principal.
@@ -227,6 +241,14 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 		problem.Write(w, r, http.StatusForbidden, typeEmailUnverified, "Email Not Verified", "")
 	case errors.Is(err, app.ErrNotFound):
 		problem.Write(w, r, http.StatusNotFound, problem.TypeNotFound, "Not Found", "")
+	case errors.Is(err, app.ErrForbidden):
+		problem.Write(w, r, http.StatusForbidden, typeForbidden, "Forbidden", "")
+	case errors.Is(err, app.ErrInvalidRole):
+		problem.Write(w, r, http.StatusBadRequest, typeInvalidRole, "Invalid Role", "role must be student or instructor")
+	case errors.Is(err, app.ErrEmailQueryTooShort):
+		problem.Write(w, r, http.StatusBadRequest, typeEmailQueryTooShort, "Email Query Too Short", "email must be at least 3 characters")
+	case errors.Is(err, app.ErrRoleNotAssignable):
+		problem.Write(w, r, http.StatusConflict, typeRoleNotAssignable, "Role Not Assignable", "")
 	default:
 		h.cfg.Logger.ErrorContext(r.Context(), "identity request failed", "error", err)
 		problem.Write(w, r, http.StatusInternalServerError, problem.TypeInternal, "Internal Server Error", "")

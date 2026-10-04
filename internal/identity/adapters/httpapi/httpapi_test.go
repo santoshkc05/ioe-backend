@@ -32,16 +32,24 @@ var (
 		Name: "A", AvatarURL: "https://img/a", Role: auth.RoleStudent}
 	session = app.Session{AccessToken: "acc", AccessTokenTTL: 15 * time.Minute, RefreshToken: "ref-1",
 		RefreshTokenTTL: 7 * 24 * time.Hour, User: user, Created: true}
-	discard = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	discard        = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	adminPrincipal = auth.Principal{UserID: id.ID(7), Role: auth.RoleRootAdmin}
+	adminHeaders   = map[string]string{"Authorization": "Bearer admin", "Content-Type": "application/json"}
 )
 
 type fakeService struct {
-	signInErr  error
-	signInSess *app.Session
-	refreshErr error
-	gotRefresh string
-	gotLogout  string
-	gotClient  app.Client
+	signInErr    error
+	signInSess   *app.Session
+	refreshErr   error
+	gotRefresh   string
+	gotLogout    string
+	gotClient    app.Client
+	adminErr     error
+	searchResult []domain.User
+	gotPrincipal auth.Principal
+	gotPrefix    string
+	gotUserID    id.ID
+	gotRole      auth.Role
 }
 
 func (f *fakeService) SignInWithGoogle(_ context.Context, _ string, c app.Client) (app.Session, error) {
@@ -77,19 +85,38 @@ func (f *fakeService) GetMe(_ context.Context, uid id.ID) (domain.User, error) {
 	return user, nil
 }
 
+func (f *fakeService) SearchUsers(_ context.Context, p auth.Principal, prefix string) ([]domain.User, error) {
+	f.gotPrincipal, f.gotPrefix = p, prefix
+	return f.searchResult, f.adminErr
+}
+
+func (f *fakeService) SetRole(_ context.Context, p auth.Principal, userID id.ID, role auth.Role) (domain.User, error) {
+	f.gotPrincipal, f.gotUserID, f.gotRole = p, userID, role
+	if f.adminErr != nil {
+		return domain.User{}, f.adminErr
+	}
+	u := user
+	u.Role = role
+	return u, nil
+}
+
 type fakeVerifier struct{}
 
 func (fakeVerifier) Verify(tok string) (auth.Principal, error) {
-	if tok != "good" {
+	switch tok {
+	case "good":
+		return auth.Principal{UserID: user.ID, Role: user.Role}, nil
+	case "admin":
+		return adminPrincipal, nil
+	default:
 		return auth.Principal{}, app.ErrInvalidToken
 	}
-	return auth.Principal{UserID: user.ID, Role: user.Role}, nil
 }
 
 func newHandler(t *testing.T, svc *fakeService, secure bool, perMinute int) http.Handler {
 	t.Helper()
 	r, h := httpserver.NewRouter(httpserver.Options{Logger: discard, AllowedOrigins: []string{origin}, ServiceName: "test"})
-	ih, err := httpapi.New(svc, fakeVerifier{}, httpapi.Config{
+	ih, err := httpapi.New(svc, svc, fakeVerifier{}, httpapi.Config{
 		CookieSecure: secure, AllowedOrigins: []string{origin}, Logger: discard,
 		IPs: httpserver.NewIPResolver(nil), AuthLimiter: httpserver.NewRateLimiter(perMinute),
 	})
@@ -454,5 +481,98 @@ func TestSignInRecordsMetric(t *testing.T) {
 				t.Fatalf("result=%q count=%d, want 1; all counts=%v", tc.wantResult, got, counts)
 			}
 		})
+	}
+}
+
+const rolePath = "/v1/admin/users/1840396745219883008/role"
+
+func TestSearchUsers(t *testing.T) {
+	svc := &fakeService{searchResult: []domain.User{user}}
+	resp := do(newHandler(t, svc, true, 100), http.MethodGet, "/v1/admin/users?email=a%40ex", "", adminHeaders)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	want := `{"users":[{"id":"1840396745219883008","email":"a@example.com","name":"A","avatar_url":"https://img/a","role":"student"}]}` + "\n"
+	if resp.StatusCode != http.StatusOK || string(b) != want || resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+	if svc.gotPrefix != "a@ex" || svc.gotPrincipal != adminPrincipal {
+		t.Fatalf("prefix %q principal %+v", svc.gotPrefix, svc.gotPrincipal)
+	}
+}
+
+func TestSearchUsersNoMatchesIsEmptyArray(t *testing.T) {
+	resp := do(newHandler(t, &fakeService{}, true, 100), http.MethodGet, "/v1/admin/users?email=zzz", "", adminHeaders)
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK || string(b) != "{\"users\":[]}\n" {
+		t.Fatalf("%d %s", resp.StatusCode, b)
+	}
+}
+
+func TestSetRole(t *testing.T) {
+	svc := &fakeService{}
+	resp := do(newHandler(t, svc, true, 100), http.MethodPut, rolePath, `{"role":"instructor"}`, adminHeaders)
+	defer resp.Body.Close()
+	var body struct{ ID, Role string }
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusOK || body.ID != user.ID.String() || body.Role != "instructor" ||
+		resp.Header.Get("Cache-Control") != "no-store" {
+		t.Fatalf("%d %+v", resp.StatusCode, body)
+	}
+	if svc.gotUserID != user.ID || svc.gotRole != auth.RoleInstructor || svc.gotPrincipal != adminPrincipal {
+		t.Fatalf("got %v %q %+v", svc.gotUserID, svc.gotRole, svc.gotPrincipal)
+	}
+}
+
+func TestAdminRoutesRequireAuth(t *testing.T) {
+	h := newHandler(t, &fakeService{}, true, 100)
+	for _, req := range []struct{ method, path, body string }{
+		{http.MethodGet, "/v1/admin/users?email=abc", ""},
+		{http.MethodPut, rolePath, `{"role":"instructor"}`},
+	} {
+		resp := do(h, req.method, req.path, req.body, jsonHeader)
+		if resp.StatusCode != http.StatusUnauthorized || problemType(t, resp) != "invalid_token" {
+			t.Errorf("%s %s: %d", req.method, req.path, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+}
+
+func TestSetRoleMalformedIDIsNotFound(t *testing.T) {
+	svc := &fakeService{}
+	resp := do(newHandler(t, svc, true, 100), http.MethodPut, "/v1/admin/users/abc/role", `{"role":"instructor"}`, adminHeaders)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound || problemType(t, resp) != "not_found" || !svc.gotUserID.IsZero() {
+		t.Fatalf("%d called=%v", resp.StatusCode, !svc.gotUserID.IsZero())
+	}
+}
+
+func TestAdminErrorMapping(t *testing.T) {
+	cases := []struct {
+		err    error
+		status int
+		typ    string
+	}{
+		{app.ErrForbidden, http.StatusForbidden, "forbidden"},
+		{app.ErrNotFound, http.StatusNotFound, "not_found"},
+		{app.ErrInvalidRole, http.StatusBadRequest, "invalid_role"},
+		{app.ErrEmailQueryTooShort, http.StatusBadRequest, "email_query_too_short"},
+		{app.ErrRoleNotAssignable, http.StatusConflict, "role_not_assignable"},
+		{errors.New("boom"), http.StatusInternalServerError, "internal"},
+	}
+	for _, c := range cases {
+		h := newHandler(t, &fakeService{adminErr: c.err}, true, 100)
+		for _, req := range []struct{ method, path, body string }{
+			{http.MethodGet, "/v1/admin/users?email=abc", ""},
+			{http.MethodPut, rolePath, `{"role":"instructor"}`},
+		} {
+			resp := do(h, req.method, req.path, req.body, adminHeaders)
+			if resp.StatusCode != c.status || problemType(t, resp) != c.typ {
+				t.Errorf("%v on %s: %d", c.err, req.method, resp.StatusCode)
+			}
+			resp.Body.Close()
+		}
 	}
 }
