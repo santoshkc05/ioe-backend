@@ -5,6 +5,7 @@
 package sqlcgen
 
 import (
+	"encoding/json"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -28,7 +29,7 @@ type CourseauthoringCourse struct {
 type CourseauthoringLecture struct {
 	ID              int64
 	CourseID        int64
-	SectionID       pgtype.Int8
+	SectionID       *int64
 	Title           string
 	FreePreview     bool
 	SortOrder       int32
@@ -44,7 +45,7 @@ type CourseauthoringLectureBlock struct {
 	Kind          string
 	Position      int32
 	ClientBlockID string
-	Payload       []byte
+	Payload       json.RawMessage
 	CreatedAt     time.Time
 	UpdatedAt     time.Time
 }
@@ -63,11 +64,11 @@ type IdentityRefreshToken struct {
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
-	UsedAt          *time.Time
-	RevokedAt       *time.Time
+	UsedAt          pgtype.Timestamptz
+	RevokedAt       pgtype.Timestamptz
 	CreatedAt       time.Time
 	UserAgent       string
-	IP              string
+	Ip              string
 }
 
 type IdentityUser struct {
@@ -75,7 +76,7 @@ type IdentityUser struct {
 	GoogleSub   string
 	Email       string
 	Name        string
-	AvatarURL   string
+	AvatarUrl   string
 	Role        string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

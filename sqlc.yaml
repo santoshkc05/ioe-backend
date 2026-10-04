@@ -22,3 +22,20 @@ sql:
         rename:
           avatar_url: AvatarURL
           ip: IP
+  - engine: postgresql
+    schema: migrations
+    queries: internal/courseauthoring/adapters/postgres/queries.sql
+    gen:
+      go:
+        package: sqlcgen
+        out: internal/courseauthoring/adapters/postgres/sqlcgen
+        sql_package: pgx/v5
+        overrides:
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: jsonb
+            go_type: encoding/json.RawMessage
+          - column: courseauthoring.lectures.section_id
+            go_type:
+              type: int64
+              pointer: true
