@@ -101,7 +101,7 @@ Operations:
 - `Reactivate(now)`: on a canceled enrollment it sets `Status` to active, `EnrolledAt` to `now`,
   clears `CancelReason` and `CanceledAt`, and returns an `EnrollmentActivated` event. On an active
   enrollment it changes nothing and returns no event.
-- `Rehydrate` is used only by the repository.
+- Fields are exported; the repository builds `Enrollment` values directly.
 
 Events follow identity's `EventName()` style:
 
@@ -120,12 +120,16 @@ manager of a course is its owner or any `root_admin`. The rules are pure functio
 |---|---|---|
 | Enroll self | course published and free | unpublished → `ErrNotFound`; published paid → `ErrPaymentRequired` |
 | Enroll another user | caller is a manager and course published | not a manager and course unpublished → `ErrNotFound`; not a manager → `ErrForbidden`; manager and course unpublished → `ErrCourseNotPublished` |
-| Cancel | caller is the target user, or a manager | `ErrForbidden` |
+| Cancel | caller is the target user, or a manager | course unpublished → `ErrNotFound`; otherwise `ErrForbidden` |
 | List course roster | caller is a manager | course unpublished → `ErrNotFound`; otherwise `ErrForbidden` |
 | List a user's enrollments | caller is that user, or `root_admin` | `ErrForbidden` |
 
 A manager enrolling themselves follows the manager rule, so an owner can enroll in their own
 paid course.
+
+The access rules return domain errors: `ErrCourseHidden` (mapped to 404), `ErrForbidden`,
+`ErrPaymentRequired`, `ErrCourseNotPublished`. In the table, `ErrNotFound` means
+`ErrCourseHidden`. `Cancel` returns `ErrInvalidReason`.
 
 ## Application (`internal/enrollment/app`)
 
@@ -156,7 +160,7 @@ type TxRunner interface {
     RunInTx(ctx context.Context, fn func(Repos) error) error
 }
 
-// CourseCatalog returns ErrCourseNotFound when the course does not exist.
+// CourseCatalog returns ErrNotFound when the course does not exist.
 type CourseCatalog interface {
     CourseFacts(ctx context.Context, courseID id.ID) (domain.CourseFacts, error)
 }
@@ -168,21 +172,19 @@ type CourseCatalog interface {
 
 `EnrollmentService` depends on `TxRunner`, `CourseCatalog`, `*id.Generator` and `clock.Clock`:
 
-- `Enroll(ctx, p, courseID, userID) (domain.Enrollment, EnrollOutcome, error)`. It reads course
-  facts outside the transaction and applies the access rule. Inside the transaction it returns an
-  existing active enrollment (`OutcomeExisting`), reactivates a canceled one
-  (`OutcomeActivated`), or inserts a new one (`OutcomeActivated`), and publishes any event. On
+- `Enroll(ctx, p, courseID, userID) (e domain.Enrollment, activated bool, err error)`. It reads
+  course facts outside the transaction and applies the access rule. Inside the transaction it
+  returns an existing active enrollment (`activated` false), reactivates a canceled one or inserts
+  a new one (`activated` true), and publishes any event. On
   `ErrDuplicate` from `Insert` (a concurrent first enrollment) it reruns the transaction once.
 - `Cancel(ctx, p, courseID, userID, reason) (domain.Enrollment, error)`. When `p.UserID` equals
-  `userID` it skips the course lookup. Otherwise it reads course facts and requires a manager; a
-  missing course is `ErrNotFound`. No enrollment is `ErrNotFound`.
+  `userID` it skips the course lookup. Otherwise it reads course facts and applies the cancel
+  rule; a missing course is `ErrNotFound`. No enrollment is `ErrNotFound`.
 - `ListByCourse(ctx, p, courseID, limit, offset) ([]domain.Enrollment, int, error)`.
 - `ListByUser(ctx, p, userID) ([]domain.Enrollment, error)` returns active enrollments.
 
-`ErrCourseNotFound` from `CourseCatalog` maps to `ErrNotFound`.
-
-Errors: `ErrNotFound`, `ErrForbidden`, `ErrPaymentRequired`, `ErrCourseNotPublished`,
-`ErrInvalidInput` (wrapping `ErrInvalidReason`), `ErrConcurrentModification`.
+App errors: `ErrNotFound`, `ErrDuplicate` (repository only; never leaves the service),
+`ErrConcurrentModification`, `ErrInvalidInput`. Domain access errors pass through unchanged.
 
 ## Courseauthoring changes
 
@@ -257,8 +259,7 @@ endpoints.
 New file `cmd/api/enrollment.go` holds `registerEnrollment` and two adapters:
 
 - `courseCatalog` implements enrollment's `CourseCatalog` over courseauthoring's
-  `CourseService.Facts`, mapping `courseauthoringapp.ErrNotFound` to
-  `enrollmentapp.ErrCourseNotFound`.
+  `CourseService.Facts`, mapping `courseauthoringapp.ErrNotFound` to `enrollmentapp.ErrNotFound`.
 - `enrollmentQuery` implements courseauthoring's `EnrollmentQuery` over enrollment's
   `AccessQuery`.
 
