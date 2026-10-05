@@ -57,6 +57,17 @@ type CourseauthoringSection struct {
 	SortOrder int32
 }
 
+type EnrollmentEnrollment struct {
+	ID           int64
+	CourseID     int64
+	UserID       int64
+	Status       string
+	CancelReason string
+	EnrolledAt   time.Time
+	CanceledAt   pgtype.Timestamptz
+	Version      int64
+}
+
 type IdentityRefreshToken struct {
 	ID              int64
 	UserID          int64

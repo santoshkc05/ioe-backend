@@ -78,7 +78,7 @@ type IdentityRefreshToken struct {
 	RevokedAt       *time.Time
 	CreatedAt       time.Time
 	UserAgent       string
-	IP              string
+	Ip              string
 }
 
 type IdentityUser struct {
@@ -86,7 +86,7 @@ type IdentityUser struct {
 	GoogleSub   string
 	Email       string
 	Name        string
-	AvatarURL   string
+	AvatarUrl   string
 	Role        string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
