@@ -1,6 +1,7 @@
 package app_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -60,6 +61,30 @@ func TestGetContentAccess(t *testing.T) {
 	g.contents = app.NewContentService(g.store, testIDs(t), enrolled{{g.course.ID, student.UserID}: true})
 	if _, err := g.contents.Get(ctx, student, g.course.ID, g.locked); err != nil {
 		t.Fatalf("enrolled err = %v", err)
+	}
+}
+
+// txProbe fails the test if the enrollment lookup runs while a store transaction is open.
+type txProbe struct {
+	t     *testing.T
+	store *memStore
+}
+
+func (q txProbe) IsActivelyEnrolled(context.Context, id.ID, id.ID) (bool, error) {
+	if !q.store.mu.TryLock() {
+		q.t.Error("enrollment lookup ran inside the content transaction")
+		return false, nil
+	}
+	q.store.mu.Unlock()
+	return false, nil
+}
+
+func TestGetContentChecksEnrollmentOutsideTx(t *testing.T) {
+	f := newContentFixture(t, enrolled{})
+	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	f.contents = app.NewContentService(f.store, testIDs(t), txProbe{t: t, store: f.store})
+	if _, err := f.contents.Get(ctx, student, f.course.ID, f.locked); !errors.Is(err, app.ErrEnrollmentRequired) {
+		t.Fatalf("locked err = %v", err)
 	}
 }
 

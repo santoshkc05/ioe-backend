@@ -56,8 +56,14 @@ func readView(ctx context.Context, r Repos, h LectureHeader) (LectureContentView
 }
 
 func (s *ContentService) Get(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) (LectureContentView, error) {
+	// Ask before opening the transaction: the lookup takes its own pool connection, and
+	// asking from inside would hold two per read and can exhaust the pool under load.
+	enrolled, err := s.enrollments.IsActivelyEnrolled(ctx, courseID, p.UserID)
+	if err != nil {
+		return LectureContentView{}, err
+	}
 	var v LectureContentView
-	err := s.tx.RunInTx(ctx, func(r Repos) error {
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
 		c, err := r.Courses.FindByID(ctx, courseID)
 		if err != nil {
 			return err
@@ -69,14 +75,8 @@ func (s *ContentService) Get(ctx context.Context, p auth.Principal, courseID, le
 		if err != nil {
 			return err
 		}
-		if !c.IsManagedBy(p) && !h.FreePreview {
-			ok, err := s.enrollments.IsActivelyEnrolled(ctx, courseID, p.UserID)
-			if err != nil {
-				return err
-			}
-			if !ok {
-				return ErrEnrollmentRequired
-			}
+		if !c.IsManagedBy(p) && !h.FreePreview && !enrolled {
+			return ErrEnrollmentRequired
 		}
 		v, err = readView(ctx, r, h)
 		return err

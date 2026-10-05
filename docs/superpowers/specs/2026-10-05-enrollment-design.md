@@ -300,7 +300,8 @@ Gates from `AGENTS.md`: `make check`, `make test-integration` (actually run),
   management spec.
 - A manual enrollment in a paid course has no payment record. The payment slice must tolerate
   enrollments without one.
-- `ContentService` calls `IsActivelyEnrolled` inside its own transaction, and `AccessQuery` opens a
-  second transaction on another pool connection. A content read briefly holds two connections.
-  Acceptable at the current pool size; revisit if pool exhaustion appears.
+- `AccessQuery` opens its own transaction on a separate pool connection, so `ContentService` calls
+  `IsActivelyEnrolled` before opening its transaction. Calling it inside would hold two connections
+  per read and could exhaust the default pool. The lookup also runs for managers and free-preview
+  lectures, where its answer is unused; that costs one indexed query per read.
 - The roster shows user IDs only until a name lookup is added.
