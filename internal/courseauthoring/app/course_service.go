@@ -119,6 +119,28 @@ func (s *CourseService) Get(ctx context.Context, p auth.Principal, courseID id.I
 	return c, err
 }
 
+// CourseFacts is what other contexts may know about a course without a principal.
+type CourseFacts struct {
+	Published bool
+	Free      bool
+	OwnerID   id.ID
+}
+
+// Facts returns a course's publication, price and ownership facts for internal callers.
+// It applies no authorization and must not be exposed over HTTP.
+func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts, error) {
+	var f CourseFacts
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		c, err := r.Courses.FindByID(ctx, courseID)
+		if err != nil {
+			return err
+		}
+		f = CourseFacts{Published: c.Status == domain.StatusPublished, Free: c.Price.IsFree(), OwnerID: c.OwnerID}
+		return nil
+	})
+	return f, err
+}
+
 func (s *CourseService) ListByOwner(ctx context.Context, p auth.Principal, ownerID id.ID) ([]domain.Course, error) {
 	if p.UserID != ownerID && p.Role != auth.RoleRootAdmin {
 		return nil, ErrForbidden

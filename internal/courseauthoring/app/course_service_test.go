@@ -155,3 +155,31 @@ func TestAddLectureWritesInitialBlocks(t *testing.T) {
 		t.Fatalf("blocks %v revision %d", store.blocks[lid], store.headers[lid].ContentRevision)
 	}
 }
+
+func TestFacts(t *testing.T) {
+	svc, _ := newCourseService(t)
+	c, err := svc.Create(ctx, owner, app.CreateCourseInput{Title: "Go"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f, err := svc.Facts(ctx, c.ID)
+	if err != nil || f != (app.CourseFacts{Published: false, Free: true, OwnerID: owner.UserID}) {
+		t.Fatalf("draft facts = %+v, %v", f, err)
+	}
+	if _, err := svc.SetPrice(ctx, owner, c.ID, 150000, "NPR"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "L1"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.Publish(ctx, owner, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	f, err = svc.Facts(ctx, c.ID)
+	if err != nil || f != (app.CourseFacts{Published: true, Free: false, OwnerID: owner.UserID}) {
+		t.Fatalf("published facts = %+v, %v", f, err)
+	}
+	if _, err := svc.Facts(ctx, 424242); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("missing err = %v", err)
+	}
+}
