@@ -37,6 +37,8 @@ linters:
               desc: platform must not depend on bounded contexts
             - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
               desc: platform must not depend on bounded contexts
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/enrollment
+              desc: platform must not depend on bounded contexts
         platform-contentblocks:
           list-mode: strict
           files:
@@ -76,6 +78,8 @@ linters:
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
               desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/enrollment
+              desc: bounded contexts must not import each other
         notification-independent:
           list-mode: lax
           files:
@@ -84,6 +88,8 @@ linters:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/enrollment
               desc: bounded contexts must not import each other
         notification-app:
           list-mode: strict
@@ -122,6 +128,39 @@ linters:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/enrollment
+              desc: bounded contexts must not import each other
+        enrollment-domain:
+          list-mode: strict
+          files:
+            - "**/internal/enrollment/domain/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
+        enrollment-app:
+          list-mode: strict
+          files:
+            - "**/internal/enrollment/app/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/santoshkc2200/ioe-backend/internal/enrollment/domain
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/clock
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
+        enrollment-independent:
+          list-mode: lax
+          files:
+            - "**/internal/enrollment/**"
+          deny:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
               desc: bounded contexts must not import each other
   exclusions:
     generated: strict
