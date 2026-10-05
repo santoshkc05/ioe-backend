@@ -26,6 +26,15 @@ makes them an instructor (or a student again) with `PUT /v1/admin/users/{id}/rol
 gets the new role at their next token refresh, within 15 minutes; a demoted instructor keeps
 managing the courses they own.
 
+## Enrollment
+
+Students enroll themselves in published free courses with
+`POST /v1/courses/{courseID}/enrollments/{theirUserID}`; paid courses answer
+`402 payment_required` until payment exists. The course owner or a root admin can enroll anyone
+in a published course, free or paid, and list a course's roster with
+`GET /v1/courses/{courseID}/enrollments`. Enrolled students read every lecture of a published
+course. A student, the owner, or a root admin cancels with `DELETE` on the same path.
+
 ## Notifications
 
 Welcome emails are sent through the standalone notification service in `../notification`.

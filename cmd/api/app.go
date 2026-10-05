@@ -9,10 +9,11 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 
-	courseauthoringenrollment "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/enrollment"
 	courseauthoringhttp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/httpapi"
 	courseauthoringpg "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/postgres"
 	courseauthoringapp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/app"
+	enrollmentpg "github.com/santoshkc2200/ioe-backend/internal/enrollment/adapters/postgres"
+	enrollmentapp "github.com/santoshkc2200/ioe-backend/internal/enrollment/app"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/google"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/httpapi"
 	"github.com/santoshkc2200/ioe-backend/internal/identity/adapters/jwt"
@@ -67,7 +68,9 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err != nil {
 		return nil, err
 	}
-	registerCourseAuthoring(router, pool, ids, clk, identityHandler.RequireAuth, logger)
+	enrollmentTx := enrollmentpg.NewTxRunner(pool)
+	courses := registerCourseAuthoring(router, pool, ids, clk, enrollmentapp.NewAccessQuery(enrollmentTx), identityHandler.RequireAuth, logger)
+	registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
 	if err != nil {
@@ -114,11 +117,15 @@ func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *ide
 	return h, nil
 }
 
-func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) {
+// registerCourseAuthoring mounts course authoring and returns its course service for
+// contexts that read course facts.
+func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, requireAuth httpserver.Middleware, logger *slog.Logger) *courseauthoringapp.CourseService {
 	tx := courseauthoringpg.NewTxRunner(pool, clk)
+	courses := courseauthoringapp.NewCourseService(tx, ids, clk)
 	courseauthoringhttp.New(
-		courseauthoringapp.NewCourseService(tx, ids, clk),
-		courseauthoringapp.NewContentService(tx, ids, courseauthoringenrollment.Deny{}),
+		courses,
+		courseauthoringapp.NewContentService(tx, ids, enrollments),
 		courseauthoringhttp.Config{RequireAuth: requireAuth, ContentLimiter: httpserver.NewRateLimiter(60), Logger: logger},
 	).Register(r)
+	return courses
 }

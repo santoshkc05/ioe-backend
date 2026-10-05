@@ -360,3 +360,113 @@ func TestRoleManagementEndToEnd(t *testing.T) {
 		t.Fatalf("role change events = %d, want 1", changes)
 	}
 }
+
+func TestEnrollmentEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string), body["user"].(map[string]any)["id"].(string)
+	}
+	adminTok, _ := signIn("sub-admin", "admin@example.com")
+	studentTok, studentID := signIn("sub-student", "student@example.com")
+	admin, student := bearer(adminTok), bearer(studentTok)
+
+	// publish creates a published course with one non-preview lecture and returns its IDs.
+	publish := func(priced bool) (string, string) {
+		t.Helper()
+		resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create: %d %v", resp.StatusCode, body)
+		}
+		courseID := body["id"].(string)
+		if priced {
+			resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/price", `{"amount_minor":150000,"currency":"NPR"}`, admin)
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("price: %d %v", resp.StatusCode, body)
+			}
+		}
+		resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"L1","text_body":"<p>x</p>"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+		}
+		lectures := body["lectures"].([]any)
+		lectureID := lectures[len(lectures)-1].(map[string]any)["id"].(string)
+		if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("publish: %d", resp.StatusCode)
+		}
+		return courseID, lectureID
+	}
+	read := func(courseID, lectureID string) (int, any) {
+		resp, body := c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content", "", student)
+		return resp.StatusCode, body["type"]
+	}
+
+	// Free course: self-enroll unlocks content; cancel locks it again.
+	freeID, freeLecture := publish(false)
+	if code, typ := read(freeID, freeLecture); code != http.StatusForbidden || typ != "enrollment_required" {
+		t.Fatalf("before enroll: %d %v", code, typ)
+	}
+	resp, body := c.do(http.MethodPost, "/v1/courses/"+freeID+"/enrollments/"+studentID, "", student)
+	if resp.StatusCode != http.StatusCreated || body["status"] != "active" || body["user_id"] != studentID {
+		t.Fatalf("self enroll: %d %v", resp.StatusCode, body)
+	}
+	if code, _ := read(freeID, freeLecture); code != http.StatusOK {
+		t.Fatalf("enrolled read: %d", code)
+	}
+	resp, body = c.do(http.MethodDelete, "/v1/courses/"+freeID+"/enrollments/"+studentID, "", student)
+	if resp.StatusCode != http.StatusOK || body["status"] != "canceled" {
+		t.Fatalf("cancel: %d %v", resp.StatusCode, body)
+	}
+	if code, typ := read(freeID, freeLecture); code != http.StatusForbidden || typ != "enrollment_required" {
+		t.Fatalf("after cancel: %d %v", code, typ)
+	}
+
+	// Paid course: the student must pay; a manager can enroll them.
+	paidID, paidLecture := publish(true)
+	resp, body = c.do(http.MethodPost, "/v1/courses/"+paidID+"/enrollments/"+studentID, "", student)
+	if resp.StatusCode != http.StatusPaymentRequired || body["type"] != "payment_required" {
+		t.Fatalf("paid self enroll: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+paidID+"/enrollments/"+studentID, "", admin); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("manager enroll: %d %v", resp.StatusCode, body)
+	}
+	if code, _ := read(paidID, paidLecture); code != http.StatusOK {
+		t.Fatalf("comped read: %d", code)
+	}
+
+	resp, body = c.do(http.MethodGet, "/v1/courses/"+paidID+"/enrollments", "", admin)
+	if resp.StatusCode != http.StatusOK || body["total"] != float64(1) {
+		t.Fatalf("roster: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/courses/"+paidID+"/enrollments", "", student); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("student roster: %d", resp.StatusCode)
+	}
+
+	var activations, cancellations int
+	if err := pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE payload->>'destination_topic' = 'enrollment.enrollment.activated'),
+		count(*) FILTER (WHERE payload->>'destination_topic' = 'enrollment.enrollment.canceled')
+		FROM platform.outbox_messages`).Scan(&activations, &cancellations); err != nil {
+		t.Fatal(err)
+	}
+	if activations != 2 || cancellations != 1 {
+		t.Fatalf("activations=%d cancellations=%d", activations, cancellations)
+	}
+}

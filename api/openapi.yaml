@@ -592,6 +592,115 @@ paths:
         "429": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/enrollments/{userID}:
+    post:
+      summary: Enroll a user in a course
+      description: >
+        A user may enroll themselves in a published free course; a published paid course
+        returns 402 `payment_required`. The course owner or a root admin may enroll any user
+        in a published course, free or paid (409 `course_not_published` otherwise).
+        Re-enrolling reactivates a canceled enrollment. Non-managers get 404 for unpublished
+        courses.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "201":
+          description: Enrollment created or reactivated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enrollment" }
+        "200":
+          description: The user was already enrolled
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enrollment" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "402": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      summary: Cancel an enrollment
+      description: >
+        The enrolled user, the course owner, or a root admin. Canceling a canceled enrollment
+        returns it unchanged. The body is optional.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CancelEnrollmentRequest" }
+      responses:
+        "200":
+          description: The canceled enrollment
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Enrollment" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/enrollments:
+    get:
+      summary: List a course's active enrollments
+      description: Course owner or root admin. Ordered by enrollment time.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 200, default: 50 }
+        - name: offset
+          in: query
+          schema: { type: integer, minimum: 0, default: 0 }
+      responses:
+        "200":
+          description: One page of active enrollments
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EnrollmentPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/users/{userID}/enrollments:
+    get:
+      summary: List a user's active enrollments
+      description: The user themselves or a root admin. Newest first.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          description: Active enrollments
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Enrollment" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -754,6 +863,28 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Course" }
         total: { type: integer }
+    Enrollment:
+      type: object
+      required: [id, course_id, user_id, status, enrolled_at]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        course_id: { $ref: "#/components/schemas/ID" }
+        user_id: { $ref: "#/components/schemas/ID" }
+        status: { type: string, enum: [active, canceled] }
+        enrolled_at: { type: string, format: date-time }
+        canceled_at: { type: string, format: date-time, description: Present only when canceled }
+    EnrollmentPage:
+      type: object
+      required: [enrollments, total]
+      properties:
+        enrollments:
+          type: array
+          items: { $ref: "#/components/schemas/Enrollment" }
+        total: { type: integer }
+    CancelEnrollmentRequest:
+      type: object
+      properties:
+        reason: { type: string, maxLength: 500 }
     FlashcardCard:
       type: object
       required: [front, back]
