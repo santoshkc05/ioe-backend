@@ -24,10 +24,11 @@ type ContentService struct {
 	ids         *id.Generator
 	enrollments EnrollmentQuery
 	assets      AssetCatalog
+	quizzes     QuizCatalog
 }
 
-func NewContentService(tx TxRunner, ids *id.Generator, enrollments EnrollmentQuery, assets AssetCatalog) *ContentService {
-	return &ContentService{tx: tx, ids: ids, enrollments: enrollments, assets: assets}
+func NewContentService(tx TxRunner, ids *id.Generator, enrollments EnrollmentQuery, assets AssetCatalog, quizzes QuizCatalog) *ContentService {
+	return &ContentService{tx: tx, ids: ids, enrollments: enrollments, assets: assets, quizzes: quizzes}
 }
 
 // LectureContentView is a lecture's full content.
@@ -98,6 +99,13 @@ func (s *ContentService) CheckAssetRead(ctx context.Context, p auth.Principal, c
 	return nil
 }
 
+// CheckLectureRead applies Get's access rules: ErrNotFound or ErrEnrollmentRequired. For
+// internal callers.
+func (s *ContentService) CheckLectureRead(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error {
+	_, err := s.Get(ctx, p, courseID, lectureID)
+	return err
+}
+
 // lockEditable checks the caller manages an editable course and locks the lecture row.
 func lockEditable(ctx context.Context, r Repos, p auth.Principal, courseID, lectureID id.ID) (LectureHeader, error) {
 	c, err := loadManaged(ctx, r, p, courseID)
@@ -115,7 +123,7 @@ func (s *ContentService) Replace(ctx context.Context, p auth.Principal, courseID
 	if err != nil {
 		return err
 	}
-	refErr, err := checkAssetRefs(ctx, s.assets, courseID, inputAssetRefs(blocks))
+	refErr, err := checkBlockRefs(ctx, s.assets, s.quizzes, courseID, lectureID, blocks)
 	if err != nil {
 		return err
 	}
@@ -142,7 +150,7 @@ func (s *ContentService) Patch(ctx context.Context, p auth.Principal, courseID, 
 	if err != nil {
 		return 0, err
 	}
-	refErr, err := checkAssetRefs(ctx, s.assets, courseID, inputAssetRefs(in.Upserts))
+	refErr, err := checkBlockRefs(ctx, s.assets, s.quizzes, courseID, lectureID, in.Upserts)
 	if err != nil {
 		return 0, err
 	}

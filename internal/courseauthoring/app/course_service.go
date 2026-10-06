@@ -13,14 +13,15 @@ import (
 
 // CourseService implements course structure, lifecycle and read use cases.
 type CourseService struct {
-	tx     TxRunner
-	ids    *id.Generator
-	clock  clock.Clock
-	assets AssetCatalog
+	tx      TxRunner
+	ids     *id.Generator
+	clock   clock.Clock
+	assets  AssetCatalog
+	quizzes QuizCatalog
 }
 
-func NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock, assets AssetCatalog) *CourseService {
-	return &CourseService{tx: tx, ids: ids, clock: c, assets: assets}
+func NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock, assets AssetCatalog, quizzes QuizCatalog) *CourseService {
+	return &CourseService{tx: tx, ids: ids, clock: c, assets: assets, quizzes: quizzes}
 }
 
 type CreateCourseInput struct {
@@ -152,15 +153,36 @@ func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts,
 // archived. For internal callers.
 func (s *CourseService) CheckManage(ctx context.Context, p auth.Principal, courseID id.ID) error {
 	return s.tx.RunInTx(ctx, func(r Repos) error {
-		c, err := loadManaged(ctx, r, p, courseID)
+		_, err := loadEditable(ctx, r, p, courseID)
+		return err
+	})
+}
+
+// CheckLectureManage applies CheckManage and returns ErrNotFound when the lecture is not in
+// the course. For internal callers.
+func (s *CourseService) CheckLectureManage(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error {
+	return s.tx.RunInTx(ctx, func(r Repos) error {
+		c, err := loadEditable(ctx, r, p, courseID)
 		if err != nil {
 			return err
 		}
-		if c.Status == domain.StatusArchived {
-			return domain.ErrCourseNotEditable
+		if _, ok := c.Lecture(lectureID); !ok {
+			return ErrNotFound
 		}
 		return nil
 	})
+}
+
+// loadEditable is loadManaged that also rejects archived courses.
+func loadEditable(ctx context.Context, r Repos, p auth.Principal, courseID id.ID) (domain.Course, error) {
+	c, err := loadManaged(ctx, r, p, courseID)
+	if err != nil {
+		return domain.Course{}, err
+	}
+	if c.Status == domain.StatusArchived {
+		return domain.Course{}, domain.ErrCourseNotEditable
+	}
+	return c, nil
 }
 
 func (s *CourseService) ListByOwner(ctx context.Context, p auth.Principal, ownerID id.ID) ([]domain.Course, error) {
@@ -250,8 +272,9 @@ func (s *CourseService) AddLecture(ctx context.Context, p auth.Principal, course
 	if err != nil {
 		return domain.Course{}, err
 	}
+	lectureID := s.ids.New()
 	// Ask before opening the transaction (see ContentService.Get); report only after authorizing.
-	refErr, err := checkAssetRefs(ctx, s.assets, courseID, inputAssetRefs(in.Blocks))
+	refErr, err := checkBlockRefs(ctx, s.assets, s.quizzes, courseID, lectureID, in.Blocks)
 	if err != nil {
 		return domain.Course{}, err
 	}
@@ -264,7 +287,6 @@ func (s *CourseService) AddLecture(ctx context.Context, p auth.Principal, course
 		if refErr != nil {
 			return refErr
 		}
-		lectureID := s.ids.New()
 		if err := c.AddLecture(lectureID, title, content.HasText(), content.HasVideo(), s.clock.Now()); err != nil {
 			return err
 		}

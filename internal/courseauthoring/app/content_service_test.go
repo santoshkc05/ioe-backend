@@ -24,7 +24,7 @@ type contentFixture struct {
 func newContentFixture(t *testing.T, enroll enrolled) contentFixture {
 	t.Helper()
 	courses, store := newCourseService(t)
-	contents := app.NewContentService(store, testIDs(t), enroll, assetCatalog{})
+	contents := app.NewContentService(store, testIDs(t), enroll, assetCatalog{}, quizCatalog{})
 	c, _ := courses.Create(ctx, owner, app.CreateCourseInput{Title: "Go"})
 	c, _ = courses.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "Free", Legacy: app.LegacyContent{TextBody: "<p>free</p>"}})
 	c, _ = courses.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "Locked", Legacy: app.LegacyContent{TextBody: "<p>locked</p>"}})
@@ -58,7 +58,7 @@ func TestGetContentAccess(t *testing.T) {
 
 	g := newContentFixture(t, enrolled{})
 	_ = g.courses.Publish(ctx, owner, g.course.ID)
-	g.contents = app.NewContentService(g.store, testIDs(t), enrolled{{g.course.ID, student.UserID}: true}, assetCatalog{})
+	g.contents = app.NewContentService(g.store, testIDs(t), enrolled{{g.course.ID, student.UserID}: true}, assetCatalog{}, quizCatalog{})
 	if _, err := g.contents.Get(ctx, student, g.course.ID, g.locked); err != nil {
 		t.Fatalf("enrolled err = %v", err)
 	}
@@ -82,7 +82,7 @@ func (q txProbe) IsActivelyEnrolled(context.Context, id.ID, id.ID) (bool, error)
 func TestGetContentChecksEnrollmentOutsideTx(t *testing.T) {
 	f := newContentFixture(t, enrolled{})
 	_ = f.courses.Publish(ctx, owner, f.course.ID)
-	f.contents = app.NewContentService(f.store, testIDs(t), txProbe{t: t, store: f.store}, assetCatalog{})
+	f.contents = app.NewContentService(f.store, testIDs(t), txProbe{t: t, store: f.store}, assetCatalog{}, quizCatalog{})
 	if _, err := f.contents.Get(ctx, student, f.course.ID, f.locked); !errors.Is(err, app.ErrEnrollmentRequired) {
 		t.Fatalf("locked err = %v", err)
 	}

@@ -11,6 +11,25 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AssessmentQuiz struct {
+	ID        int64
+	CourseID  int64
+	LectureID int64
+	Position  int32
+	Questions json.RawMessage
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
+type AssessmentQuizAttempt struct {
+	ID             int64
+	QuizID         int64
+	UserID         int64
+	Answers        json.RawMessage
+	IdempotencyKey pgtype.Text
+	SubmittedAt    time.Time
+}
+
 type CourseauthoringCourse struct {
 	ID               int64
 	OwnerID          int64

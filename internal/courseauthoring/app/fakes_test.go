@@ -211,6 +211,21 @@ func (c assetCatalog) Kinds(_ context.Context, courseID id.ID, ids []id.ID) (map
 	return out, nil
 }
 
+// quizCatalog maps {courseID, quizID} to the quiz's lecture.
+type quizCatalog map[[2]id.ID]id.ID
+
+var _ app.QuizCatalog = quizCatalog(nil)
+
+func (c quizCatalog) Lectures(_ context.Context, courseID id.ID, ids []id.ID) (map[id.ID]id.ID, error) {
+	out := map[id.ID]id.ID{}
+	for _, v := range ids {
+		if l, ok := c[[2]id.ID{courseID, v}]; ok {
+			out[v] = l
+		}
+	}
+	return out, nil
+}
+
 func testIDs(t *testing.T) *id.Generator {
 	t.Helper()
 	g, err := id.NewGenerator(0)

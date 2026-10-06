@@ -144,6 +144,7 @@ var errorMappings = []errorMapping{
 	{domain.ErrCourseHasNoLectures, http.StatusBadRequest, "empty_course", "Empty Course"},
 	{domain.ErrUnsupportedCurrency, http.StatusBadRequest, "unsupported_currency", "Unsupported Currency"},
 	{app.ErrInvalidMediaReference, http.StatusBadRequest, "invalid_media_reference", "Invalid Media Reference"},
+	{app.ErrInvalidQuizReference, http.StatusBadRequest, "invalid_quiz_reference", "Invalid Quiz Reference"},
 	{app.ErrInvalidInput, http.StatusBadRequest, "invalid_input", "Invalid Input"},
 	{domain.ErrInvalidPrice, http.StatusBadRequest, "invalid_input", "Invalid Input"},
 	{domain.ErrInvalidLevel, http.StatusBadRequest, "invalid_input", "Invalid Input"},

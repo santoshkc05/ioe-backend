@@ -31,8 +31,8 @@ func newAssetFixture(t *testing.T) assetFixture {
 		{f.course.ID, imageAsset}: app.AssetImage,
 		{777, foreignAsset}:       app.AssetVideo,
 	}
-	f.contents = app.NewContentService(f.store, testIDs(t), enrolled{}, cat)
-	f.courses = app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, cat)
+	f.contents = app.NewContentService(f.store, testIDs(t), enrolled{}, cat, quizCatalog{})
+	f.courses = app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, cat, quizCatalog{})
 	return assetFixture{contentFixture: f, cat: cat}
 }
 
@@ -84,7 +84,7 @@ func TestPatchValidatesOnlyUpserts(t *testing.T) {
 	}
 	v, _ := f.contents.Get(ctx, owner, f.course.ID, f.locked)
 	// The catalog forgets the video: untouched blocks are not re-checked.
-	f.contents = app.NewContentService(f.store, testIDs(t), enrolled{}, assetCatalog{})
+	f.contents = app.NewContentService(f.store, testIDs(t), enrolled{}, assetCatalog{}, quizCatalog{})
 	rev, err := f.contents.Patch(ctx, owner, f.course.ID, f.locked, app.PatchInput{
 		BaseRevision: ptr(v.ContentRevision), Order: []string{"v", "t"},
 		Upserts: []app.BlockInput{{ClientBlockID: "t", Type: "text", Body: "<p>t</p>"}},
@@ -151,16 +151,28 @@ func (q catalogProbe) Kinds(context.Context, id.ID, []id.ID) (map[id.ID]app.Asse
 	return map[id.ID]app.AssetKind{}, nil
 }
 
+func (q catalogProbe) Lectures(context.Context, id.ID, []id.ID) (map[id.ID]id.ID, error) {
+	if !q.store.mu.TryLock() {
+		q.t.Error("quiz catalog consulted inside the content transaction")
+		return nil, nil
+	}
+	q.store.mu.Unlock()
+	return map[id.ID]id.ID{}, nil
+}
+
 func TestCatalogIsConsultedOutsideTx(t *testing.T) {
 	f := newContentFixture(t, enrolled{})
 	probe := catalogProbe{t: t, store: f.store}
-	contents := app.NewContentService(f.store, testIDs(t), enrolled{}, probe)
-	courses := app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, probe)
+	contents := app.NewContentService(f.store, testIDs(t), enrolled{}, probe, probe)
+	courses := app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, probe, probe)
 	_ = contents.Replace(ctx, owner, f.course.ID, f.locked, []app.BlockInput{videoBlock("v", videoAsset)}, app.LegacyContent{})
 	v, _ := contents.Get(ctx, owner, f.course.ID, f.locked)
 	_, _ = contents.Patch(ctx, owner, f.course.ID, f.locked, app.PatchInput{BaseRevision: ptr(v.ContentRevision),
 		Order: []string{v.Blocks[0].ClientBlockID(), "v"}, Upserts: []app.BlockInput{videoBlock("v", videoAsset)}})
 	_, _ = courses.AddLecture(ctx, owner, f.course.ID, app.AddLectureInput{Title: "V", Blocks: []app.BlockInput{videoBlock("v", videoAsset)}})
+	quiz := []app.BlockInput{{ClientBlockID: "q", Type: "quiz", QuizID: "4242"}}
+	_ = contents.Replace(ctx, owner, f.course.ID, f.locked, quiz, app.LegacyContent{})
+	_, _ = courses.AddLecture(ctx, owner, f.course.ID, app.AddLectureInput{Title: "Q", Blocks: quiz})
 }
 
 func TestCheckManage(t *testing.T) {
@@ -206,7 +218,7 @@ func TestCheckAssetRead(t *testing.T) {
 	if err := f.contents.CheckAssetRead(ctx, student, f.course.ID, f.locked, videoAsset); !errors.Is(err, app.ErrEnrollmentRequired) {
 		t.Fatalf("not enrolled err = %v", err)
 	}
-	enrolledContents := app.NewContentService(f.store, testIDs(t), enrolled{{f.course.ID, student.UserID}: true}, f.cat)
+	enrolledContents := app.NewContentService(f.store, testIDs(t), enrolled{{f.course.ID, student.UserID}: true}, f.cat, quizCatalog{})
 	if err := enrolledContents.CheckAssetRead(ctx, student, f.course.ID, f.locked, videoAsset); err != nil {
 		t.Fatalf("enrolled err = %v", err)
 	}

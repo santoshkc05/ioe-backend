@@ -72,8 +72,8 @@ func newServerMintedClientBlockID() string {
 }
 
 // buildBlock constructs one contentblocks.Block from a wire-level BlockInput.
-// Every failure wraps ErrInvalidInput; references (quiz, media asset) are
-// stored unchecked.
+// Every failure wraps ErrInvalidInput. Quiz and media asset references are checked
+// separately by checkBlockRefs.
 func buildBlock(blockID id.ID, clientBlockID string, position int, in BlockInput) (contentblocks.Block, error) {
 	switch contentblocks.BlockType(in.Type) {
 	case contentblocks.BlockTypeText:
