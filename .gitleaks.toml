@@ -14,3 +14,8 @@ useDefault = true
 description = "OpenObserve local-dev default password (public documented default, compose fallback only)"
 regexTarget = "secret"
 regexes = ['''Complexpass#123''']
+
+[[allowlists]]
+description = "Local-only media service credentials used by docker compose and .env.example"
+regexTarget = "secret"
+regexes = ['''local-media-api-key-change-me-32-bytes''', '''local-media-delivery-secret-change-me-32''', '''media-local-dev''']

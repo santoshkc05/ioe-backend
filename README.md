@@ -53,6 +53,27 @@ Without an active enrollment the write answers `409 enrollment_required`. Studen
 (all courses plus daily activity); the course owner or a root admin can read a student's
 progress in that course. Canceling an enrollment keeps progress.
 
+## Media
+
+Course owners and root admins upload lecture videos and images through the standalone media
+service in `../hitox-media-service`. `POST /v1/courses/{courseID}/media/uploads` with
+`{kind, content_type, filename, size_bytes}` returns presigned URLs; the browser uploads the
+bytes directly to object storage, then calls `POST /v1/media/uploads/{assetID}/complete` and
+polls `GET /v1/media/assets/{assetID}` until `status` is `ready`. Put the asset ID in a video
+block's, image block's, or flashcard card's `media_asset_id`; content writes reject assets of
+another course or the wrong kind with `400 invalid_media_reference`. Anyone who may read a
+lecture gets short-lived URLs with `GET /v1/courses/{courseID}/lectures/{lectureID}/media/{assetID}`.
+
+Configure `MEDIA_SERVICE_BASE_URL` (what the backend calls), `MEDIA_SERVICE_PUBLIC_URL` (what
+browsers use for the service's `/v1/delivery` paths), and `MEDIA_SERVICE_API_KEY`, or none of
+them to disable uploads. `docker compose --profile app up --build` runs the service with MinIO.
+
+In production the media service shares the application database but owns only the
+`media_service` schema (`ioe-backend` owns `media`). Before the media service first starts, a
+database administrator creates a dedicated login role for it and runs
+`GRANT CONNECT, CREATE ON DATABASE <database> TO <role>;`, and the service runs with
+`DATABASE_SCHEMA=media_service`. Never grant the application role access to that schema.
+
 ## Notifications
 
 Welcome emails are sent through the standalone notification service in `../notification`.

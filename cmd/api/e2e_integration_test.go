@@ -14,7 +14,9 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -569,5 +571,251 @@ func TestProgressEndToEnd(t *testing.T) {
 	resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/progress/"+studentID, "", student)
 	if completed, _ = body["completed_lecture_ids"].([]any); resp.StatusCode != http.StatusOK || len(completed) != 1 {
 		t.Fatalf("kept after cancel: %d %v", resp.StatusCode, body)
+	}
+}
+
+const mediaKey = "test-media-api-key-0123456789abcdef"
+
+// fakeMediaService implements the subset of the media service API the backend calls.
+type fakeMediaService struct {
+	mu     sync.Mutex
+	next   int64
+	assets map[string]string // id -> kind
+	auth   []string
+}
+
+func newFakeMediaService(t *testing.T) (*fakeMediaService, *httptest.Server) {
+	t.Helper()
+	f := &fakeMediaService{next: 900000000000000000, assets: map[string]string{}}
+	asset := func(w http.ResponseWriter, assetID, kind string) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id": assetID, "namespace_id": "ioe", "kind": kind, "status": "ready", "progress_percent": 100,
+			"duration_ms": 60000, "width": 1280, "height": 720, "version": 1, "updated_at": time.Now().UTC(),
+		})
+	}
+	find := func(w http.ResponseWriter, r *http.Request) (string, string, bool) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.auth = append(f.auth, r.Header.Get("Authorization")+"|"+r.Header.Get("X-Namespace-ID"))
+		assetID := r.PathValue("id")
+		kind, ok := f.assets[assetID]
+		if !ok {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"code":"not_found","detail":"asset not found","status":404}`)
+		}
+		return assetID, kind, ok
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /v1/assets", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Kind string `json:"kind"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.mu.Lock()
+		f.next++
+		assetID := strconv.FormatInt(f.next, 10)
+		f.assets[assetID] = body.Kind
+		f.auth = append(f.auth, r.Header.Get("Authorization")+"|"+r.Header.Get("X-Namespace-ID"))
+		f.mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"asset_id": assetID, "namespace_id": "ioe", "upload_id": "up-" + assetID, "part_size": 5242880,
+			"part_urls":  []map[string]any{{"part_number": 1, "url": "http://objects.test/" + assetID + "/1"}},
+			"expires_at": time.Now().Add(time.Hour).UTC(),
+		})
+	})
+	mux.HandleFunc("POST /v1/assets/{id}/complete", func(w http.ResponseWriter, r *http.Request) {
+		if assetID, kind, ok := find(w, r); ok {
+			asset(w, assetID, kind)
+		}
+	})
+	mux.HandleFunc("GET /v1/assets/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if assetID, kind, ok := find(w, r); ok {
+			asset(w, assetID, kind)
+		}
+	})
+	mux.HandleFunc("POST /v1/assets/{id}/delivery", func(w http.ResponseWriter, r *http.Request) {
+		assetID, _, ok := find(w, r)
+		if !ok {
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"visibility": "private", "url": "/v1/delivery/" + assetID + "/master.m3u8?token=t",
+			"expires_at": time.Now().Add(15 * time.Minute).UTC(),
+			"renditions": []map[string]any{{"name": "poster", "content_type": "image/jpeg", "url": "http://objects.test/" + assetID + "/poster.jpg"}},
+		})
+	})
+	mux.HandleFunc("DELETE /v1/assets/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if assetID, _, ok := find(w, r); ok {
+			f.mu.Lock()
+			delete(f.assets, assetID)
+			f.mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return f, srv
+}
+
+func TestMediaEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	media, mediaSrv := newFakeMediaService(t)
+	cfg := baseConfig(t, google)
+	cfg.MediaServiceBaseURL = mediaSrv.URL
+	cfg.MediaServicePublicURL = "https://media.test"
+	cfg.MediaServiceAPIKey = mediaKey
+	a, err := buildApp(ctx, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string), body["user"].(map[string]any)["id"].(string)
+	}
+	adminTok, _ := signIn("sub-admin", "admin@example.com")
+	studentTok, studentID := signIn("sub-student", "student@example.com")
+	strangerTok, _ := signIn("sub-stranger", "stranger@example.com")
+	admin, student, stranger := bearer(adminTok), bearer(studentTok), bearer(strangerTok)
+
+	newCourse := func(title string) string {
+		resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"`+title+`","description":"d"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create course: %d %v", resp.StatusCode, body)
+		}
+		return body["id"].(string)
+	}
+	addLecture := func(courseID, title string) string {
+		resp, body := c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"`+title+`","text_body":"<p>x</p>"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+		}
+		ls := body["lectures"].([]any)
+		return ls[len(ls)-1].(map[string]any)["id"].(string)
+	}
+	upload := func(courseID string, who map[string]string) (int, string) {
+		resp, body := c.do(http.MethodPost, "/v1/courses/"+courseID+"/media/uploads",
+			`{"kind":"video","content_type":"video/mp4","filename":"a.mp4","size_bytes":1048576}`, who)
+		id, _ := body["asset_id"].(string)
+		return resp.StatusCode, id
+	}
+	putVideo := func(courseID, lectureID, assetID string) (int, any) {
+		resp, body := c.do(http.MethodPut, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content",
+			`{"blocks":[{"client_block_id":"v","type":"video","media_asset_id":"`+assetID+`","duration_ms":60000}]}`, admin)
+		return resp.StatusCode, body["type"]
+	}
+	play := func(courseID, lectureID, assetID string, who map[string]string) (int, map[string]any) {
+		resp, body := c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/media/"+assetID, "", who)
+		return resp.StatusCode, body
+	}
+
+	courseA, courseB := newCourse("A"), newCourse("B")
+	locked, preview := addLecture(courseA, "Locked"), addLecture(courseA, "Preview")
+
+	if code, _ := upload(courseA, student); code != http.StatusNotFound {
+		t.Fatalf("student upload to draft: %d", code)
+	}
+	code, video := upload(courseA, admin)
+	if code != http.StatusCreated || video == "" {
+		t.Fatalf("upload: %d %q", code, video)
+	}
+	resp, body := c.do(http.MethodPost, "/v1/media/uploads/"+video+"/complete", `{"parts":[{"part_number":1,"etag":"e1"}]}`, admin)
+	if resp.StatusCode != http.StatusOK || body["status"] != "ready" || body["course_id"] != courseA {
+		t.Fatalf("complete: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodGet, "/v1/media/assets/"+video, "", admin); resp.StatusCode != http.StatusOK || body["kind"] != "video" {
+		t.Fatalf("status: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/media/assets/"+video, "", stranger); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("stranger status: %d", resp.StatusCode)
+	}
+	_, foreign := upload(courseB, admin)
+
+	if code, typ := putVideo(courseA, locked, foreign); code != http.StatusBadRequest || typ != "invalid_media_reference" {
+		t.Fatalf("foreign asset: %d %v", code, typ)
+	}
+	if code, _ := putVideo(courseA, locked, video); code != http.StatusNoContent {
+		t.Fatalf("put video: %d", code)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseA+"/lectures/"+preview+"/free-preview", `{"free_preview":true}`, admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("free preview: %d", resp.StatusCode)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseA+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish: %d", resp.StatusCode)
+	}
+
+	if code, body := play(courseA, locked, video, student); code != http.StatusForbidden || body["type"] != "enrollment_required" {
+		t.Fatalf("before enroll: %d %v", code, body)
+	}
+	if code, _ := play(courseA, preview, video, stranger); code != http.StatusNotFound {
+		t.Fatalf("unreferenced on preview lecture: %d", code)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseA+"/enrollments/"+studentID, "", student); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("enroll: %d %v", resp.StatusCode, body)
+	}
+	code, body = play(courseA, locked, video, student)
+	if code != http.StatusOK || body["status"] != "ready" ||
+		body["playback_url"] != "https://media.test/v1/delivery/"+video+"/master.m3u8?token=t" ||
+		body["poster_url"] != "http://objects.test/"+video+"/poster.jpg" {
+		t.Fatalf("playback: %d %v", code, body)
+	}
+
+	if code, _ := putVideo(courseA, preview, video); code != http.StatusNoContent {
+		t.Fatalf("put preview video: %d", code)
+	}
+	if code, body := play(courseA, preview, video, stranger); code != http.StatusOK || body["playback_url"] == nil {
+		t.Fatalf("free preview playback: %d %v", code, body)
+	}
+	if code, _ := play(courseA, locked, foreign, student); code != http.StatusNotFound {
+		t.Fatalf("foreign asset playback: %d", code)
+	}
+
+	if resp, _ = c.do(http.MethodDelete, "/v1/media/assets/"+video, "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: %d", resp.StatusCode)
+	}
+	if code, _ := play(courseA, locked, video, student); code != http.StatusNotFound {
+		t.Fatalf("after delete: %d", code)
+	}
+
+	media.mu.Lock()
+	defer media.mu.Unlock()
+	for _, h := range media.auth {
+		if h != "Bearer "+mediaKey+"|ioe" {
+			t.Fatalf("media request headers = %q", h)
+		}
+	}
+}
+
+func TestMediaDisabledRoutesAreAbsent(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	resp, _ := client{t: t, base: srv.URL}.do(http.MethodGet, "/v1/media/assets/1", "", nil)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }

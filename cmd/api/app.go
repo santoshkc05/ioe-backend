@@ -20,6 +20,8 @@ import (
 	identitypg "github.com/santoshkc2200/ioe-backend/internal/identity/adapters/postgres"
 	identityapp "github.com/santoshkc2200/ioe-backend/internal/identity/app"
 	identitydomain "github.com/santoshkc2200/ioe-backend/internal/identity/domain"
+	mediapg "github.com/santoshkc2200/ioe-backend/internal/media/adapters/postgres"
+	mediaapp "github.com/santoshkc2200/ioe-backend/internal/media/app"
 	notificationevents "github.com/santoshkc2200/ioe-backend/internal/notification/adapters/events"
 	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/notifysvc"
 	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/templates"
@@ -71,9 +73,12 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	}
 	enrollmentTx := enrollmentpg.NewTxRunner(pool)
 	enrollmentAccess := enrollmentapp.NewAccessQuery(enrollmentTx)
-	courses, _ := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess, noAssets{}, identityHandler, ips, logger)
+	mediaAssets := mediapg.New(pool)
+	courses, contents := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess,
+		mediaAssetCatalog{query: mediaapp.NewAssetQuery(mediaAssets)}, identityHandler, ips, logger)
 	registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
 	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
+	registerMedia(router, mediaAssets, courses, contents, ids, clk, cfg, identityHandler.RequireAuth, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
 	if err != nil {
@@ -136,11 +141,4 @@ func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.G
 		},
 	).Register(r)
 	return courses, contents
-}
-
-// noAssets is a placeholder catalog that knows no assets; Task 7 replaces it.
-type noAssets struct{}
-
-func (noAssets) Kinds(context.Context, id.ID, []id.ID) (map[id.ID]courseauthoringapp.AssetKind, error) {
-	return map[id.ID]courseauthoringapp.AssetKind{}, nil
 }

@@ -416,6 +416,10 @@ paths:
   /v1/courses/{courseID}/lectures:
     post:
       summary: Add a lecture
+      description: >
+        A media_asset_id must name an uploaded asset of this course with the block's kind
+        (video for video blocks, image for image blocks and flashcard cards); otherwise
+        400 invalid_media_reference.
       security:
         - bearer: []
       parameters:
@@ -573,6 +577,10 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
     put:
       summary: Replace lecture content (blocks, or legacy text_body/video_url)
+      description: >
+        A media_asset_id must name an uploaded asset of this course with the block's kind
+        (video for video blocks, image for image blocks and flashcard cards); otherwise
+        400 invalid_media_reference.
       security:
         - bearer: []
       parameters:
@@ -597,6 +605,10 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
     patch:
       summary: Patch lecture content against base_revision; a stale base_revision is revision_conflict
+      description: >
+        A media_asset_id must name an uploaded asset of this course with the block's kind
+        (video for video blocks, image for image blocks and flashcard cards); otherwise
+        400 invalid_media_reference.
       security:
         - bearer: []
       parameters:
@@ -806,6 +818,170 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/media/uploads:
+    post:
+      summary: Start a direct upload of a video or image for a course (owner or root admin)
+      description: Rate-limited per user. Upload the bytes to the returned URLs, then complete.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CreateMediaUploadRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaUpload" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/media/uploads/{assetID}/parts:
+    post:
+      summary: Refresh presigned multipart URLs
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AssetID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [part_numbers]
+              properties:
+                part_numbers:
+                  type: array
+                  minItems: 1
+                  maxItems: 1000
+                  items: { type: integer, minimum: 1, maximum: 10000 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [part_urls]
+                properties:
+                  part_urls: { type: array, items: { $ref: "#/components/schemas/MediaUploadPart" } }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/media/uploads/{assetID}/complete:
+    post:
+      summary: Finish an upload and start processing
+      description: Send {} for a single-PUT image upload.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AssetID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              properties:
+                parts:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: false
+                    required: [part_number, etag]
+                    properties:
+                      part_number: { type: integer, minimum: 1, maximum: 10000 }
+                      etag: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaAsset" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/media/assets/{assetID}:
+    get:
+      summary: Read an asset's processing state (owner or root admin)
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AssetID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaAsset" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      summary: Delete an asset; blocks that still reference it resolve to not_found
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AssetID"
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/media/{assetID}:
+    get:
+      summary: Resolve playback or display URLs for an asset the lecture references
+      description: >
+        Same access rules as reading the lecture's content. Not cacheable.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+        - $ref: "#/components/parameters/AssetID"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/MediaPlayback" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "502": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -848,6 +1024,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/ID" }
+    AssetID:
+      name: assetID
+      in: path
+      required: true
+      schema: { type: string, pattern: "^[0-9]+$" }
   headers:
     RefreshCookie:
       description: >
@@ -1247,6 +1428,63 @@ components:
         deletes:
           type: array
           items: { type: string }
+    CreateMediaUploadRequest:
+      type: object
+      additionalProperties: false
+      required: [kind, content_type, filename, size_bytes]
+      properties:
+        kind: { type: string, enum: [video, image] }
+        content_type: { type: string, description: "video/* for videos; image/jpeg, image/png or image/webp for images" }
+        filename: { type: string }
+        size_bytes: { type: integer, format: int64, minimum: 1 }
+    MediaUploadPart:
+      type: object
+      required: [part_number, url]
+      properties:
+        part_number: { type: integer }
+        url: { type: string, format: uri }
+    MediaUpload:
+      type: object
+      required: [asset_id, expires_at]
+      description: Either upload_url (one PUT) or part_size and part_urls (multipart).
+      properties:
+        asset_id: { type: string }
+        upload_id: { type: string }
+        upload_url: { type: string, format: uri }
+        part_size: { type: integer, format: int64 }
+        part_urls: { type: array, items: { $ref: "#/components/schemas/MediaUploadPart" } }
+        expires_at: { type: string, format: date-time }
+    MediaAsset:
+      type: object
+      required: [id, course_id, kind, status, progress_percent, updated_at]
+      properties:
+        id: { type: string }
+        course_id: { type: string }
+        kind: { type: string, enum: [video, image] }
+        status: { type: string, enum: [uploading, processing, ready, failed, canceled, deleting] }
+        progress_percent: { type: integer, minimum: 0, maximum: 100 }
+        duration_ms: { type: integer, format: int64 }
+        width: { type: integer }
+        height: { type: integer }
+        error_message: { type: string }
+        updated_at: { type: string, format: date-time }
+    MediaPlayback:
+      type: object
+      required: [id, kind, status]
+      description: >
+        URLs are present only when status is ready. A video carries playback_url (a signed HLS
+        manifest) and optionally poster_url; an image carries url. URLs expire at expires_at.
+      properties:
+        id: { type: string }
+        kind: { type: string, enum: [video, image] }
+        status: { type: string }
+        playback_url: { type: string, format: uri }
+        url: { type: string, format: uri }
+        poster_url: { type: string, format: uri }
+        duration_ms: { type: integer, format: int64 }
+        width: { type: integer }
+        height: { type: integer }
+        expires_at: { type: string, format: date-time }
     Problem:
       type: object
       required: [type, title, status]
