@@ -121,13 +121,14 @@ func (s *CourseService) Get(ctx context.Context, p auth.Principal, courseID id.I
 
 // CourseFacts is what other contexts may know about a course without a principal.
 type CourseFacts struct {
-	Published bool
-	Free      bool
-	OwnerID   id.ID
+	Published  bool
+	Free       bool
+	OwnerID    id.ID
+	LectureIDs []id.ID // course order; empty, never nil, when the course has no lectures
 }
 
-// Facts returns a course's publication, price and ownership facts for internal callers.
-// It applies no authorization and must not be exposed over HTTP.
+// Facts returns a course's publication, price, ownership and lecture facts for internal
+// callers. It applies no authorization and must not be exposed over HTTP.
 func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts, error) {
 	var f CourseFacts
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
@@ -135,7 +136,11 @@ func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts,
 		if err != nil {
 			return err
 		}
-		f = CourseFacts{Published: c.Status == domain.StatusPublished, Free: c.Price.IsFree(), OwnerID: c.OwnerID}
+		lectureIDs := make([]id.ID, len(c.Lectures))
+		for i, l := range c.Lectures {
+			lectureIDs[i] = l.ID
+		}
+		f = CourseFacts{Published: c.Status == domain.StatusPublished, Free: c.Price.IsFree(), OwnerID: c.OwnerID, LectureIDs: lectureIDs}
 		return nil
 	})
 	return f, err

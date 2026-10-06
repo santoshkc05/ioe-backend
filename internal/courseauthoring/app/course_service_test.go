@@ -3,12 +3,14 @@ package app_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/courseauthoring/app"
 	"github.com/santoshkc2200/ioe-backend/internal/courseauthoring/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
 var (
@@ -163,7 +165,7 @@ func TestFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, err := svc.Facts(ctx, c.ID)
-	if err != nil || f != (app.CourseFacts{Published: false, Free: true, OwnerID: owner.UserID}) {
+	if err != nil || f.Published || !f.Free || f.OwnerID != owner.UserID || f.LectureIDs == nil || len(f.LectureIDs) != 0 {
 		t.Fatalf("draft facts = %+v, %v", f, err)
 	}
 	if _, err := svc.SetPrice(ctx, owner, c.ID, 150000, "NPR"); err != nil {
@@ -172,12 +174,17 @@ func TestFacts(t *testing.T) {
 	if _, err := svc.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "L1"}); err != nil {
 		t.Fatal(err)
 	}
+	withTwo, err := svc.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "L2"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := svc.Publish(ctx, owner, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	f, err = svc.Facts(ctx, c.ID)
-	if err != nil || f != (app.CourseFacts{Published: true, Free: false, OwnerID: owner.UserID}) {
-		t.Fatalf("published facts = %+v, %v", f, err)
+	want := []id.ID{withTwo.Lectures[0].ID, withTwo.Lectures[1].ID}
+	if err != nil || !f.Published || f.Free || f.OwnerID != owner.UserID || !slices.Equal(f.LectureIDs, want) {
+		t.Fatalf("published facts = %+v, %v; want lecture IDs %v", f, err, want)
 	}
 	if _, err := svc.Facts(ctx, 424242); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("missing err = %v", err)
