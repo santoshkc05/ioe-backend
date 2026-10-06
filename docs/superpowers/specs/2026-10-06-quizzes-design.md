@@ -160,8 +160,10 @@ type QuizRepository interface {
     Find(ctx context.Context, quizID id.ID) (domain.Quiz, error)
     // ListByLecture orders by position, then ID.
     ListByLecture(ctx context.Context, courseID, lectureID id.ID) ([]domain.Quiz, error)
-    // Save inserts or replaces the quiz.
-    Save(ctx context.Context, q domain.Quiz) error
+    Insert(ctx context.Context, q domain.Quiz) error
+    // Replace overwrites position, questions and updated time; ErrNotFound when absent, so a
+    // concurrent delete is never undone.
+    Replace(ctx context.Context, q domain.Quiz) error
     // Delete removes the quiz and its attempts; a no-op when absent.
     Delete(ctx context.Context, quizID id.ID) error
     // LecturesOf returns the lecture of each given quiz that belongs to courseID.
@@ -209,8 +211,10 @@ its own pool connection (see 32ede6d).
 - `RecordAttempt(ctx, p, quizID, userID, answers, key)`: `ErrForbidden` when `userID` is not
   `p.UserID`; `ErrInvalidInput` when the key is longer than 128 characters; finds the quiz;
   `CanReadLecture`; `IsActivelyEnrolled` or `ErrEnrollmentRequired`; `CheckAnswers`; records.
-- `QuizLectures(ctx, courseID, quizIDs)`: `LecturesOf` for the courseauthoring adapter. It applies
-  no authorization and is not exposed over HTTP.
+`QuizQuery` (`NewQuizQuery(tx)`) has one method, `Lectures(ctx, courseID, quizIDs)`, backed by
+`LecturesOf`. It applies no authorization and is not exposed over HTTP. It is separate from
+`QuizService` because courseauthoring needs it at construction time, while `QuizService` needs
+courseauthoring's services; the split breaks that cycle the way media's `AssetQuery` does.
 
 App errors: `ErrNotFound`, `ErrForbidden`, `ErrInvalidInput`, `ErrCourseNotEditable`,
 `ErrEnrollmentRequired`. Domain validation errors wrap `ErrInvalidInput`.
@@ -222,8 +226,10 @@ App errors: `ErrNotFound`, `ErrForbidden`, `ErrInvalidInput`, `ErrCourseNotEdita
 - `CourseService.CheckLectureManage(ctx, p, courseID, lectureID)` applies `CheckManage` and returns
   `ErrNotFound` when the lecture is not in the course.
 - A `QuizCatalog` port (`Lectures(ctx, courseID, quizIDs) (map[id.ID]id.ID, error)`) and
-  `checkQuizRefs`, mirroring `AssetCatalog` and `checkAssetRefs`: on replace and patch, every
-  upserted quiz block's `quiz_id` must map to the lecture being saved, otherwise
+  `checkQuizRefs`, mirroring `AssetCatalog` and `checkAssetRefs`. Both `ContentService` and
+  `CourseService` take it. On replace, patch, and `AddLecture`, every upserted quiz block's
+  `quiz_id` must map to the lecture being saved (a new lecture has no quizzes, so `AddLecture`
+  rejects every quiz block), otherwise
   `ErrInvalidQuizReference` (`400 invalid_quiz_reference`). The check runs before the transaction
   opens and the error is returned only after the caller is authorized, as for assets.
 - `blocks.go` stops describing quiz references as unchecked.
@@ -326,7 +332,8 @@ client sends `reference_lecture_id: ""` for questions without one. Request bodie
   `ContentService.CheckLectureRead`, translating courseauthoring errors to assessment errors as
   `toMediaError` does for media.
 - An enrollment adapter over `AccessQuery.IsActivelyEnrolled`.
-- A courseauthoring `QuizCatalog` adapter over `QuizService.QuizLectures`.
+- `*assessmentapp.QuizQuery` passed directly as courseauthoring's `QuizCatalog`; the method sets
+  match, so no adapter is needed.
 
 `.golangci.yml` gains `assessment-domain` and `assessment-app` depguard rules, adds the context to
 `platform-independent-of-contexts`, and denies it from every other context. `api/openapi.yaml`
