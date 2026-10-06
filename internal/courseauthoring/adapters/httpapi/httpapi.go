@@ -21,6 +21,7 @@ type CourseService interface {
 	Create(ctx context.Context, p auth.Principal, in app.CreateCourseInput) (domain.Course, error)
 	Get(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error)
 	ListByOwner(ctx context.Context, p auth.Principal, ownerID id.ID) ([]domain.Course, error)
+	ListPublished(ctx context.Context, q app.CatalogQuery) (app.CatalogPage, error)
 	UpdateDetails(ctx context.Context, p auth.Principal, courseID id.ID, in app.DetailsInput) error
 	SetPrice(ctx context.Context, p auth.Principal, courseID id.ID, amountMinor int64, currency string) (domain.Course, error)
 	Publish(ctx context.Context, p auth.Principal, courseID id.ID) error
@@ -45,7 +46,10 @@ type ContentService interface {
 
 type Config struct {
 	RequireAuth    httpserver.Middleware
+	OptionalAuth   httpserver.Middleware
+	IPs            httpserver.IPResolver
 	ContentLimiter *httpserver.RateLimiter
+	CatalogLimiter *httpserver.RateLimiter
 	Logger         *slog.Logger
 }
 
@@ -59,12 +63,17 @@ func New(courses CourseService, contents ContentService, cfg Config) *Handler {
 	return &Handler{courses: courses, contents: contents, cfg: cfg}
 }
 
-// Register mounts the course authoring routes. Every route requires authentication.
+// Register mounts the course authoring routes. GET /v1/courses and GET /v1/courses/{courseID}
+// are public and rate-limited per client IP; every other route requires authentication.
 func (h *Handler) Register(r *httpserver.Router) {
 	a := func(f http.HandlerFunc) http.Handler { return h.cfg.RequireAuth(f) }
+	public := func(f http.HandlerFunc) http.Handler {
+		return h.cfg.CatalogLimiter.Middleware(h.cfg.IPs)(h.cfg.OptionalAuth(f))
+	}
+	r.Handle("GET /v1/courses", public(h.listCatalog))
 	r.Handle("POST /v1/courses", a(h.createCourse))
 	r.Handle("GET /v1/users/{ownerID}/courses", a(h.listByOwner))
-	r.Handle("GET /v1/courses/{courseID}", a(h.getCourse))
+	r.Handle("GET /v1/courses/{courseID}", public(h.getCourse))
 	r.Handle("PATCH /v1/courses/{courseID}", a(h.updateDetails))
 	r.Handle("POST /v1/courses/{courseID}/price", a(h.setPrice))
 	r.Handle("POST /v1/courses/{courseID}/publish", a(h.publish))
@@ -98,8 +107,10 @@ func pathIDs(w http.ResponseWriter, r *http.Request, names ...string) ([]id.ID, 
 	return out, true
 }
 
+// principal returns the caller, or the zero Principal on a public route without a token.
+// The zero Principal manages no course, so it sees published courses only.
 func principal(r *http.Request) auth.Principal {
-	p, _ := auth.PrincipalFrom(r.Context()) // RequireAuth guarantees presence
+	p, _ := auth.PrincipalFrom(r.Context())
 	return p
 }
 

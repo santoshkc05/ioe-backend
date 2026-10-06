@@ -29,6 +29,19 @@ func fakeAuth(next http.Handler) http.Handler {
 	})
 }
 
+// fakeOptionalAuth passes requests without X-Test-User through anonymously and
+// authenticates the rest like fakeAuth.
+func fakeOptionalAuth(next http.Handler) http.Handler {
+	authed := fakeAuth(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, present := r.Header["X-Test-User"]; !present {
+			next.ServeHTTP(w, r)
+			return
+		}
+		authed.ServeHTTP(w, r)
+	})
+}
+
 func newServer(t *testing.T, perMinute int) http.Handler {
 	t.Helper()
 	store := newMemStore()
@@ -40,7 +53,9 @@ func newServer(t *testing.T, perMinute int) http.Handler {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r, h := httpserver.NewRouter(httpserver.Options{Logger: logger, AllowedOrigins: []string{"https://app.test"}, ServiceName: "test"})
 	httpapi.New(app.NewCourseService(store, ids, clk), app.NewContentService(store, ids, enrolled{}), httpapi.Config{
-		RequireAuth: fakeAuth, ContentLimiter: httpserver.NewRateLimiter(perMinute), Logger: logger,
+		RequireAuth: fakeAuth, OptionalAuth: fakeOptionalAuth, IPs: httpserver.NewIPResolver(nil),
+		ContentLimiter: httpserver.NewRateLimiter(perMinute), CatalogLimiter: httpserver.NewRateLimiter(perMinute),
+		Logger: logger,
 	}).Register(r)
 	return h
 }

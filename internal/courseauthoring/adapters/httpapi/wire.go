@@ -291,3 +291,40 @@ func lectureContentConflictExt(v app.LectureContentView) map[string]any {
 	}
 	return ext
 }
+
+type courseSummaryWire struct {
+	ID           id.ID     `json:"id"`
+	OwnerID      id.ID     `json:"owner_id"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	Level        string    `json:"level"`
+	ThumbnailURL string    `json:"thumbnail_url"`
+	Price        priceWire `json:"price"`
+	IsFree       bool      `json:"is_free"`
+	LectureCount int       `json:"lecture_count"`
+	SectionCount int       `json:"section_count"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+type catalogPageWire struct {
+	Courses    []courseSummaryWire `json:"courses"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+}
+
+func toCatalogPageWire(p app.CatalogPage) catalogPageWire {
+	w := catalogPageWire{Courses: make([]courseSummaryWire, 0, len(p.Courses))}
+	for _, c := range p.Courses {
+		w.Courses = append(w.Courses, courseSummaryWire{
+			ID: c.ID, OwnerID: c.OwnerID, Title: c.Title, Description: c.Description,
+			Level: c.Level, ThumbnailURL: c.ThumbnailURL,
+			Price: priceWire{c.Price.AmountMinor, c.Price.Currency}, IsFree: c.Price.IsFree(),
+			LectureCount: c.LectureCount, SectionCount: c.SectionCount,
+			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		})
+	}
+	if p.Next != 0 {
+		w.NextCursor = p.Next.String()
+	}
+	return w
+}
