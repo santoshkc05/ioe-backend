@@ -63,7 +63,7 @@ type EnrollmentEnrollment struct {
 	Status       string
 	CancelReason string
 	EnrolledAt   time.Time
-	CanceledAt   *time.Time
+	CanceledAt   pgtype.Timestamptz
 	Version      int64
 }
 
@@ -74,11 +74,11 @@ type IdentityRefreshToken struct {
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
-	UsedAt          *time.Time
-	RevokedAt       *time.Time
+	UsedAt          pgtype.Timestamptz
+	RevokedAt       pgtype.Timestamptz
 	CreatedAt       time.Time
 	UserAgent       string
-	IP              string
+	Ip              string
 }
 
 type IdentityUser struct {
@@ -86,7 +86,7 @@ type IdentityUser struct {
 	GoogleSub   string
 	Email       string
 	Name        string
-	AvatarURL   string
+	AvatarUrl   string
 	Role        string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time

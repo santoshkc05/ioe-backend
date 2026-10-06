@@ -93,6 +93,14 @@ type IdentityUser struct {
 	LastLoginAt time.Time
 }
 
+type MediaAsset struct {
+	ID        int64
+	CourseID  int64
+	Kind      string
+	CreatedBy int64
+	CreatedAt time.Time
+}
+
 type PlatformOutboxMessage struct {
 	Offset        int64
 	Uuid          string
