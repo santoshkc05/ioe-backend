@@ -819,3 +819,130 @@ func TestMediaDisabledRoutesAreAbsent(t *testing.T) {
 		t.Fatalf("status = %d", resp.StatusCode)
 	}
 }
+
+func TestQuizzesEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string), body["user"].(map[string]any)["id"].(string)
+	}
+	adminTok, _ := signIn("sub-admin", "admin@example.com")
+	studentTok, studentID := signIn("sub-student", "student@example.com")
+	strangerTok, strangerID := signIn("sub-stranger", "stranger@example.com")
+	admin, student, stranger := bearer(adminTok), bearer(studentTok), bearer(strangerTok)
+
+	resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create course: %d %v", resp.StatusCode, body)
+	}
+	courseID := body["id"].(string)
+	var lectures []string
+	for _, title := range []string{"L1", "L2"} {
+		resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"`+title+`","text_body":"<p>x</p>"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+		}
+		ls := body["lectures"].([]any)
+		lectures = append(lectures, ls[len(ls)-1].(map[string]any)["id"].(string))
+	}
+	quizzesPath := "/v1/courses/" + courseID + "/lectures/" + lectures[0] + "/quizzes"
+
+	// An instructor creates a quiz and references it from the lecture.
+	resp, body = c.do(http.MethodPost, quizzesPath, `{"position":0,"questions":[{"prompt":"2+2?","type":"single_choice",`+
+		`"explanation":"arith","reference_lecture_id":"","options":[{"label":"4","is_correct":true},{"label":"5","is_correct":false}]}]}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create quiz: %d %v", resp.StatusCode, body)
+	}
+	quizID := body["id"].(string)
+	question := body["questions"].([]any)[0].(map[string]any)
+	questionID := question["id"].(string)
+	correct := question["correct_option_ids"].([]any)[0].(string)
+	putQuizBlock := func(lectureID string) (int, any) {
+		resp, body := c.do(http.MethodPut, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content",
+			`{"blocks":[{"client_block_id":"q","type":"quiz","quiz_id":"`+quizID+`"}]}`, admin)
+		return resp.StatusCode, body["type"]
+	}
+	if code, typ := putQuizBlock(lectures[0]); code != http.StatusNoContent {
+		t.Fatalf("own lecture block: %d %v", code, typ)
+	}
+	if code, typ := putQuizBlock(lectures[1]); code != http.StatusBadRequest || typ != "invalid_quiz_reference" {
+		t.Fatalf("other lecture block: %d %v", code, typ)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish: %d", resp.StatusCode)
+	}
+
+	list := func(who map[string]string) (int, []map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+quizzesPath, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range who {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out []map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+	if code, _ := list(student); code != http.StatusConflict {
+		t.Fatalf("list before enroll: %d", code)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/enrollments/"+studentID, "", student); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("enroll: %d %v", resp.StatusCode, body)
+	}
+	if code, qs := list(student); code != http.StatusOK || len(qs) != 1 || qs[0]["id"] != quizID {
+		t.Fatalf("list: %d %v", code, qs)
+	}
+
+	attempt := `{"user_id":"` + studentID + `","answers":[{"question_id":"` + questionID + `","option_ids":["` + correct + `"]}]}`
+	key := map[string]string{"Authorization": student["Authorization"], "Idempotency-Key": "attempt-1"}
+	resp, body = c.do(http.MethodPost, "/v1/quizzes/"+quizID+"/attempts", attempt, key)
+	if resp.StatusCode != http.StatusCreated || body["recorded"] != true {
+		t.Fatalf("record: %d %v", resp.StatusCode, body)
+	}
+	first := body["id"]
+	resp, body = c.do(http.MethodPost, "/v1/quizzes/"+quizID+"/attempts", attempt, key)
+	if resp.StatusCode != http.StatusCreated || body["id"] != first {
+		t.Fatalf("replay: %d %v first=%v", resp.StatusCode, body, first)
+	}
+	forStranger := `{"user_id":"` + strangerID + `","answers":[]}`
+	if resp, body = c.do(http.MethodPost, "/v1/quizzes/"+quizID+"/attempts", forStranger, student); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("record for another user: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/quizzes/"+quizID+"/attempts", forStranger, stranger); resp.StatusCode != http.StatusConflict || body["type"] != "enrollment_required" {
+		t.Fatalf("unenrolled: %d %v", resp.StatusCode, body)
+	}
+
+	if resp, _ = c.do(http.MethodDelete, "/v1/quizzes/"+quizID, "", student); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("student delete: %d", resp.StatusCode)
+	}
+	if resp, _ = c.do(http.MethodDelete, "/v1/quizzes/"+quizID, "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: %d", resp.StatusCode)
+	}
+	if code, qs := list(student); code != http.StatusOK || len(qs) != 0 {
+		t.Fatalf("after delete: %d %v", code, qs)
+	}
+}

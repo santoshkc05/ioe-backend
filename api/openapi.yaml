@@ -419,7 +419,8 @@ paths:
       description: >
         A media_asset_id must name an uploaded asset of this course with the block's kind
         (video for video blocks, image for image blocks and flashcard cards); otherwise
-        400 invalid_media_reference.
+        400 invalid_media_reference. A quiz_id must name a quiz of this lecture; otherwise
+        400 invalid_quiz_reference.
       security:
         - bearer: []
       parameters:
@@ -580,7 +581,8 @@ paths:
       description: >
         A media_asset_id must name an uploaded asset of this course with the block's kind
         (video for video blocks, image for image blocks and flashcard cards); otherwise
-        400 invalid_media_reference.
+        400 invalid_media_reference. A quiz_id must name a quiz of this lecture; otherwise
+        400 invalid_quiz_reference.
       security:
         - bearer: []
       parameters:
@@ -608,7 +610,8 @@ paths:
       description: >
         A media_asset_id must name an uploaded asset of this course with the block's kind
         (video for video blocks, image for image blocks and flashcard cards); otherwise
-        400 invalid_media_reference.
+        400 invalid_media_reference. A quiz_id must name a quiz of this lecture; otherwise
+        400 invalid_quiz_reference.
       security:
         - bearer: []
       parameters:
@@ -982,6 +985,139 @@ paths:
         "502": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/quizzes:
+    get:
+      summary: List a lecture's quizzes with answer keys
+      description: >
+        Anyone who may read the lecture's content: a course manager, anyone on a free-preview
+        lecture of a published course, or an actively enrolled student. The client grades
+        locally, so answer keys are included. Ordered by position, then ID.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      responses:
+        "200":
+          description: Quizzes
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/Quiz" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      summary: Create a quiz in a lecture
+      description: The course owner or a root admin, on a course that is not archived. Question and option IDs are generated.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveQuizRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Quiz" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/quizzes/{quizID}:
+    put:
+      summary: Replace a quiz's position and questions
+      description: >
+        The course owner or a root admin. Supplied question and option IDs must already belong
+        to this quiz; omitted IDs are generated.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+        - $ref: "#/components/parameters/QuizID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveQuizRequest" }
+      responses:
+        "200":
+          description: Updated
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Quiz" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/quizzes/{quizID}:
+    delete:
+      summary: Delete a quiz and its attempts
+      description: The course owner or a root admin. Lecture blocks referencing the quiz are kept.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/QuizID"
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/quizzes/{quizID}/attempts:
+    post:
+      summary: Record a quiz attempt
+      description: >
+        Only the user themselves (`user_id` must be the caller), with an active enrollment.
+        Answers are stored as submitted; the client grades. Retrying with the same
+        Idempotency-Key returns the first attempt's ID.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/QuizID"
+        - name: Idempotency-Key
+          in: header
+          required: false
+          schema: { type: string, maxLength: 128 }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordQuizAttemptRequest" }
+      responses:
+        "201":
+          description: Recorded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/QuizAttemptResult" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -1029,6 +1165,11 @@ components:
       in: path
       required: true
       schema: { type: string, pattern: "^[0-9]+$" }
+    QuizID:
+      name: quizID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
   headers:
     RefreshCookie:
       description: >
@@ -1524,3 +1665,89 @@ components:
         status: { type: integer }
         detail: { type: string }
         instance: { type: string, description: Request ID }
+    QuizOption:
+      type: object
+      required: [id, label]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        label: { type: string }
+    QuizQuestion:
+      type: object
+      required: [id, prompt, type, options, correct_option_ids, explanation]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        prompt: { type: string }
+        type: { type: string, enum: [single_choice, multiple_choice, true_false] }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/QuizOption" }
+        correct_option_ids:
+          type: array
+          items: { $ref: "#/components/schemas/ID" }
+        explanation: { type: string }
+    Quiz:
+      type: object
+      required: [id, lecture_id, position, questions]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        lecture_id: { $ref: "#/components/schemas/ID" }
+        position: { type: integer, minimum: 0 }
+        questions:
+          type: array
+          items: { $ref: "#/components/schemas/QuizQuestion" }
+    SaveQuizRequest:
+      type: object
+      required: [position, questions]
+      additionalProperties: false
+      properties:
+        position: { type: integer, minimum: 0 }
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items:
+            type: object
+            required: [prompt, type, options]
+            additionalProperties: false
+            properties:
+              id: { type: string, description: Empty or omitted for a new question }
+              prompt: { type: string, maxLength: 5000 }
+              type: { type: string, enum: [single_choice, multiple_choice, true_false] }
+              explanation: { type: string, maxLength: 5000 }
+              points: { type: integer, minimum: 1, description: Defaults to 1 }
+              reference_lecture_id: { type: string, description: Empty or omitted when absent }
+              options:
+                type: array
+                minItems: 2
+                maxItems: 10
+                items:
+                  type: object
+                  required: [label, is_correct]
+                  additionalProperties: false
+                  properties:
+                    id: { type: string, description: Empty or omitted for a new option }
+                    label: { type: string, maxLength: 1000 }
+                    is_correct: { type: boolean }
+    RecordQuizAttemptRequest:
+      type: object
+      required: [user_id, answers]
+      additionalProperties: false
+      properties:
+        user_id: { $ref: "#/components/schemas/ID" }
+        answers:
+          type: array
+          items:
+            type: object
+            required: [question_id, option_ids]
+            additionalProperties: false
+            properties:
+              question_id: { $ref: "#/components/schemas/ID" }
+              option_ids:
+                type: array
+                items: { $ref: "#/components/schemas/ID" }
+    QuizAttemptResult:
+      type: object
+      required: [id, recorded]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        recorded: { type: boolean }
