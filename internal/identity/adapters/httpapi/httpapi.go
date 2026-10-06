@@ -106,22 +106,46 @@ func (h *Handler) Register(r *httpserver.Router) {
 	r.Handle("PUT /v1/admin/users/{userID}/role", admin(h.setRole))
 }
 
-// RequireAuth rejects requests without a valid bearer access token and stores the principal.
+// RequireAuth rejects requests without a valid bearer token.
 func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
-		if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
-			h.unauthorized(w, r)
-			return
-		}
-		p, err := h.verifier.Verify(token)
-		if err != nil {
-			h.cfg.Logger.DebugContext(r.Context(), "access token rejected", "reason", err.Error())
+		p, ok := h.verifyBearer(r)
+		if !ok {
 			h.unauthorized(w, r)
 			return
 		}
 		next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), p)))
 	})
+}
+
+// OptionalAuth lets requests without an Authorization header through with no principal.
+// A header that is present must carry a valid bearer token.
+func (h *Handler) OptionalAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, present := r.Header["Authorization"]; !present {
+			next.ServeHTTP(w, r)
+			return
+		}
+		p, ok := h.verifyBearer(r)
+		if !ok {
+			h.unauthorized(w, r)
+			return
+		}
+		next.ServeHTTP(w, r.WithContext(auth.WithPrincipal(r.Context(), p)))
+	})
+}
+
+func (h *Handler) verifyBearer(r *http.Request) (auth.Principal, bool) {
+	scheme, token, ok := strings.Cut(r.Header.Get("Authorization"), " ")
+	if !ok || !strings.EqualFold(scheme, "Bearer") || token == "" {
+		return auth.Principal{}, false
+	}
+	p, err := h.verifier.Verify(token)
+	if err != nil {
+		h.cfg.Logger.DebugContext(r.Context(), "access token rejected", "reason", err.Error())
+		return auth.Principal{}, false
+	}
+	return p, true
 }
 
 func (h *Handler) unauthorized(w http.ResponseWriter, r *http.Request) {

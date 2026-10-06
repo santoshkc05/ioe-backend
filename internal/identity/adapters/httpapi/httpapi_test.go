@@ -576,3 +576,41 @@ func TestAdminErrorMapping(t *testing.T) {
 		}
 	}
 }
+
+func TestOptionalAuth(t *testing.T) {
+	ih, err := httpapi.New(&fakeService{}, &fakeService{}, fakeVerifier{}, httpapi.Config{
+		AllowedOrigins: []string{origin}, Logger: discard,
+		IPs: httpserver.NewIPResolver(nil), AuthLimiter: httpserver.NewRateLimiter(100),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got auth.Principal
+	var present bool
+	h := ih.OptionalAuth(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		got, present = auth.PrincipalFrom(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+
+	resp := do(h, http.MethodGet, "/", "", nil)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || present {
+		t.Fatalf("no header: %d, principal present %v", resp.StatusCode, present)
+	}
+
+	for _, authz := range []string{"Basic good", "Bearer bad", "Bearer", "Bearer "} {
+		resp := do(h, http.MethodGet, "/", "", map[string]string{"Authorization": authz})
+		if resp.StatusCode != http.StatusUnauthorized || resp.Header.Get("WWW-Authenticate") == "" ||
+			problemType(t, resp) != "invalid_token" {
+			t.Errorf("%q: %d", authz, resp.StatusCode)
+		}
+		resp.Body.Close()
+	}
+
+	resp = do(h, http.MethodGet, "/", "", map[string]string{"Authorization": "Bearer good"})
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || !present || got.UserID != user.ID {
+		t.Fatalf("valid token: %d, %+v", resp.StatusCode, got)
+	}
+}
+
