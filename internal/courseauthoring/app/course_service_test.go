@@ -24,7 +24,7 @@ var (
 func newCourseService(t *testing.T) (*app.CourseService, *memStore) {
 	t.Helper()
 	store := newMemStore()
-	return app.NewCourseService(store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}), store
+	return app.NewCourseService(store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, assetCatalog{}), store
 }
 
 func TestCreateAuthorization(t *testing.T) {

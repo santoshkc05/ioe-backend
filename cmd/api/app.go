@@ -71,7 +71,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	}
 	enrollmentTx := enrollmentpg.NewTxRunner(pool)
 	enrollmentAccess := enrollmentapp.NewAccessQuery(enrollmentTx)
-	courses := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess, identityHandler, ips, logger)
+	courses, _ := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess, noAssets{}, identityHandler, ips, logger)
 	registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
 	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
 
@@ -120,19 +120,27 @@ func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *ide
 	return h, nil
 }
 
-// registerCourseAuthoring mounts course authoring and returns its course service for
-// contexts that read course facts.
-func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, authn *httpapi.Handler, ips httpserver.IPResolver, logger *slog.Logger) *courseauthoringapp.CourseService {
+// registerCourseAuthoring mounts course authoring and returns its course and content services
+// for contexts that read course facts or check lecture access.
+func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, assets courseauthoringapp.AssetCatalog, authn *httpapi.Handler, ips httpserver.IPResolver, logger *slog.Logger) (*courseauthoringapp.CourseService, *courseauthoringapp.ContentService) {
 	tx := courseauthoringpg.NewTxRunner(pool, clk)
-	courses := courseauthoringapp.NewCourseService(tx, ids, clk)
+	courses := courseauthoringapp.NewCourseService(tx, ids, clk, assets)
+	contents := courseauthoringapp.NewContentService(tx, ids, enrollments, assets)
 	courseauthoringhttp.New(
 		courses,
-		courseauthoringapp.NewContentService(tx, ids, enrollments),
+		contents,
 		courseauthoringhttp.Config{
 			RequireAuth: authn.RequireAuth, OptionalAuth: authn.OptionalAuth, IPs: ips,
 			ContentLimiter: httpserver.NewRateLimiter(60), CatalogLimiter: httpserver.NewRateLimiter(120),
 			Logger: logger,
 		},
 	).Register(r)
-	return courses
+	return courses, contents
+}
+
+// noAssets is a placeholder catalog that knows no assets; Task 7 replaces it.
+type noAssets struct{}
+
+func (noAssets) Kinds(context.Context, id.ID, []id.ID) (map[id.ID]courseauthoringapp.AssetKind, error) {
+	return map[id.ID]courseauthoringapp.AssetKind{}, nil
 }

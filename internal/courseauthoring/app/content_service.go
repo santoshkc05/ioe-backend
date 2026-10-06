@@ -23,10 +23,11 @@ type ContentService struct {
 	tx          TxRunner
 	ids         *id.Generator
 	enrollments EnrollmentQuery
+	assets      AssetCatalog
 }
 
-func NewContentService(tx TxRunner, ids *id.Generator, enrollments EnrollmentQuery) *ContentService {
-	return &ContentService{tx: tx, ids: ids, enrollments: enrollments}
+func NewContentService(tx TxRunner, ids *id.Generator, enrollments EnrollmentQuery, assets AssetCatalog) *ContentService {
+	return &ContentService{tx: tx, ids: ids, enrollments: enrollments, assets: assets}
 }
 
 // LectureContentView is a lecture's full content.
@@ -84,6 +85,19 @@ func (s *ContentService) Get(ctx context.Context, p auth.Principal, courseID, le
 	return v, err
 }
 
+// CheckAssetRead applies Get's access rules and returns ErrNotFound unless the lecture's blocks
+// reference assetID. For internal callers.
+func (s *ContentService) CheckAssetRead(ctx context.Context, p auth.Principal, courseID, lectureID, assetID id.ID) error {
+	v, err := s.Get(ctx, p, courseID, lectureID)
+	if err != nil {
+		return err
+	}
+	if !blocksReference(v.Blocks, assetID) {
+		return ErrNotFound
+	}
+	return nil
+}
+
 // lockEditable checks the caller manages an editable course and locks the lecture row.
 func lockEditable(ctx context.Context, r Repos, p auth.Principal, courseID, lectureID id.ID) (LectureHeader, error) {
 	c, err := loadManaged(ctx, r, p, courseID)
@@ -101,9 +115,16 @@ func (s *ContentService) Replace(ctx context.Context, p auth.Principal, courseID
 	if err != nil {
 		return err
 	}
+	refErr, err := checkAssetRefs(ctx, s.assets, courseID, inputAssetRefs(blocks))
+	if err != nil {
+		return err
+	}
 	return s.tx.RunInTx(ctx, func(r Repos) error {
 		if _, err := lockEditable(ctx, r, p, courseID, lectureID); err != nil {
 			return err
+		}
+		if refErr != nil {
+			return refErr
 		}
 		_, err := r.Contents.ReplaceBlocks(ctx, courseID, lectureID, content.Blocks())
 		return err
@@ -121,11 +142,18 @@ func (s *ContentService) Patch(ctx context.Context, p auth.Principal, courseID, 
 	if err != nil {
 		return 0, err
 	}
+	refErr, err := checkAssetRefs(ctx, s.assets, courseID, inputAssetRefs(in.Upserts))
+	if err != nil {
+		return 0, err
+	}
 	var rev int64
 	err = s.tx.RunInTx(ctx, func(r Repos) error {
 		h, err := lockEditable(ctx, r, p, courseID, lectureID)
 		if err != nil {
 			return err
+		}
+		if refErr != nil {
+			return refErr
 		}
 		if h.ContentRevision != *in.BaseRevision {
 			current, err := readView(ctx, r, h)

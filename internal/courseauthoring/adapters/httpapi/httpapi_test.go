@@ -52,7 +52,7 @@ func newServer(t *testing.T, perMinute int) http.Handler {
 	clk := fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r, h := httpserver.NewRouter(httpserver.Options{Logger: logger, AllowedOrigins: []string{"https://app.test"}, ServiceName: "test"})
-	httpapi.New(app.NewCourseService(store, ids, clk), app.NewContentService(store, ids, enrolled{}), httpapi.Config{
+	httpapi.New(app.NewCourseService(store, ids, clk, assetCatalog{}), app.NewContentService(store, ids, enrolled{}, assetCatalog{}), httpapi.Config{
 		RequireAuth: fakeAuth, OptionalAuth: fakeOptionalAuth, IPs: httpserver.NewIPResolver(nil),
 		ContentLimiter: httpserver.NewRateLimiter(perMinute), CatalogLimiter: httpserver.NewRateLimiter(perMinute),
 		Logger: logger,
@@ -301,4 +301,12 @@ func TestListByOwner(t *testing.T) {
 	}
 	resp, body = call(h, "GET", "/v1/users/100/courses", other, instrRL, "")
 	expectProblem(t, resp, body, 403, "forbidden")
+}
+
+func TestInvalidMediaReference(t *testing.T) {
+	h := newServer(t, 100)
+	cid, _, lid := lectureFlow(t, h)
+	resp, body := call(h, "PUT", "/v1/courses/"+cid+"/lectures/"+lid+"/content", instr, instrRL,
+		`{"blocks":[{"client_block_id":"v","type":"video","media_asset_id":"9001","duration_ms":60000}]}`)
+	expectProblem(t, resp, body, 400, "invalid_media_reference")
 }

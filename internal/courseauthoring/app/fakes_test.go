@@ -196,6 +196,21 @@ func (e enrolled) IsActivelyEnrolled(_ context.Context, courseID, userID id.ID) 
 	return e[[2]id.ID{courseID, userID}], nil
 }
 
+// assetCatalog maps {courseID, assetID} to a kind.
+type assetCatalog map[[2]id.ID]app.AssetKind
+
+var _ app.AssetCatalog = assetCatalog(nil)
+
+func (c assetCatalog) Kinds(_ context.Context, courseID id.ID, ids []id.ID) (map[id.ID]app.AssetKind, error) {
+	out := map[id.ID]app.AssetKind{}
+	for _, v := range ids {
+		if k, ok := c[[2]id.ID{courseID, v}]; ok {
+			out[v] = k
+		}
+	}
+	return out, nil
+}
+
 func testIDs(t *testing.T) *id.Generator {
 	t.Helper()
 	g, err := id.NewGenerator(0)

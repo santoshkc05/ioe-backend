@@ -13,13 +13,14 @@ import (
 
 // CourseService implements course structure, lifecycle and read use cases.
 type CourseService struct {
-	tx    TxRunner
-	ids   *id.Generator
-	clock clock.Clock
+	tx     TxRunner
+	ids    *id.Generator
+	clock  clock.Clock
+	assets AssetCatalog
 }
 
-func NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock) *CourseService {
-	return &CourseService{tx: tx, ids: ids, clock: c}
+func NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock, assets AssetCatalog) *CourseService {
+	return &CourseService{tx: tx, ids: ids, clock: c, assets: assets}
 }
 
 type CreateCourseInput struct {
@@ -146,6 +147,22 @@ func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts,
 	return f, err
 }
 
+// CheckManage returns nil when p manages the course and it is not archived: ErrNotFound when
+// p cannot see it, ErrForbidden when p does not manage it, domain.ErrCourseNotEditable when
+// archived. For internal callers.
+func (s *CourseService) CheckManage(ctx context.Context, p auth.Principal, courseID id.ID) error {
+	return s.tx.RunInTx(ctx, func(r Repos) error {
+		c, err := loadManaged(ctx, r, p, courseID)
+		if err != nil {
+			return err
+		}
+		if c.Status == domain.StatusArchived {
+			return domain.ErrCourseNotEditable
+		}
+		return nil
+	})
+}
+
 func (s *CourseService) ListByOwner(ctx context.Context, p auth.Principal, ownerID id.ID) ([]domain.Course, error) {
 	if p.UserID != ownerID && p.Role != auth.RoleRootAdmin {
 		return nil, ErrForbidden
@@ -233,11 +250,19 @@ func (s *CourseService) AddLecture(ctx context.Context, p auth.Principal, course
 	if err != nil {
 		return domain.Course{}, err
 	}
+	// Ask before opening the transaction (see ContentService.Get); report only after authorizing.
+	refErr, err := checkAssetRefs(ctx, s.assets, courseID, inputAssetRefs(in.Blocks))
+	if err != nil {
+		return domain.Course{}, err
+	}
 	var out domain.Course
 	err = s.tx.RunInTx(ctx, func(r Repos) error {
 		c, err := loadManaged(ctx, r, p, courseID)
 		if err != nil {
 			return err
+		}
+		if refErr != nil {
+			return refErr
 		}
 		lectureID := s.ids.New()
 		if err := c.AddLecture(lectureID, title, content.HasText(), content.HasVideo(), s.clock.Now()); err != nil {
