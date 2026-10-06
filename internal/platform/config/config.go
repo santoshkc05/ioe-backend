@@ -34,6 +34,9 @@ type Config struct {
 	LogLevel                      string   `env:"LOG_LEVEL" envDefault:"info"`
 	NotificationServiceBaseURL    string   `env:"NOTIFICATION_SERVICE_BASE_URL"`
 	NotificationServiceSendAPIKey string   `env:"NOTIFICATION_SERVICE_SEND_API_KEY"`
+	MediaServiceBaseURL           string   `env:"MEDIA_SERVICE_BASE_URL"`
+	MediaServicePublicURL         string   `env:"MEDIA_SERVICE_PUBLIC_URL"`
+	MediaServiceAPIKey            string   `env:"MEDIA_SERVICE_API_KEY"`
 }
 
 // Load reads the process environment.
@@ -85,6 +88,10 @@ func (c Config) TrustedProxies() []netip.Prefix {
 // LoadFrom guarantees that both variables are set or neither is.
 func (c Config) NotificationsEnabled() bool { return c.NotificationServiceBaseURL != "" }
 
+// MediaEnabled reports whether the media service is configured.
+// LoadFrom guarantees that all three media variables are set or none is.
+func (c Config) MediaEnabled() bool { return c.MediaServiceBaseURL != "" }
+
 func (c *Config) normalize() {
 	c.GoogleClientIDs = cleanList(c.GoogleClientIDs)
 	c.AllowedOrigins = cleanList(c.AllowedOrigins)
@@ -120,6 +127,7 @@ func (c *Config) validate() error {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL: %w", err))
 	}
 	errs = append(errs, c.validateNotifications()...)
+	errs = append(errs, c.validateMedia()...)
 	return errors.Join(errs...)
 }
 
@@ -139,6 +147,44 @@ func (c *Config) validateNotifications() []error {
 	}
 	if key, err := base64.RawURLEncoding.DecodeString(c.NotificationServiceSendAPIKey); err != nil || len(key) < 32 {
 		errs = append(errs, errors.New("NOTIFICATION_SERVICE_SEND_API_KEY: must be unpadded base64url encoding at least 32 bytes"))
+	}
+	return errs
+}
+
+const minMediaAPIKeyLen = 32
+
+func (c *Config) validateMedia() []error {
+	vars := []struct{ name, value string }{
+		{"MEDIA_SERVICE_BASE_URL", c.MediaServiceBaseURL},
+		{"MEDIA_SERVICE_PUBLIC_URL", c.MediaServicePublicURL},
+		{"MEDIA_SERVICE_API_KEY", c.MediaServiceAPIKey},
+	}
+	var set, missing []string
+	for _, v := range vars {
+		if v.value == "" {
+			missing = append(missing, v.name)
+		} else {
+			set = append(set, v.name)
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	var errs []error
+	for _, name := range missing {
+		errs = append(errs, fmt.Errorf("%s: required when %s is set", name, strings.Join(set, " and ")))
+	}
+	if len(errs) > 0 {
+		return errs
+	}
+	if !isBaseURL(c.MediaServiceBaseURL) {
+		errs = append(errs, fmt.Errorf("MEDIA_SERVICE_BASE_URL: %q is not an absolute http(s) URL without query or fragment", c.MediaServiceBaseURL))
+	}
+	if !isBaseURL(c.MediaServicePublicURL) {
+		errs = append(errs, fmt.Errorf("MEDIA_SERVICE_PUBLIC_URL: %q is not an absolute http(s) URL without query or fragment", c.MediaServicePublicURL))
+	}
+	if len(c.MediaServiceAPIKey) < minMediaAPIKeyLen {
+		errs = append(errs, fmt.Errorf("MEDIA_SERVICE_API_KEY: must be at least %d characters", minMediaAPIKeyLen))
 	}
 	return errs
 }

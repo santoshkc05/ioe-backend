@@ -161,3 +161,58 @@ func TestNotificationConfigRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+const localMediaKey = "local-media-api-key-change-me-32-bytes"
+
+func mediaEnv() map[string]string {
+	env := validEnv()
+	env["MEDIA_SERVICE_BASE_URL"] = "http://media:8080"
+	env["MEDIA_SERVICE_PUBLIC_URL"] = "http://localhost:8082"
+	env["MEDIA_SERVICE_API_KEY"] = localMediaKey
+	return env
+}
+
+func TestMediaDisabledByDefault(t *testing.T) {
+	cfg, err := config.LoadFrom(validEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MediaEnabled() {
+		t.Fatal("media enabled without configuration")
+	}
+}
+
+func TestMediaEnabled(t *testing.T) {
+	cfg, err := config.LoadFrom(mediaEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.MediaEnabled() || cfg.MediaServiceBaseURL != "http://media:8080" ||
+		cfg.MediaServicePublicURL != "http://localhost:8082" || cfg.MediaServiceAPIKey != localMediaKey {
+		t.Fatalf("%+v", cfg)
+	}
+}
+
+func TestMediaConfigRejectsInvalidValues(t *testing.T) {
+	cases := map[string]struct{ key, value, wantVar string }{
+		"missing base url":      {"MEDIA_SERVICE_BASE_URL", "", "MEDIA_SERVICE_BASE_URL"},
+		"missing public url":    {"MEDIA_SERVICE_PUBLIC_URL", "", "MEDIA_SERVICE_PUBLIC_URL"},
+		"missing key":           {"MEDIA_SERVICE_API_KEY", "", "MEDIA_SERVICE_API_KEY"},
+		"base url no scheme":    {"MEDIA_SERVICE_BASE_URL", "media:8080", "MEDIA_SERVICE_BASE_URL"},
+		"public url with query": {"MEDIA_SERVICE_PUBLIC_URL", "http://localhost:8082?x=1", "MEDIA_SERVICE_PUBLIC_URL"},
+		"short key":             {"MEDIA_SERVICE_API_KEY", "short", "MEDIA_SERVICE_API_KEY"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			env := mediaEnv()
+			env[tc.key] = tc.value
+			_, err := config.LoadFrom(env)
+			if err == nil || !strings.Contains(err.Error(), tc.wantVar) {
+				t.Fatalf("err = %v, want mention of %s", err, tc.wantVar)
+			}
+			if err != nil && strings.Contains(err.Error(), localMediaKey) {
+				t.Fatalf("error leaks the key: %v", err)
+			}
+		})
+	}
+}
