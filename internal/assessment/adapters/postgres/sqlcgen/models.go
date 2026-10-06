@@ -11,6 +11,37 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AssessmentExam struct {
+	ID               int64
+	CourseID         int64
+	Title            string
+	Description      string
+	Position         int32
+	Status           string
+	PassMark         int32
+	TimeLimitSeconds *int32
+	RetakesAllowed   bool
+	OpensAt          *time.Time
+	ClosesAt         *time.Time
+	RevealPolicy     string
+	Questions        json.RawMessage
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type AssessmentExamAttempt struct {
+	ID            int64
+	ExamID        int64
+	CourseID      int64
+	UserID        int64
+	StartedAt     time.Time
+	SubmittedAt   *time.Time
+	Score         *int32
+	Passed        *bool
+	AutoSubmitted bool
+	Answers       json.RawMessage
+}
+
 type AssessmentQuiz struct {
 	ID        int64
 	CourseID  int64
@@ -83,7 +114,7 @@ type EnrollmentEnrollment struct {
 	Status       string
 	CancelReason string
 	EnrolledAt   time.Time
-	CanceledAt   pgtype.Timestamptz
+	CanceledAt   *time.Time
 	Version      int64
 }
 
@@ -94,8 +125,8 @@ type IdentityRefreshToken struct {
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
-	UsedAt          pgtype.Timestamptz
-	RevokedAt       pgtype.Timestamptz
+	UsedAt          *time.Time
+	RevokedAt       *time.Time
 	CreatedAt       time.Time
 	UserAgent       string
 	Ip              string

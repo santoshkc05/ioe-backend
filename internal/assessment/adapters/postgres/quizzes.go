@@ -162,9 +162,18 @@ func questionsJSON(qs []domain.Question) (json.RawMessage, error) {
 
 // toQuiz rebuilds the quiz without re-validating: stored rows were validated on write.
 func toQuiz(row sqlcgen.AssessmentQuiz) (domain.Quiz, error) {
-	var docs []questionDoc
-	if err := json.Unmarshal(row.Questions, &docs); err != nil {
+	qs, err := toQuestions(row.Questions)
+	if err != nil {
 		return domain.Quiz{}, err
+	}
+	return domain.Quiz{ID: id.ID(row.ID), CourseID: id.ID(row.CourseID), LectureID: id.ID(row.LectureID), Position: int(row.Position),
+		Questions: qs, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, nil
+}
+
+func toQuestions(raw json.RawMessage) ([]domain.Question, error) {
+	var docs []questionDoc
+	if err := json.Unmarshal(raw, &docs); err != nil {
+		return nil, err
 	}
 	qs := make([]domain.Question, len(docs))
 	for i, d := range docs {
@@ -177,6 +186,5 @@ func toQuiz(row sqlcgen.AssessmentQuiz) (domain.Quiz, error) {
 			qs[i].ReferenceLectureID = *d.ReferenceLectureID
 		}
 	}
-	return domain.Quiz{ID: id.ID(row.ID), CourseID: id.ID(row.CourseID), LectureID: id.ID(row.LectureID), Position: int(row.Position),
-		Questions: qs, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, nil
+	return qs, nil
 }

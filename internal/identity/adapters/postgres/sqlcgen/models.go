@@ -10,6 +10,37 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AssessmentExam struct {
+	ID               int64
+	CourseID         int64
+	Title            string
+	Description      string
+	Position         int32
+	Status           string
+	PassMark         int32
+	TimeLimitSeconds pgtype.Int4
+	RetakesAllowed   bool
+	OpensAt          *time.Time
+	ClosesAt         *time.Time
+	RevealPolicy     string
+	Questions        []byte
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type AssessmentExamAttempt struct {
+	ID            int64
+	ExamID        int64
+	CourseID      int64
+	UserID        int64
+	StartedAt     time.Time
+	SubmittedAt   *time.Time
+	Score         pgtype.Int4
+	Passed        pgtype.Bool
+	AutoSubmitted bool
+	Answers       []byte
+}
+
 type AssessmentQuiz struct {
 	ID        int64
 	CourseID  int64

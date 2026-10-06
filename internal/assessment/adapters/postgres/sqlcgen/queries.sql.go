@@ -11,6 +11,33 @@ import (
 	"time"
 )
 
+const countExamAttempts = `-- name: CountExamAttempts :one
+SELECT count(*) FILTER (WHERE submitted_at IS NULL)::integer AS open_attempts,
+       count(*) FILTER (WHERE submitted_at IS NOT NULL)::integer AS submitted_attempts
+FROM assessment.exam_attempts WHERE exam_id = $1
+`
+
+type CountExamAttemptsRow struct {
+	OpenAttempts      int32
+	SubmittedAttempts int32
+}
+
+func (q *Queries) CountExamAttempts(ctx context.Context, examID int64) (CountExamAttemptsRow, error) {
+	row := q.db.QueryRow(ctx, countExamAttempts, examID)
+	var i CountExamAttemptsRow
+	err := row.Scan(&i.OpenAttempts, &i.SubmittedAttempts)
+	return i, err
+}
+
+const deleteExam = `-- name: DeleteExam :exec
+DELETE FROM assessment.exams WHERE id = $1
+`
+
+func (q *Queries) DeleteExam(ctx context.Context, id int64) error {
+	_, err := q.db.Exec(ctx, deleteExam, id)
+	return err
+}
+
 const deleteQuiz = `-- name: DeleteQuiz :exec
 DELETE FROM assessment.quizzes WHERE id = $1
 `
@@ -38,6 +65,158 @@ func (q *Queries) FindQuizAttemptByKey(ctx context.Context, arg FindQuizAttemptB
 	return id, err
 }
 
+const getExam = `-- name: GetExam :one
+SELECT id, course_id, title, description, position, status, pass_mark, time_limit_seconds, retakes_allowed, opens_at, closes_at, reveal_policy, questions, created_at, updated_at FROM assessment.exams WHERE id = $1
+`
+
+func (q *Queries) GetExam(ctx context.Context, id int64) (AssessmentExam, error) {
+	row := q.db.QueryRow(ctx, getExam, id)
+	var i AssessmentExam
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.Title,
+		&i.Description,
+		&i.Position,
+		&i.Status,
+		&i.PassMark,
+		&i.TimeLimitSeconds,
+		&i.RetakesAllowed,
+		&i.OpensAt,
+		&i.ClosesAt,
+		&i.RevealPolicy,
+		&i.Questions,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getExamAttempt = `-- name: GetExamAttempt :one
+SELECT id, exam_id, course_id, user_id, started_at, submitted_at, score, passed, auto_submitted, answers FROM assessment.exam_attempts WHERE id = $1
+`
+
+func (q *Queries) GetExamAttempt(ctx context.Context, id int64) (AssessmentExamAttempt, error) {
+	row := q.db.QueryRow(ctx, getExamAttempt, id)
+	var i AssessmentExamAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.ExamID,
+		&i.CourseID,
+		&i.UserID,
+		&i.StartedAt,
+		&i.SubmittedAt,
+		&i.Score,
+		&i.Passed,
+		&i.AutoSubmitted,
+		&i.Answers,
+	)
+	return i, err
+}
+
+const getExamAttemptForUpdate = `-- name: GetExamAttemptForUpdate :one
+SELECT id, exam_id, course_id, user_id, started_at, submitted_at, score, passed, auto_submitted, answers FROM assessment.exam_attempts WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetExamAttemptForUpdate(ctx context.Context, id int64) (AssessmentExamAttempt, error) {
+	row := q.db.QueryRow(ctx, getExamAttemptForUpdate, id)
+	var i AssessmentExamAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.ExamID,
+		&i.CourseID,
+		&i.UserID,
+		&i.StartedAt,
+		&i.SubmittedAt,
+		&i.Score,
+		&i.Passed,
+		&i.AutoSubmitted,
+		&i.Answers,
+	)
+	return i, err
+}
+
+const getExamForShare = `-- name: GetExamForShare :one
+SELECT id, course_id, title, description, position, status, pass_mark, time_limit_seconds, retakes_allowed, opens_at, closes_at, reveal_policy, questions, created_at, updated_at FROM assessment.exams WHERE id = $1 FOR SHARE
+`
+
+func (q *Queries) GetExamForShare(ctx context.Context, id int64) (AssessmentExam, error) {
+	row := q.db.QueryRow(ctx, getExamForShare, id)
+	var i AssessmentExam
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.Title,
+		&i.Description,
+		&i.Position,
+		&i.Status,
+		&i.PassMark,
+		&i.TimeLimitSeconds,
+		&i.RetakesAllowed,
+		&i.OpensAt,
+		&i.ClosesAt,
+		&i.RevealPolicy,
+		&i.Questions,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getExamForUpdate = `-- name: GetExamForUpdate :one
+SELECT id, course_id, title, description, position, status, pass_mark, time_limit_seconds, retakes_allowed, opens_at, closes_at, reveal_policy, questions, created_at, updated_at FROM assessment.exams WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) GetExamForUpdate(ctx context.Context, id int64) (AssessmentExam, error) {
+	row := q.db.QueryRow(ctx, getExamForUpdate, id)
+	var i AssessmentExam
+	err := row.Scan(
+		&i.ID,
+		&i.CourseID,
+		&i.Title,
+		&i.Description,
+		&i.Position,
+		&i.Status,
+		&i.PassMark,
+		&i.TimeLimitSeconds,
+		&i.RetakesAllowed,
+		&i.OpensAt,
+		&i.ClosesAt,
+		&i.RevealPolicy,
+		&i.Questions,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getOpenExamAttempt = `-- name: GetOpenExamAttempt :one
+SELECT id, exam_id, course_id, user_id, started_at, submitted_at, score, passed, auto_submitted, answers FROM assessment.exam_attempts WHERE exam_id = $1 AND user_id = $2 AND submitted_at IS NULL
+`
+
+type GetOpenExamAttemptParams struct {
+	ExamID int64
+	UserID int64
+}
+
+func (q *Queries) GetOpenExamAttempt(ctx context.Context, arg GetOpenExamAttemptParams) (AssessmentExamAttempt, error) {
+	row := q.db.QueryRow(ctx, getOpenExamAttempt, arg.ExamID, arg.UserID)
+	var i AssessmentExamAttempt
+	err := row.Scan(
+		&i.ID,
+		&i.ExamID,
+		&i.CourseID,
+		&i.UserID,
+		&i.StartedAt,
+		&i.SubmittedAt,
+		&i.Score,
+		&i.Passed,
+		&i.AutoSubmitted,
+		&i.Answers,
+	)
+	return i, err
+}
+
 const getQuiz = `-- name: GetQuiz :one
 SELECT id, course_id, lecture_id, position, questions, created_at, updated_at FROM assessment.quizzes WHERE id = $1
 `
@@ -55,6 +234,93 @@ func (q *Queries) GetQuiz(ctx context.Context, id int64) (AssessmentQuiz, error)
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const hasSubmittedExamAttempt = `-- name: HasSubmittedExamAttempt :one
+SELECT EXISTS (
+  SELECT 1 FROM assessment.exam_attempts WHERE exam_id = $1 AND user_id = $2 AND submitted_at IS NOT NULL
+) AS submitted
+`
+
+type HasSubmittedExamAttemptParams struct {
+	ExamID int64
+	UserID int64
+}
+
+func (q *Queries) HasSubmittedExamAttempt(ctx context.Context, arg HasSubmittedExamAttemptParams) (bool, error) {
+	row := q.db.QueryRow(ctx, hasSubmittedExamAttempt, arg.ExamID, arg.UserID)
+	var submitted bool
+	err := row.Scan(&submitted)
+	return submitted, err
+}
+
+const insertExam = `-- name: InsertExam :exec
+INSERT INTO assessment.exams (id, course_id, title, description, position, status, pass_mark,
+  time_limit_seconds, retakes_allowed, opens_at, closes_at, reveal_policy, questions, created_at, updated_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+`
+
+type InsertExamParams struct {
+	ID               int64
+	CourseID         int64
+	Title            string
+	Description      string
+	Position         int32
+	Status           string
+	PassMark         int32
+	TimeLimitSeconds *int32
+	RetakesAllowed   bool
+	OpensAt          *time.Time
+	ClosesAt         *time.Time
+	RevealPolicy     string
+	Questions        json.RawMessage
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+func (q *Queries) InsertExam(ctx context.Context, arg InsertExamParams) error {
+	_, err := q.db.Exec(ctx, insertExam,
+		arg.ID,
+		arg.CourseID,
+		arg.Title,
+		arg.Description,
+		arg.Position,
+		arg.Status,
+		arg.PassMark,
+		arg.TimeLimitSeconds,
+		arg.RetakesAllowed,
+		arg.OpensAt,
+		arg.ClosesAt,
+		arg.RevealPolicy,
+		arg.Questions,
+		arg.CreatedAt,
+		arg.UpdatedAt,
+	)
+	return err
+}
+
+const insertExamAttempt = `-- name: InsertExamAttempt :exec
+INSERT INTO assessment.exam_attempts (id, exam_id, course_id, user_id, started_at)
+VALUES ($1, $2, $3, $4, $5)
+`
+
+type InsertExamAttemptParams struct {
+	ID        int64
+	ExamID    int64
+	CourseID  int64
+	UserID    int64
+	StartedAt time.Time
+}
+
+func (q *Queries) InsertExamAttempt(ctx context.Context, arg InsertExamAttemptParams) error {
+	_, err := q.db.Exec(ctx, insertExamAttempt,
+		arg.ID,
+		arg.ExamID,
+		arg.CourseID,
+		arg.UserID,
+		arg.StartedAt,
+	)
+	return err
 }
 
 const insertQuiz = `-- name: InsertQuiz :exec
@@ -114,6 +380,115 @@ func (q *Queries) InsertQuizAttempt(ctx context.Context, arg InsertQuizAttemptPa
 	var id int64
 	err := row.Scan(&id)
 	return id, err
+}
+
+const listAnsweredExamQuestions = `-- name: ListAnsweredExamQuestions :many
+SELECT DISTINCT a.key::text AS question_id
+FROM assessment.exam_attempts AS t, jsonb_each(t.answers) AS a
+WHERE t.exam_id = $1 AND jsonb_array_length(a.value -> 'option_ids') > 0
+`
+
+// Question IDs (as text) with a non-empty answer in any attempt of the exam.
+func (q *Queries) ListAnsweredExamQuestions(ctx context.Context, examID int64) ([]string, error) {
+	rows, err := q.db.Query(ctx, listAnsweredExamQuestions, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var question_id string
+		if err := rows.Scan(&question_id); err != nil {
+			return nil, err
+		}
+		items = append(items, question_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExamAttempts = `-- name: ListExamAttempts :many
+SELECT id, exam_id, course_id, user_id, started_at, submitted_at, score, passed, auto_submitted, answers FROM assessment.exam_attempts WHERE exam_id = $1 ORDER BY started_at, id
+`
+
+func (q *Queries) ListExamAttempts(ctx context.Context, examID int64) ([]AssessmentExamAttempt, error) {
+	rows, err := q.db.Query(ctx, listExamAttempts, examID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AssessmentExamAttempt
+	for rows.Next() {
+		var i AssessmentExamAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExamID,
+			&i.CourseID,
+			&i.UserID,
+			&i.StartedAt,
+			&i.SubmittedAt,
+			&i.Score,
+			&i.Passed,
+			&i.AutoSubmitted,
+			&i.Answers,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listExamsByCourse = `-- name: ListExamsByCourse :many
+SELECT id, course_id, title, description, position, status, pass_mark, time_limit_seconds, retakes_allowed, opens_at, closes_at, reveal_policy, questions, created_at, updated_at FROM assessment.exams
+WHERE course_id = $1 AND (NOT $2::boolean OR status = 'published')
+ORDER BY position, id
+`
+
+type ListExamsByCourseParams struct {
+	CourseID      int64
+	PublishedOnly bool
+}
+
+func (q *Queries) ListExamsByCourse(ctx context.Context, arg ListExamsByCourseParams) ([]AssessmentExam, error) {
+	rows, err := q.db.Query(ctx, listExamsByCourse, arg.CourseID, arg.PublishedOnly)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AssessmentExam
+	for rows.Next() {
+		var i AssessmentExam
+		if err := rows.Scan(
+			&i.ID,
+			&i.CourseID,
+			&i.Title,
+			&i.Description,
+			&i.Position,
+			&i.Status,
+			&i.PassMark,
+			&i.TimeLimitSeconds,
+			&i.RetakesAllowed,
+			&i.OpensAt,
+			&i.ClosesAt,
+			&i.RevealPolicy,
+			&i.Questions,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listQuizLectures = `-- name: ListQuizLectures :many
@@ -190,6 +565,120 @@ func (q *Queries) ListQuizzesByLecture(ctx context.Context, arg ListQuizzesByLec
 	return items, nil
 }
 
+const listUserExamAttempts = `-- name: ListUserExamAttempts :many
+SELECT id, exam_id, course_id, user_id, started_at, submitted_at, score, passed, auto_submitted, answers FROM assessment.exam_attempts WHERE course_id = $1 AND user_id = $2 ORDER BY started_at, id
+`
+
+type ListUserExamAttemptsParams struct {
+	CourseID int64
+	UserID   int64
+}
+
+func (q *Queries) ListUserExamAttempts(ctx context.Context, arg ListUserExamAttemptsParams) ([]AssessmentExamAttempt, error) {
+	rows, err := q.db.Query(ctx, listUserExamAttempts, arg.CourseID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AssessmentExamAttempt
+	for rows.Next() {
+		var i AssessmentExamAttempt
+		if err := rows.Scan(
+			&i.ID,
+			&i.ExamID,
+			&i.CourseID,
+			&i.UserID,
+			&i.StartedAt,
+			&i.SubmittedAt,
+			&i.Score,
+			&i.Passed,
+			&i.AutoSubmitted,
+			&i.Answers,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const mergeExamAnswer = `-- name: MergeExamAnswer :execrows
+UPDATE assessment.exam_attempts SET answers = answers || $1::jsonb
+WHERE id = $2 AND submitted_at IS NULL
+`
+
+type MergeExamAnswerParams struct {
+	Patch json.RawMessage
+	ID    int64
+}
+
+func (q *Queries) MergeExamAnswer(ctx context.Context, arg MergeExamAnswerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, mergeExamAnswer, arg.Patch, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const nextExamPosition = `-- name: NextExamPosition :one
+SELECT COALESCE(MAX(position) + 1, 0)::integer AS next FROM assessment.exams WHERE course_id = $1
+`
+
+func (q *Queries) NextExamPosition(ctx context.Context, courseID int64) (int32, error) {
+	row := q.db.QueryRow(ctx, nextExamPosition, courseID)
+	var next int32
+	err := row.Scan(&next)
+	return next, err
+}
+
+const replaceExam = `-- name: ReplaceExam :execrows
+UPDATE assessment.exams
+SET title = $2, description = $3, position = $4, status = $5, pass_mark = $6, time_limit_seconds = $7,
+    retakes_allowed = $8, opens_at = $9, closes_at = $10, reveal_policy = $11, questions = $12, updated_at = $13
+WHERE id = $1
+`
+
+type ReplaceExamParams struct {
+	ID               int64
+	Title            string
+	Description      string
+	Position         int32
+	Status           string
+	PassMark         int32
+	TimeLimitSeconds *int32
+	RetakesAllowed   bool
+	OpensAt          *time.Time
+	ClosesAt         *time.Time
+	RevealPolicy     string
+	Questions        json.RawMessage
+	UpdatedAt        time.Time
+}
+
+func (q *Queries) ReplaceExam(ctx context.Context, arg ReplaceExamParams) (int64, error) {
+	result, err := q.db.Exec(ctx, replaceExam,
+		arg.ID,
+		arg.Title,
+		arg.Description,
+		arg.Position,
+		arg.Status,
+		arg.PassMark,
+		arg.TimeLimitSeconds,
+		arg.RetakesAllowed,
+		arg.OpensAt,
+		arg.ClosesAt,
+		arg.RevealPolicy,
+		arg.Questions,
+		arg.UpdatedAt,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const replaceQuiz = `-- name: ReplaceQuiz :execrows
 UPDATE assessment.quizzes SET position = $2, questions = $3, updated_at = $4 WHERE id = $1
 `
@@ -212,4 +701,50 @@ func (q *Queries) ReplaceQuiz(ctx context.Context, arg ReplaceQuizParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const saveExamResult = `-- name: SaveExamResult :execrows
+UPDATE assessment.exam_attempts
+SET submitted_at = $2, score = $3, passed = $4, auto_submitted = $5, answers = $6
+WHERE id = $1 AND submitted_at IS NULL
+`
+
+type SaveExamResultParams struct {
+	ID            int64
+	SubmittedAt   *time.Time
+	Score         *int32
+	Passed        *bool
+	AutoSubmitted bool
+	Answers       json.RawMessage
+}
+
+func (q *Queries) SaveExamResult(ctx context.Context, arg SaveExamResultParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveExamResult,
+		arg.ID,
+		arg.SubmittedAt,
+		arg.Score,
+		arg.Passed,
+		arg.AutoSubmitted,
+		arg.Answers,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setExamPositions = `-- name: SetExamPositions :exec
+UPDATE assessment.exams AS e SET position = (o.ord - 1)::integer
+FROM unnest($2::bigint[]) WITH ORDINALITY AS o(exam_id, ord)
+WHERE e.id = o.exam_id AND e.course_id = $1
+`
+
+type SetExamPositionsParams struct {
+	CourseID int64
+	ExamIds  []int64
+}
+
+func (q *Queries) SetExamPositions(ctx context.Context, arg SetExamPositionsParams) error {
+	_, err := q.db.Exec(ctx, setExamPositions, arg.CourseID, arg.ExamIds)
+	return err
 }

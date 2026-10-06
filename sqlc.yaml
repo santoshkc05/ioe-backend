@@ -101,3 +101,21 @@ sql:
             go_type:
               type: string
               pointer: true
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              import: time
+              type: Time
+              pointer: true
+          - column: assessment.exams.time_limit_seconds
+            go_type:
+              type: int32
+              pointer: true
+          - column: assessment.exam_attempts.score
+            go_type:
+              type: int32
+              pointer: true
+          - column: assessment.exam_attempts.passed
+            go_type:
+              type: bool
+              pointer: true
