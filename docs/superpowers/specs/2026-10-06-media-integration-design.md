@@ -280,7 +280,8 @@ All routes require bearer authentication and respond with `application/problem+j
 - Upload: `{asset_id, upload_id?, upload_url?, part_size?, part_urls?, expires_at}`.
 - Asset: `{id, course_id, kind, status, progress_percent, duration_ms?, width?, height?,
   error_message?, updated_at}`.
-- The create route uses the existing per-client rate limiter at 30 requests per minute.
+- The create route is rate-limited per user with the existing in-memory `httpserver.RateLimiter` at
+  30 requests per minute.
 
 ### Playback
 
@@ -348,8 +349,8 @@ starts; `README.md` documents this, as for the notification service.
 
 - `media-db-setup`: one-shot `psql` that creates role `media_service` with a local-only password if
   missing and grants `CONNECT, CREATE ON DATABASE ioe`. Idempotent.
-- `minio` with ports bound to `127.0.0.1`, and `minio-init`, which creates the bucket and applies the
-  CORS rules from `../hitox-media-service/deploy/minio-cors.xml`.
+- `minio` with ports bound to `127.0.0.1` and `MINIO_API_CORS_ALLOW_ORIGIN` set to the local frontend
+  origins (as the media service's own compose does), and `minio-init`, which creates the bucket.
 - `media`: built from `../hitox-media-service`, with `DATABASE_SCHEMA=media_service`,
   `DEFAULT_NAMESPACE_ID=ioe`, `AUTO_MIGRATE=true`, local-only API and delivery keys,
   `OBJECT_STORAGE_PUBLIC_URL` pointing at the host-reachable MinIO, and its port bound to
