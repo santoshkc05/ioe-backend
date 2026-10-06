@@ -261,7 +261,9 @@ Errors are RFC 9457 problems via `internal/platform/problem`:
 
 | Status | Type | Cause |
 |---|---|---|
-| 400 | `invalid_input` | malformed body, unknown `state`, negative `position_ms` |
+| 400 | `invalid_input` | unknown or missing `state`, negative `position_ms` |
+| 400 | `invalid_request` | malformed body or unknown fields (platform `DecodeJSON`) |
+| 415 | `unsupported_media_type` | body is not `application/json` (platform `DecodeJSON`) |
 | 403 | `forbidden` | caller not allowed |
 | 404 | `not_found` | course missing or hidden, lecture not in course, unparsable path ID |
 | 409 | `enrollment_required` | record without an active enrollment |
@@ -276,11 +278,12 @@ endpoints.
 
 ## Composition (`cmd/api`)
 
-New file `cmd/api/progress.go` holds `registerProgress` and two adapters:
+New file `cmd/api/progress.go` holds `registerProgress` and one adapter:
 
 - `progressCourseCatalog` over courseauthoring's `CourseService.Facts`, mapping
   `courseauthoringapp.ErrNotFound` to `progressapp.ErrNotFound`.
-- `progressEnrollmentQuery` over enrollment's `AccessQuery`.
+- Enrollment's `*AccessQuery` already has the `EnrollmentQuery` method set, so it is passed
+  directly, as courseauthoring receives it.
 
 `.golangci.yml` gains `progress-domain` and `progress-app` depguard rules, adds the progress
 import path to `platform-independent-of-contexts`, and adds it to the deny rule of every other
