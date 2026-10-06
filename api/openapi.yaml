@@ -736,6 +736,76 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/lectures/{lectureID}/progress/{userID}:
+    put:
+      summary: Record a user's progress on a lecture
+      description: >
+        Only the user themselves, with an active enrollment in the published course, on a
+        lecture of that course. A completed lecture stays completed: an in_progress write over
+        it changes nothing and still returns 204.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/LectureID"
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RecordLectureProgressRequest" }
+      responses:
+        "204": { description: Recorded }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/progress/{userID}:
+    get:
+      summary: Read a user's progress in a course
+      description: >
+        The user themselves, or the course owner or a root admin. Empty arrays and no
+        `last_lecture_id` or `updated_at` when nothing was recorded. Non-managers get 404 for
+        unpublished courses when reading another user.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          description: Course progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CourseProgress" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/users/{userID}/progress:
+    get:
+      summary: Read a user's progress in every course with daily activity
+      description: The user themselves or a root admin. Courses most recently updated first.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      responses:
+        "200":
+          description: User progress
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/UserProgress" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -946,6 +1016,54 @@ components:
       type: object
       properties:
         reason: { type: string, maxLength: 500 }
+    RecordLectureProgressRequest:
+      type: object
+      required: [state]
+      properties:
+        state: { type: string, enum: [in_progress, completed] }
+        position_ms: { type: integer, format: int64, minimum: 0, description: Video resume offset; 0 for text }
+    LectureProgress:
+      type: object
+      required: [lecture_id, state, position_ms, updated_at]
+      properties:
+        lecture_id: { $ref: "#/components/schemas/ID" }
+        state: { type: string, enum: [in_progress, completed] }
+        position_ms: { type: integer, format: int64 }
+        updated_at: { type: string, format: date-time }
+    CourseProgress:
+      type: object
+      required: [course_id, user_id, completed_lecture_ids, lectures]
+      properties:
+        course_id: { $ref: "#/components/schemas/ID" }
+        user_id: { $ref: "#/components/schemas/ID" }
+        last_lecture_id:
+          allOf: [{ $ref: "#/components/schemas/ID" }]
+          description: Present only when something was recorded
+        completed_lecture_ids:
+          type: array
+          items: { $ref: "#/components/schemas/ID" }
+          description: May include lectures since removed from the course
+        lectures:
+          type: array
+          items: { $ref: "#/components/schemas/LectureProgress" }
+        updated_at: { type: string, format: date-time, description: Present only when something was recorded }
+    ActivityDay:
+      type: object
+      required: [date, lecture_count]
+      properties:
+        date: { type: string, format: date, description: UTC date }
+        lecture_count: { type: integer, description: Distinct lectures whose latest write fell on this date }
+    UserProgress:
+      type: object
+      required: [user_id, courses, activity_days]
+      properties:
+        user_id: { $ref: "#/components/schemas/ID" }
+        courses:
+          type: array
+          items: { $ref: "#/components/schemas/CourseProgress" }
+        activity_days:
+          type: array
+          items: { $ref: "#/components/schemas/ActivityDay" }
     FlashcardCard:
       type: object
       required: [front, back]

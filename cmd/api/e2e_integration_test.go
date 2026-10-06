@@ -470,3 +470,104 @@ func TestEnrollmentEndToEnd(t *testing.T) {
 		t.Fatalf("activations=%d cancellations=%d", activations, cancellations)
 	}
 }
+
+func TestProgressEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string), body["user"].(map[string]any)["id"].(string)
+	}
+	adminTok, _ := signIn("sub-admin", "admin@example.com")
+	studentTok, studentID := signIn("sub-student", "student@example.com")
+	strangerTok, _ := signIn("sub-stranger", "stranger@example.com")
+	admin, student, stranger := bearer(adminTok), bearer(studentTok), bearer(strangerTok)
+
+	// A published free course with two lectures.
+	resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %v", resp.StatusCode, body)
+	}
+	courseID := body["id"].(string)
+	var lectures []string
+	for _, title := range []string{"L1", "L2"} {
+		resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"`+title+`","text_body":"<p>x</p>"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+		}
+		ls := body["lectures"].([]any)
+		lectures = append(lectures, ls[len(ls)-1].(map[string]any)["id"].(string))
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish: %d", resp.StatusCode)
+	}
+	record := func(lectureID, payload string, who map[string]string) (int, any) {
+		resp, body := c.do(http.MethodPut, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/progress/"+studentID, payload, who)
+		return resp.StatusCode, body["type"]
+	}
+
+	if code, typ := record(lectures[0], `{"state":"completed","position_ms":0}`, student); code != http.StatusConflict || typ != "enrollment_required" {
+		t.Fatalf("before enroll: %d %v", code, typ)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/enrollments/"+studentID, "", student); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("enroll: %d %v", resp.StatusCode, body)
+	}
+	if code, _ := record(lectures[0], `{"state":"in_progress","position_ms":4000}`, student); code != http.StatusNoContent {
+		t.Fatalf("in_progress: %d", code)
+	}
+	if code, _ := record(lectures[0], `{"state":"completed","position_ms":9000}`, student); code != http.StatusNoContent {
+		t.Fatalf("completed: %d", code)
+	}
+	if code, _ := record(lectures[1], `{"state":"in_progress","position_ms":10}`, student); code != http.StatusNoContent {
+		t.Fatalf("second lecture: %d", code)
+	}
+	if code, typ := record(lectures[0], `{"state":"completed","position_ms":0}`, admin); code != http.StatusForbidden || typ != "forbidden" {
+		t.Fatalf("admin writes for student: %d %v", code, typ)
+	}
+
+	resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/progress/"+studentID, "", student)
+	completed, _ := body["completed_lecture_ids"].([]any)
+	if resp.StatusCode != http.StatusOK || body["last_lecture_id"] != lectures[1] || len(completed) != 1 || completed[0] != lectures[0] {
+		t.Fatalf("own progress: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/progress/"+studentID, "", admin); resp.StatusCode != http.StatusOK {
+		t.Fatalf("manager read: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/courses/"+courseID+"/progress/"+studentID, "", stranger); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("stranger read: %d", resp.StatusCode)
+	}
+
+	resp, body = c.do(http.MethodGet, "/v1/users/"+studentID+"/progress", "", student)
+	courses, _ := body["courses"].([]any)
+	days, _ := body["activity_days"].([]any)
+	if resp.StatusCode != http.StatusOK || len(courses) != 1 || len(days) != 1 || days[0].(map[string]any)["lecture_count"] != float64(2) {
+		t.Fatalf("user progress: %d %v", resp.StatusCode, body)
+	}
+
+	if resp, _ = c.do(http.MethodDelete, "/v1/courses/"+courseID+"/enrollments/"+studentID, "", student); resp.StatusCode != http.StatusOK {
+		t.Fatalf("cancel: %d", resp.StatusCode)
+	}
+	if code, typ := record(lectures[1], `{"state":"completed","position_ms":0}`, student); code != http.StatusConflict || typ != "enrollment_required" {
+		t.Fatalf("after cancel: %d %v", code, typ)
+	}
+	resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/progress/"+studentID, "", student)
+	if completed, _ = body["completed_lecture_ids"].([]any); resp.StatusCode != http.StatusOK || len(completed) != 1 {
+		t.Fatalf("kept after cancel: %d %v", resp.StatusCode, body)
+	}
+}

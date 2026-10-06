@@ -43,6 +43,16 @@ in a published course, free or paid, and list a course's roster with
 `GET /v1/courses/{courseID}/enrollments`. Enrolled students read every lecture of a published
 course. A student, the owner, or a root admin cancels with `DELETE` on the same path.
 
+## Progress
+
+Enrolled students record per-lecture progress with
+`PUT /v1/courses/{courseID}/lectures/{lectureID}/progress/{theirUserID}` and
+`{"state": "in_progress" | "completed", "position_ms": n}`. A completed lecture stays completed.
+Without an active enrollment the write answers `409 enrollment_required`. Students read
+`GET /v1/courses/{courseID}/progress/{theirUserID}` and `GET /v1/users/{theirUserID}/progress`
+(all courses plus daily activity); the course owner or a root admin can read a student's
+progress in that course. Canceling an enrollment keeps progress.
+
 ## Notifications
 
 Welcome emails are sent through the standalone notification service in `../notification`.

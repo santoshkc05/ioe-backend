@@ -70,8 +70,10 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 		return nil, err
 	}
 	enrollmentTx := enrollmentpg.NewTxRunner(pool)
-	courses := registerCourseAuthoring(router, pool, ids, clk, enrollmentapp.NewAccessQuery(enrollmentTx), identityHandler, ips, logger)
+	enrollmentAccess := enrollmentapp.NewAccessQuery(enrollmentTx)
+	courses := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess, identityHandler, ips, logger)
 	registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
+	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
 	if err != nil {
