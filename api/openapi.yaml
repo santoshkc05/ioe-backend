@@ -171,6 +171,37 @@ paths:
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
   /v1/courses:
+    get:
+      summary: List published courses, newest first
+      description: >
+        Public. An Authorization header is optional; when present it must carry a valid
+        bearer token. Rate-limited per client IP.
+      security: []
+      parameters:
+        - name: level
+          in: query
+          schema: { type: string, enum: [beginner, intermediate, advanced] }
+        - name: price
+          in: query
+          schema: { type: string, enum: [free, paid] }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: cursor
+          in: query
+          description: The next_cursor of the previous page. Opaque.
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CatalogPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
     post:
       summary: Create a course
       security:
@@ -214,12 +245,15 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
   /v1/courses/{courseID}:
     get:
-      summary: Get a course. Drafts and archived courses are 404 to non-managers.
+      summary: Get a course. Drafts and archived courses are 404 to non-managers and anonymous callers.
       security:
+        - {}
         - bearer: []
       parameters:
         - $ref: "#/components/parameters/CourseID"
-      description: The view query parameter is accepted and ignored.
+      description: >
+        Public for published courses; an Authorization header is optional and, when present,
+        must be valid. Rate-limited per client IP. The view query parameter is accepted and ignored.
       responses:
         "200":
           description: OK
@@ -228,6 +262,7 @@ paths:
               schema: { $ref: "#/components/schemas/Course" }
         "401": { $ref: "#/components/responses/Problem" }
         "404": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
     patch:
@@ -863,6 +898,32 @@ components:
           type: array
           items: { $ref: "#/components/schemas/Course" }
         total: { type: integer }
+    CourseSummary:
+      type: object
+      required: [id, owner_id, title, description, level, thumbnail_url, price, is_free, lecture_count, section_count, created_at, updated_at]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        owner_id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        description: { type: string }
+        level: { type: string, enum: ["", beginner, intermediate, advanced] }
+        thumbnail_url: { type: string }
+        price: { $ref: "#/components/schemas/Price" }
+        is_free: { type: boolean }
+        lecture_count: { type: integer }
+        section_count: { type: integer }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    CatalogPage:
+      type: object
+      required: [courses]
+      properties:
+        courses:
+          type: array
+          items: { $ref: "#/components/schemas/CourseSummary" }
+        next_cursor:
+          type: string
+          description: Present only when another page exists. Opaque.
     Enrollment:
       type: object
       required: [id, course_id, user_id, status, enrolled_at]

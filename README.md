@@ -26,6 +26,14 @@ makes them an instructor (or a student again) with `PUT /v1/admin/users/{id}/rol
 gets the new role at their next token refresh, within 15 minutes; a demoted instructor keeps
 managing the courses they own.
 
+## Catalog
+
+Anyone, signed in or not, lists published courses newest first with
+`GET /v1/courses?level=&price=free|paid&limit=&cursor=` and reads a published course's outline
+with `GET /v1/courses/{courseID}`. Pass a page's `next_cursor` as `cursor` to get the next one.
+Both routes accept an optional bearer token and are rate-limited per client IP. Lecture content
+still needs an enrollment or a free preview.
+
 ## Enrollment
 
 Students enroll themselves in published free courses with

@@ -64,12 +64,13 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 		Logger: logger, AllowedOrigins: cfg.AllowedOrigins, ServiceName: serviceName,
 	})
 	httpserver.MountHealth(router, pool.Ping)
-	identityHandler, err := registerIdentity(router, identity, identityAdmin, tokens, cfg, logger)
+	ips := httpserver.NewIPResolver(cfg.TrustedProxies())
+	identityHandler, err := registerIdentity(router, identity, identityAdmin, tokens, ips, cfg, logger)
 	if err != nil {
 		return nil, err
 	}
 	enrollmentTx := enrollmentpg.NewTxRunner(pool)
-	courses := registerCourseAuthoring(router, pool, ids, clk, enrollmentapp.NewAccessQuery(enrollmentTx), identityHandler.RequireAuth, logger)
+	courses := registerCourseAuthoring(router, pool, ids, clk, enrollmentapp.NewAccessQuery(enrollmentTx), identityHandler, ips, logger)
 	registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
@@ -102,12 +103,12 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog
 	return nil
 }
 
-func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *identityapp.AdminService, tokens *jwt.Tokens, cfg config.Config, logger *slog.Logger) (*httpapi.Handler, error) {
+func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *identityapp.AdminService, tokens *jwt.Tokens, ips httpserver.IPResolver, cfg config.Config, logger *slog.Logger) (*httpapi.Handler, error) {
 	h, err := httpapi.New(svc, admin, tokens, httpapi.Config{
 		CookieSecure:   cfg.CookieSecure,
 		AllowedOrigins: cfg.AllowedOrigins,
 		Logger:         logger,
-		IPs:            httpserver.NewIPResolver(cfg.TrustedProxies()),
+		IPs:            ips,
 		AuthLimiter:    httpserver.NewRateLimiter(cfg.AuthRateLimitPerMinute),
 	})
 	if err != nil {
@@ -119,13 +120,17 @@ func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *ide
 
 // registerCourseAuthoring mounts course authoring and returns its course service for
 // contexts that read course facts.
-func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, requireAuth httpserver.Middleware, logger *slog.Logger) *courseauthoringapp.CourseService {
+func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, authn *httpapi.Handler, ips httpserver.IPResolver, logger *slog.Logger) *courseauthoringapp.CourseService {
 	tx := courseauthoringpg.NewTxRunner(pool, clk)
 	courses := courseauthoringapp.NewCourseService(tx, ids, clk)
 	courseauthoringhttp.New(
 		courses,
 		courseauthoringapp.NewContentService(tx, ids, enrollments),
-		courseauthoringhttp.Config{RequireAuth: requireAuth, ContentLimiter: httpserver.NewRateLimiter(60), Logger: logger},
+		courseauthoringhttp.Config{
+			RequireAuth: authn.RequireAuth, OptionalAuth: authn.OptionalAuth, IPs: ips,
+			ContentLimiter: httpserver.NewRateLimiter(60), CatalogLimiter: httpserver.NewRateLimiter(120),
+			Logger: logger,
+		},
 	).Register(r)
 	return courses
 }

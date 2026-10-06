@@ -613,4 +613,3 @@ func TestOptionalAuth(t *testing.T) {
 		t.Fatalf("valid token: %d, %+v", resp.StatusCode, got)
 	}
 }
-
