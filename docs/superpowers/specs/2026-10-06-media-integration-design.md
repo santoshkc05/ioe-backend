@@ -8,8 +8,9 @@ Approved in conversation on 2026-10-06. Pending written-spec review.
 
 ## Context
 
-Lecture content blocks reference uploaded media by `media_asset_id`: video blocks, image blocks,
-flashcard cards, and image nodes inside rich text (`RichDoc.ImageAssetIDs`). The courseauthoring
+Lecture content blocks reference uploaded media by `media_asset_id` in three places: video blocks,
+image blocks, and flashcard cards. (`contentblocks.RichDoc` can also hold image asset IDs, but no
+courseauthoring block type uses it; text blocks hold sanitized HTML.) The courseauthoring
 spec stores these IDs unchecked and defers validation "until the media context exists". Nothing
 uploads media and nothing resolves an ID to a playable URL, so a course cannot serve video.
 
@@ -68,7 +69,8 @@ spec leads and the frontend migrates as a follow-up.
 | Namespace | Fixed `X-Namespace-ID: ioe` |
 | Image variant | One fixed variant `display`: width 1600, `webp`, quality 82 |
 | Content validation | Courseauthoring port `AssetCatalog`, checked before the content transaction opens |
-| Configuration | `MEDIA_SERVICE_BASE_URL` and `MEDIA_SERVICE_API_KEY`: both or neither |
+| Configuration | `MEDIA_SERVICE_BASE_URL`, `MEDIA_SERVICE_PUBLIC_URL`, and `MEDIA_SERVICE_API_KEY`: all or none |
+| Relative delivery URLs | The private manifest URL comes back as a path (`/v1/delivery/...`); the backend prefixes `MEDIA_SERVICE_PUBLIC_URL`. Absolute URLs (presigned object-storage URLs) pass through unchanged |
 | Media service schema | In the shared `ioe` database the service runs with `DATABASE_SCHEMA=media_service` under its own role |
 
 ## Architecture
@@ -200,8 +202,8 @@ and of the media service configuration.
 
 - `Replace`, `Patch`, and `AddLecture` with initial content collect asset references from the
   blocks being written: a video block's `media_asset_id` must be a video; an image block's
-  `media_asset_id`, each flashcard card's `media_asset_id`, and each rich-text image node's
-  `mediaAssetId` must be images. `Patch` checks only upserted blocks.
+  `media_asset_id` and each flashcard card's `media_asset_id` must be images. `Patch` checks only
+  upserted blocks.
 - Every referenced ID must appear in the result with the expected kind; otherwise the write fails
   with `ErrInvalidMediaReference` naming the block's `client_block_id`. Asset status is not checked,
   so a lecture can be saved while its video is still processing.
@@ -218,7 +220,7 @@ and of the media service configuration.
   archived.
 - `ContentService.CheckAssetRead(ctx, p, courseID, lectureID, assetID) error`: runs `Get` (which
   applies the visibility, free-preview, and enrollment gate) and returns `ErrNotFound` unless one of
-  the returned blocks references `assetID` in any of the four places above.
+  the returned blocks references `assetID` in any of the three places above.
 - One helper in `courseauthoring/app` extracts `(assetID, expected kind, client block ID)` from a
   block list; both validation and `CheckAssetRead` use it.
 
@@ -312,7 +314,7 @@ content write routes.
 ## Composition (`cmd/api`)
 
 - `registerMedia` constructs the repository, the `mediasvc` client, `AssetService`, and the HTTP
-  handler when both variables are set. Otherwise it logs a warning that media is disabled and
+  handler when all three variables are set. Otherwise it logs a warning that media is disabled and
   registers nothing.
 - A `courseAccess` adapter implements `media/app.CourseAccess` with `CourseService.CheckManage` and
   `ContentService.CheckAssetRead`, translating courseauthoring sentinels to media sentinels.
@@ -324,11 +326,12 @@ content write routes.
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `MEDIA_SERVICE_BASE_URL` | with the key | absolute `http` or `https` URL of the media service |
-| `MEDIA_SERVICE_API_KEY` | with the URL | service API key, at least 32 characters |
+| `MEDIA_SERVICE_BASE_URL` | with the others | absolute `http` or `https` URL the backend calls |
+| `MEDIA_SERVICE_PUBLIC_URL` | with the others | absolute `http` or `https` URL browsers use for the media service's `/v1/delivery` paths |
+| `MEDIA_SERVICE_API_KEY` | with the others | service API key, at least 32 characters |
 
-Setting exactly one stops the process with a message naming the missing variable. The key is never
-logged.
+Setting some but not all stops the process with a message naming each missing variable. The key is
+never logged.
 
 ## Database
 
@@ -351,10 +354,11 @@ starts; `README.md` documents this, as for the notification service.
   `DEFAULT_NAMESPACE_ID=ioe`, `AUTO_MIGRATE=true`, local-only API and delivery keys,
   `OBJECT_STORAGE_PUBLIC_URL` pointing at the host-reachable MinIO, and its port bound to
   `127.0.0.1`.
-- `api` gains `MEDIA_SERVICE_BASE_URL=http://media:8080` and the local key, and depends on `media`
+- `api` gains `MEDIA_SERVICE_BASE_URL=http://media:8080`, `MEDIA_SERVICE_PUBLIC_URL=http://localhost:8082`
+  (the media port published on the host), and the local key, and depends on `media`
   being healthy.
 
-`.env.example` documents both variables. Local keys are marked local-only and allowlisted in
+`.env.example` documents all three variables. Local keys are marked local-only and allowlisted in
 `.gitleaks.toml` if gitleaks flags them.
 
 ## Testing
@@ -370,7 +374,7 @@ Unit tests:
   `200`, `201`, `204`, `400`, `404`, `409`, `413`, `429`, `500`, and a closed connection; the API key
   never appears in returned errors.
 - HTTP handlers: status codes and bodies from the error table.
-- Courseauthoring: reference extraction across video, image, flashcard, and rich-text blocks;
+- Courseauthoring: reference extraction across video, image, and flashcard blocks;
   `Replace`, `Patch`, and `AddLecture` reject unknown, other-course, and wrong-kind IDs and accept
   valid ones; `Patch` ignores untouched blocks; `CheckAssetRead` with a referenced and an
   unreferenced asset; `CheckManage` for owner, root admin, other instructor, and archived course.
