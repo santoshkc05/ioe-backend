@@ -25,25 +25,29 @@ var (
 const (
 	course   id.ID = 10 // lectures 50 (locked) and 51 (free preview)
 	archived id.ID = 11 // lecture 60
+	hidden   id.ID = 12 // unpublished; lecture 70
 	locked   id.ID = 50
 	free     id.ID = 51
 )
 
 type fixture struct {
-	svc   *app.QuizService
-	query *app.QuizQuery
-	store *memStore
-	clock *fixedClock
+	svc    *app.QuizService
+	query  *app.QuizQuery
+	exams  *app.ExamService
+	store  *memStore
+	clock  *fixedClock
+	access *courseAccess
 }
 
 func newFixture(t *testing.T) fixture {
 	t.Helper()
 	store := newMemStore()
-	enr := enrollments{{course, student.UserID}: true}
+	enr := enrollments{{course, student.UserID}: true, {hidden, student.UserID}: true}
 	access := &courseAccess{
 		t: t, store: store, owner: owner.UserID,
-		lectures: map[id.ID]id.ID{locked: course, free: course, 60: archived},
+		lectures: map[id.ID]id.ID{locked: course, free: course, 60: archived, 70: hidden},
 		archived: map[id.ID]bool{archived: true},
+		hidden:   map[id.ID]bool{archived: true, hidden: true},
 		free:     map[id.ID]bool{free: true},
 		enrolled: enr,
 	}
@@ -52,10 +56,12 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	clk := &fixedClock{now: t0}
+	probe := enrollmentProbe{t: t, store: store, set: enr}
 	return fixture{
-		svc:   app.NewQuizService(store, access, enrollmentProbe{t: t, store: store, set: enr}, ids, clk),
+		svc:   app.NewQuizService(store, access, probe, ids, clk),
 		query: app.NewQuizQuery(store),
-		store: store, clock: clk,
+		exams: app.NewExamService(store, access, probe, ids, clk),
+		store: store, clock: clk, access: access,
 	}
 }
 

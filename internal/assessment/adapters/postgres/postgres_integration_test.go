@@ -43,7 +43,7 @@ func quiz(t *testing.T, quizID, courseID, lectureID id.ID, position int) domain.
 
 func run(t *testing.T, tx *postgres.TxRunner, fn func(app.QuizRepository) error) {
 	t.Helper()
-	if err := tx.RunInTx(ctx, fn); err != nil {
+	if err := tx.RunInTx(ctx, func(r app.Repos) error { return fn(r.Quizzes) }); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -97,7 +97,7 @@ func TestInsertFindListReplace(t *testing.T) {
 
 func TestReplaceMissingQuiz(t *testing.T) {
 	tx := postgres.NewTxRunner(pgtest.New(t))
-	err := tx.RunInTx(ctx, func(r app.QuizRepository) error { return r.Replace(ctx, quiz(t, 1, 10, 50, 0)) })
+	err := tx.RunInTx(ctx, func(r app.Repos) error { return r.Quizzes.Replace(ctx, quiz(t, 1, 10, 50, 0)) })
 	if !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("err = %v", err)
 	}
@@ -182,9 +182,9 @@ func TestRecordAttemptConcurrentReplay(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			errs[i] = tx.RunInTx(ctx, func(r app.QuizRepository) error {
+			errs[i] = tx.RunInTx(ctx, func(r app.Repos) error {
 				var err error
-				ids[i], err = r.RecordAttempt(ctx, attempt(id.ID(600+i), "same"))
+				ids[i], err = r.Quizzes.RecordAttempt(ctx, attempt(id.ID(600+i), "same"))
 				return err
 			})
 		}()

@@ -30,6 +30,19 @@ func (a assessmentCourseAccess) CanReadLecture(ctx context.Context, p auth.Princ
 	return toAssessmentError(a.contents.CheckLectureRead(ctx, p, courseID, lectureID))
 }
 
+func (a assessmentCourseAccess) CanManageCourse(ctx context.Context, p auth.Principal, courseID id.ID) error {
+	return toAssessmentError(a.courses.CheckManage(ctx, p, courseID))
+}
+
+func (a assessmentCourseAccess) CanReadAsManager(ctx context.Context, p auth.Principal, courseID id.ID) error {
+	return toAssessmentError(a.courses.CheckManagerRead(ctx, p, courseID))
+}
+
+func (a assessmentCourseAccess) CanReadCourse(ctx context.Context, p auth.Principal, courseID id.ID) error {
+	_, err := a.courses.Get(ctx, p, courseID)
+	return toAssessmentError(err)
+}
+
 func toAssessmentError(err error) error {
 	switch {
 	case err == nil:

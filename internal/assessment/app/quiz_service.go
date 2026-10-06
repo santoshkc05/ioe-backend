@@ -60,9 +60,9 @@ func (s *QuizService) List(ctx context.Context, p auth.Principal, courseID, lect
 		return nil, err
 	}
 	var out []domain.Quiz
-	err := s.tx.RunInTx(ctx, func(r QuizRepository) error {
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
-		out, err = r.ListByLecture(ctx, courseID, lectureID)
+		out, err = r.Quizzes.ListByLecture(ctx, courseID, lectureID)
 		return err
 	})
 	return out, err
@@ -77,7 +77,7 @@ func (s *QuizService) Create(ctx context.Context, p auth.Principal, courseID, le
 	if err != nil {
 		return domain.Quiz{}, err
 	}
-	return q, s.tx.RunInTx(ctx, func(r QuizRepository) error { return r.Insert(ctx, q) })
+	return q, s.tx.RunInTx(ctx, func(r Repos) error { return r.Quizzes.Insert(ctx, q) })
 }
 
 // Update replaces a quiz's position and questions. The quiz must belong to the path's course
@@ -87,8 +87,8 @@ func (s *QuizService) Update(ctx context.Context, p auth.Principal, courseID, le
 		return domain.Quiz{}, err
 	}
 	var out domain.Quiz
-	err := s.tx.RunInTx(ctx, func(r QuizRepository) error {
-		cur, err := r.Find(ctx, quizID)
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		cur, err := r.Quizzes.Find(ctx, quizID)
 		if err != nil {
 			return err
 		}
@@ -99,7 +99,7 @@ func (s *QuizService) Update(ctx context.Context, p auth.Principal, courseID, le
 		if err != nil {
 			return err
 		}
-		return r.Replace(ctx, out)
+		return r.Quizzes.Replace(ctx, out)
 	})
 	return out, err
 }
@@ -113,7 +113,7 @@ func (s *QuizService) Delete(ctx context.Context, p auth.Principal, quizID id.ID
 	if err := s.courses.CanManageLecture(ctx, p, q.CourseID, q.LectureID); err != nil {
 		return err
 	}
-	return s.tx.RunInTx(ctx, func(r QuizRepository) error { return r.Delete(ctx, quizID) })
+	return s.tx.RunInTx(ctx, func(r Repos) error { return r.Quizzes.Delete(ctx, quizID) })
 }
 
 // RecordAttempt stores userID's answers. Only the user themselves, with an active enrollment,
@@ -149,9 +149,9 @@ func (s *QuizService) RecordAttempt(ctx context.Context, p auth.Principal, quizI
 	attempt := domain.QuizAttempt{ID: s.ids.New(), QuizID: quizID, UserID: userID, Answers: parsed,
 		IdempotencyKey: key, SubmittedAt: s.clock.Now()}
 	var out id.ID
-	err = s.tx.RunInTx(ctx, func(r QuizRepository) error {
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
-		out, err = r.RecordAttempt(ctx, attempt)
+		out, err = r.Quizzes.RecordAttempt(ctx, attempt)
 		return err
 	})
 	return out, err
@@ -159,65 +159,19 @@ func (s *QuizService) RecordAttempt(ctx context.Context, p auth.Principal, quizI
 
 func (s *QuizService) find(ctx context.Context, quizID id.ID) (domain.Quiz, error) {
 	var q domain.Quiz
-	err := s.tx.RunInTx(ctx, func(r QuizRepository) error {
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
-		q, err = r.Find(ctx, quizID)
+		q, err = r.Quizzes.Find(ctx, quizID)
 		return err
 	})
 	return q, err
 }
 
-// buildQuiz validates in. owned is nil on create, where any supplied ID is rejected; on update
-// it holds the quiz's current question and option IDs, the only IDs the input may reuse.
+// buildQuiz validates in. owned is nil on create and the quiz's current IDs on update.
 func (s *QuizService) buildQuiz(quizID, courseID, lectureID id.ID, in QuizInput, owned map[id.ID]struct{}, createdAt, updatedAt time.Time) (domain.Quiz, error) {
-	if len(in.Questions) > domain.MaxQuestions {
-		return domain.Quiz{}, fmt.Errorf("%w: a quiz has at most %d questions", ErrInvalidInput, domain.MaxQuestions)
-	}
-	resolve := func(field, raw string) (id.ID, error) {
-		if raw == "" {
-			return s.ids.New(), nil
-		}
-		v, err := id.Parse(raw)
-		if err != nil {
-			return 0, fmt.Errorf("%w: %s: %w", ErrInvalidInput, field, err)
-		}
-		if _, ok := owned[v]; !ok {
-			return 0, fmt.Errorf("%w: %s %s does not belong to this quiz", ErrInvalidInput, field, raw)
-		}
-		return v, nil
-	}
-	questions := make([]domain.Question, len(in.Questions))
-	for i, qi := range in.Questions {
-		if len(qi.Options) > domain.MaxOptions {
-			return domain.Quiz{}, fmt.Errorf("%w: question %d has more than %d options", ErrInvalidInput, i+1, domain.MaxOptions)
-		}
-		qid, err := resolve("question id", qi.ID)
-		if err != nil {
-			return domain.Quiz{}, err
-		}
-		var ref id.ID
-		if qi.ReferenceLectureID != "" {
-			if ref, err = id.Parse(qi.ReferenceLectureID); err != nil {
-				return domain.Quiz{}, fmt.Errorf("%w: reference_lecture_id: %w", ErrInvalidInput, err)
-			}
-		}
-		opts := make([]domain.Option, len(qi.Options))
-		for j, oi := range qi.Options {
-			oid, err := resolve("option id", oi.ID)
-			if err != nil {
-				return domain.Quiz{}, err
-			}
-			opts[j] = domain.Option{ID: oid, Label: oi.Label, IsCorrect: oi.IsCorrect}
-		}
-		points := qi.Points
-		if points == 0 {
-			points = 1
-		}
-		q, err := domain.NewQuestion(qid, qi.Prompt, domain.QuestionType(qi.Type), qi.Explanation, points, ref, opts)
-		if err != nil {
-			return domain.Quiz{}, fmt.Errorf("%w: question %d: %w", ErrInvalidInput, i+1, err)
-		}
-		questions[i] = q
+	questions, err := buildQuestions(s.ids, in.Questions, owned)
+	if err != nil {
+		return domain.Quiz{}, err
 	}
 	q, err := domain.NewQuiz(quizID, courseID, lectureID, in.Position, questions, createdAt, updatedAt)
 	if err != nil {

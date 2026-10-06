@@ -16,8 +16,8 @@ type TxRunner struct{ pool *pgxpool.Pool }
 
 func NewTxRunner(pool *pgxpool.Pool) *TxRunner { return &TxRunner{pool: pool} }
 
-func (r *TxRunner) RunInTx(ctx context.Context, fn func(app.QuizRepository) error) error {
+func (r *TxRunner) RunInTx(ctx context.Context, fn func(app.Repos) error) error {
 	return pgx.BeginFunc(ctx, r.pool, func(tx pgx.Tx) error {
-		return fn(quizzes{q: sqlcgen.New(tx)})
+		return fn(app.Repos{Quizzes: quizzes{q: sqlcgen.New(tx)}})
 	})
 }

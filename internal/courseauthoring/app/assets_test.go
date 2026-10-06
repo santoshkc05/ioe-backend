@@ -199,6 +199,30 @@ func TestCheckManage(t *testing.T) {
 	}
 }
 
+func TestCheckManagerRead(t *testing.T) {
+	f := newAssetFixture(t)
+	if err := f.courses.CheckManagerRead(ctx, owner, f.course.ID); err != nil {
+		t.Fatalf("owner err = %v", err)
+	}
+	if err := f.courses.CheckManagerRead(ctx, otherInstr, f.course.ID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("other on draft err = %v", err)
+	}
+	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	if err := f.courses.CheckManagerRead(ctx, otherInstr, f.course.ID); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("other on published err = %v", err)
+	}
+	_ = f.courses.Archive(ctx, owner, f.course.ID)
+	if err := f.courses.CheckManagerRead(ctx, owner, f.course.ID); err != nil {
+		t.Fatalf("archived err = %v", err)
+	}
+	if err := f.courses.CheckManagerRead(ctx, admin, f.course.ID); err != nil {
+		t.Fatalf("admin on archived err = %v", err)
+	}
+	if err := f.courses.CheckManagerRead(ctx, owner, 424242); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("missing err = %v", err)
+	}
+}
+
 func TestCheckAssetRead(t *testing.T) {
 	f := newAssetFixture(t)
 	blocks := []app.BlockInput{videoBlock("v", videoAsset), deckBlock("d", imageAsset)}

@@ -19,9 +19,9 @@ func (q *QuizQuery) Lectures(ctx context.Context, courseID id.ID, quizIDs []id.I
 		return map[id.ID]id.ID{}, nil
 	}
 	var out map[id.ID]id.ID
-	err := q.tx.RunInTx(ctx, func(r QuizRepository) error {
+	err := q.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
-		out, err = r.LecturesOf(ctx, courseID, quizIDs)
+		out, err = r.Quizzes.LecturesOf(ctx, courseID, quizIDs)
 		return err
 	})
 	return out, err

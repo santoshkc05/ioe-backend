@@ -158,6 +158,15 @@ func (s *CourseService) CheckManage(ctx context.Context, p auth.Principal, cours
 	})
 }
 
+// CheckManagerRead returns nil when p manages the course, archived included: ErrNotFound when p
+// cannot see it, ErrForbidden when p does not manage it. For internal callers.
+func (s *CourseService) CheckManagerRead(ctx context.Context, p auth.Principal, courseID id.ID) error {
+	return s.tx.RunInTx(ctx, func(r Repos) error {
+		_, err := loadManaged(ctx, r, p, courseID)
+		return err
+	})
+}
+
 // CheckLectureManage applies CheckManage and returns ErrNotFound when the lecture is not in
 // the course. For internal callers.
 func (s *CourseService) CheckLectureManage(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error {
