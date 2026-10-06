@@ -11,10 +11,13 @@ import (
 
 // CourseRepository stores the Course aggregate. FindByID returns ErrNotFound;
 // Update returns ErrConcurrentModification when c.Version is stale and increments
-// c.Version on success. Insert sets c.Version to 1.
+// c.Version on success. Insert sets c.Version to 1. ListPublished returns up to q.Limit
+// published courses with ID below q.After (any ID when q.After is zero) matching the
+// filters, ordered by ID descending.
 type CourseRepository interface {
 	FindByID(ctx context.Context, courseID id.ID) (domain.Course, error)
 	ListByOwner(ctx context.Context, ownerID id.ID) ([]domain.Course, error)
+	ListPublished(ctx context.Context, q CatalogQuery) ([]CourseSummary, error)
 	Insert(ctx context.Context, c *domain.Course) error
 	Update(ctx context.Context, c *domain.Course) error
 }

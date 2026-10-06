@@ -104,6 +104,27 @@ func (r courses) load(ctx context.Context, courseIDs []int64) ([]domain.Course, 
 	return out, nil
 }
 
+func (r courses) ListPublished(ctx context.Context, q app.CatalogQuery) ([]app.CourseSummary, error) {
+	rows, err := r.q.ListPublishedCourses(ctx, sqlcgen.ListPublishedCoursesParams{
+		After: int64(q.After), Level: q.Level, Price: string(q.Price),
+		RowLimit: int32(q.Limit), //nolint:gosec // the service bounds Limit to MaxCatalogLimit+1
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]app.CourseSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, app.CourseSummary{
+			ID: id.ID(row.ID), OwnerID: id.ID(row.OwnerID), Title: row.Title, Description: row.Description,
+			Level: row.Level, ThumbnailURL: row.ThumbnailUrl,
+			Price:        domain.Price{AmountMinor: row.PriceAmountMinor, Currency: row.PriceCurrency},
+			LectureCount: int(row.LectureCount), SectionCount: int(row.SectionCount),
+			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
+		})
+	}
+	return out, nil
+}
+
 func (r courses) Insert(ctx context.Context, c *domain.Course) error {
 	if err := r.q.InsertCourse(ctx, sqlcgen.InsertCourseParams{
 		ID: int64(c.ID), OwnerID: int64(c.OwnerID), Title: c.Title.String(), Description: c.Description,

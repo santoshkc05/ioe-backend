@@ -99,3 +99,18 @@ FROM unnest(sqlc.arg(client_block_ids)::text[]) WITH ORDINALITY AS o(client_bloc
 WHERE b.lecture_id = sqlc.arg(lecture_id)::bigint
   AND b.client_block_id = o.client_block_id
   AND b.position IS DISTINCT FROM (o.position - 1);
+
+-- name: ListPublishedCourses :many
+SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url,
+       c.price_amount_minor, c.price_currency, c.created_at, c.updated_at,
+       (SELECT count(*) FROM courseauthoring.lectures l WHERE l.course_id = c.id) AS lecture_count,
+       (SELECT count(*) FROM courseauthoring.sections s WHERE s.course_id = c.id) AS section_count
+FROM courseauthoring.courses c
+WHERE c.status = 'published'
+  AND (sqlc.arg(after)::bigint = 0 OR c.id < sqlc.arg(after)::bigint)
+  AND (sqlc.arg(level)::text = '' OR c.level = sqlc.arg(level)::text)
+  AND (sqlc.arg(price)::text = ''
+       OR (sqlc.arg(price)::text = 'free' AND c.price_amount_minor = 0)
+       OR (sqlc.arg(price)::text = 'paid' AND c.price_amount_minor > 0))
+ORDER BY c.id DESC
+LIMIT sqlc.arg(row_limit)::integer;

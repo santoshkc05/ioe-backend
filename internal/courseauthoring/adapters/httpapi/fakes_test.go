@@ -2,6 +2,7 @@ package httpapi_test
 
 import (
 	"context"
+	"sort"
 	"sync"
 	"time"
 
@@ -72,6 +73,28 @@ func (t *memTx) ListByOwner(_ context.Context, owner id.ID) ([]domain.Course, er
 		if c.OwnerID == owner {
 			out = append(out, c)
 		}
+	}
+	return out, nil
+}
+
+func (t *memTx) ListPublished(_ context.Context, q app.CatalogQuery) ([]app.CourseSummary, error) {
+	var out []app.CourseSummary
+	for _, c := range t.courses {
+		if c.Status != domain.StatusPublished || (q.After != 0 && c.ID >= q.After) ||
+			(q.Level != "" && c.Level != q.Level) ||
+			(q.Price == app.PriceFree && !c.Price.IsFree()) || (q.Price == app.PricePaid && c.Price.IsFree()) {
+			continue
+		}
+		out = append(out, app.CourseSummary{
+			ID: c.ID, OwnerID: c.OwnerID, Title: c.Title.String(), Description: c.Description,
+			Level: c.Level, ThumbnailURL: c.ThumbnailURL, Price: c.Price,
+			LectureCount: len(c.Lectures), SectionCount: len(c.Sections),
+			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	if len(out) > q.Limit {
+		out = out[:q.Limit]
 	}
 	return out, nil
 }

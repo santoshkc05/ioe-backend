@@ -209,3 +209,113 @@ func TestConcurrentPatchesExactlyOneWins(t *testing.T) {
 		t.Fatalf("wins = %d, errs = %v", wins, errs)
 	}
 }
+
+// seedPublished inserts a course with one section and one lecture, then publishes it with
+// the given level and price.
+func (f fixture) seedPublished(t *testing.T, level string, price domain.Price) domain.Course {
+	t.Helper()
+	ctx := context.Background()
+	c := f.seedCourse(t)
+	ttl, _ := contentblocks.NewTitle("Go")
+	if err := c.UpdateDetails(ttl, "d", level, "", f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.SetPrice(price, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Publish(f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.tx.RunInTx(ctx, func(r app.Repos) error { return r.Courses.Update(ctx, &c) }); err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func (f fixture) listPublished(t *testing.T, q app.CatalogQuery) []app.CourseSummary {
+	t.Helper()
+	ctx := context.Background()
+	var out []app.CourseSummary
+	if err := f.tx.RunInTx(ctx, func(r app.Repos) error {
+		var err error
+		out, err = r.Courses.ListPublished(ctx, q)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+func summaryIDs(ss []app.CourseSummary) []id.ID {
+	out := make([]id.ID, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s.ID)
+	}
+	return out
+}
+
+func TestListPublishedFiltersAndCounts(t *testing.T) {
+	f := newFixture(t)
+	paid := domain.Price{AmountMinor: 50000, Currency: "NPR"}
+	freeBeginner := f.seedPublished(t, "beginner", domain.Price{})
+	paidAdvanced := f.seedPublished(t, "advanced", paid)
+	f.seedCourse(t) // draft, never listed
+
+	all := f.listPublished(t, app.CatalogQuery{Limit: 10})
+	if got := summaryIDs(all); len(got) != 2 || got[0] != paidAdvanced.ID || got[1] != freeBeginner.ID {
+		t.Fatalf("all = %v", got)
+	}
+	s := all[0]
+	if s.LectureCount != 1 || s.SectionCount != 1 || s.Price != paid || s.Level != "advanced" ||
+		s.Title != "Go" || s.OwnerID != 100 || !s.CreatedAt.Equal(f.now) {
+		t.Fatalf("summary = %+v", s)
+	}
+	if got := summaryIDs(f.listPublished(t, app.CatalogQuery{Limit: 10, Price: app.PriceFree})); len(got) != 1 || got[0] != freeBeginner.ID {
+		t.Errorf("free = %v", got)
+	}
+	if got := summaryIDs(f.listPublished(t, app.CatalogQuery{Limit: 10, Price: app.PricePaid})); len(got) != 1 || got[0] != paidAdvanced.ID {
+		t.Errorf("paid = %v", got)
+	}
+	if got := summaryIDs(f.listPublished(t, app.CatalogQuery{Limit: 10, Level: "beginner"})); len(got) != 1 || got[0] != freeBeginner.ID {
+		t.Errorf("beginner = %v", got)
+	}
+	if got := f.listPublished(t, app.CatalogQuery{Limit: 10, Level: "intermediate"}); len(got) != 0 {
+		t.Errorf("intermediate = %v", summaryIDs(got))
+	}
+}
+
+func TestListPublishedKeysetWalk(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	var seeded []domain.Course
+	for range 5 {
+		seeded = append(seeded, f.seedPublished(t, "", domain.Price{}))
+	}
+	// newest first: seeded[4] .. seeded[0]
+	page1 := f.listPublished(t, app.CatalogQuery{Limit: 2})
+	if got := summaryIDs(page1); len(got) != 2 || got[0] != seeded[4].ID || got[1] != seeded[3].ID {
+		t.Fatalf("page1 = %v", got)
+	}
+
+	// Archive a course that belongs to the next page; the walk must neither repeat nor skip.
+	archived := seeded[2]
+	if err := archived.Archive(f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.tx.RunInTx(ctx, func(r app.Repos) error { return r.Courses.Update(ctx, &archived) }); err != nil {
+		t.Fatal(err)
+	}
+	page2 := f.listPublished(t, app.CatalogQuery{Limit: 2, After: page1[1].ID})
+	if got := summaryIDs(page2); len(got) != 2 || got[0] != seeded[1].ID || got[1] != seeded[0].ID {
+		t.Fatalf("page2 = %v", got)
+	}
+	if got := f.listPublished(t, app.CatalogQuery{Limit: 2, After: page2[1].ID}); len(got) != 0 {
+		t.Fatalf("page3 = %v", summaryIDs(got))
+	}
+
+	// A cursor that names no course still pages by ID.
+	gone := seeded[3].ID + 1
+	if got := summaryIDs(f.listPublished(t, app.CatalogQuery{Limit: 10, After: gone})); len(got) != 3 || got[0] != seeded[3].ID {
+		t.Fatalf("unknown cursor = %v", got)
+	}
+}

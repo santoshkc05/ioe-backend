@@ -375,6 +375,82 @@ func (q *Queries) ListLecturesByCourseIDs(ctx context.Context, courseIds []int64
 	return items, nil
 }
 
+const listPublishedCourses = `-- name: ListPublishedCourses :many
+SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url,
+       c.price_amount_minor, c.price_currency, c.created_at, c.updated_at,
+       (SELECT count(*) FROM courseauthoring.lectures l WHERE l.course_id = c.id) AS lecture_count,
+       (SELECT count(*) FROM courseauthoring.sections s WHERE s.course_id = c.id) AS section_count
+FROM courseauthoring.courses c
+WHERE c.status = 'published'
+  AND ($1::bigint = 0 OR c.id < $1::bigint)
+  AND ($2::text = '' OR c.level = $2::text)
+  AND ($3::text = ''
+       OR ($3::text = 'free' AND c.price_amount_minor = 0)
+       OR ($3::text = 'paid' AND c.price_amount_minor > 0))
+ORDER BY c.id DESC
+LIMIT $4::integer
+`
+
+type ListPublishedCoursesParams struct {
+	After    int64
+	Level    string
+	Price    string
+	RowLimit int32
+}
+
+type ListPublishedCoursesRow struct {
+	ID               int64
+	OwnerID          int64
+	Title            string
+	Description      string
+	Level            string
+	ThumbnailUrl     string
+	PriceAmountMinor int64
+	PriceCurrency    string
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	LectureCount     int64
+	SectionCount     int64
+}
+
+func (q *Queries) ListPublishedCourses(ctx context.Context, arg ListPublishedCoursesParams) ([]ListPublishedCoursesRow, error) {
+	rows, err := q.db.Query(ctx, listPublishedCourses,
+		arg.After,
+		arg.Level,
+		arg.Price,
+		arg.RowLimit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListPublishedCoursesRow
+	for rows.Next() {
+		var i ListPublishedCoursesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.OwnerID,
+			&i.Title,
+			&i.Description,
+			&i.Level,
+			&i.ThumbnailUrl,
+			&i.PriceAmountMinor,
+			&i.PriceCurrency,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.LectureCount,
+			&i.SectionCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSectionsByCourseIDs = `-- name: ListSectionsByCourseIDs :many
 SELECT id, course_id, title, sort_order FROM courseauthoring.sections
 WHERE course_id = ANY($1::bigint[])
