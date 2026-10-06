@@ -71,7 +71,7 @@ func fakeAuth(next http.Handler) http.Handler {
 func newServer(s *stub) http.Handler {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r, h := httpserver.NewRouter(httpserver.Options{Logger: logger, AllowedOrigins: []string{"https://app.test"}, ServiceName: "test"})
-	httpapi.New(s, httpapi.Config{RequireAuth: fakeAuth, Logger: logger}).Register(r)
+	httpapi.New(s, &examStub{}, httpapi.Config{RequireAuth: fakeAuth, Logger: logger}).Register(r)
 	return h
 }
 

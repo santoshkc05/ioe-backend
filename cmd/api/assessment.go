@@ -60,6 +60,8 @@ func toAssessmentError(err error) error {
 }
 
 func registerAssessment(r *httpserver.Router, tx *assessmentpg.TxRunner, courses *courseauthoringapp.CourseService, contents *courseauthoringapp.ContentService, enrollments assessmentapp.EnrollmentQuery, ids *id.Generator, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) {
-	svc := assessmentapp.NewQuizService(tx, assessmentCourseAccess{courses: courses, contents: contents}, enrollments, ids, clk)
-	assessmenthttp.New(svc, assessmenthttp.Config{RequireAuth: requireAuth, Logger: logger}).Register(r)
+	access := assessmentCourseAccess{courses: courses, contents: contents}
+	quizzes := assessmentapp.NewQuizService(tx, access, enrollments, ids, clk)
+	exams := assessmentapp.NewExamService(tx, access, enrollments, ids, clk)
+	assessmenthttp.New(quizzes, exams, assessmenthttp.Config{RequireAuth: requireAuth, Logger: logger}).Register(r)
 }

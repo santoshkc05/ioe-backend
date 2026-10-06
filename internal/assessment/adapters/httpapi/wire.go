@@ -28,16 +28,20 @@ type saveQuizRequest struct {
 }
 
 func (r saveQuizRequest) toInput() app.QuizInput {
-	in := app.QuizInput{Position: r.Position, Questions: make([]app.QuestionInput, len(r.Questions))}
-	for i, q := range r.Questions {
+	return app.QuizInput{Position: r.Position, Questions: toQuestionInputs(r.Questions)}
+}
+
+func toQuestionInputs(in []questionInputWire) []app.QuestionInput {
+	out := make([]app.QuestionInput, len(in))
+	for i, q := range in {
 		opts := make([]app.OptionInput, len(q.Options))
 		for j, o := range q.Options {
 			opts[j] = app.OptionInput{ID: o.ID, Label: o.Label, IsCorrect: o.IsCorrect}
 		}
-		in.Questions[i] = app.QuestionInput{ID: q.ID, Prompt: q.Prompt, Type: q.Type, Explanation: q.Explanation,
+		out[i] = app.QuestionInput{ID: q.ID, Prompt: q.Prompt, Type: q.Type, Explanation: q.Explanation,
 			Points: q.Points, ReferenceLectureID: q.ReferenceLectureID, Options: opts}
 	}
-	return in
+	return out
 }
 
 type answerWire struct {
