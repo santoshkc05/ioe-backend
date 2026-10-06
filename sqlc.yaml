@@ -56,3 +56,20 @@ sql:
               import: time
               type: Time
               pointer: true
+  - engine: postgresql
+    schema: migrations
+    queries: internal/progress/adapters/postgres/queries.sql
+    gen:
+      go:
+        package: sqlcgen
+        out: internal/progress/adapters/postgres/sqlcgen
+        sql_package: pgx/v5
+        overrides:
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              import: time
+              type: Time
+              pointer: true

@@ -108,3 +108,19 @@ type PlatformOutboxOffset struct {
 	OffsetAcked                pgtype.Int8
 	LastProcessedTransactionID pgtype.Uint64
 }
+
+type ProgressCourseProgress struct {
+	CourseID      int64
+	UserID        int64
+	LastLectureID int64
+	UpdatedAt     time.Time
+}
+
+type ProgressLectureProgress struct {
+	CourseID   int64
+	UserID     int64
+	LectureID  int64
+	State      string
+	PositionMs int64
+	UpdatedAt  time.Time
+}
