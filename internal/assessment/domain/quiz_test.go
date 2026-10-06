@@ -132,6 +132,9 @@ func TestNewQuiz(t *testing.T) {
 	if _, err := domain.NewQuiz(7, 10, 50, -1, []domain.Question{question(t, 1, 11, 12)}, t0, t0); !errors.Is(err, domain.ErrInvalidQuiz) {
 		t.Fatalf("negative position: %v", err)
 	}
+	if _, err := domain.NewQuiz(7, 10, 50, domain.MaxPosition+1, []domain.Question{question(t, 1, 11, 12)}, t0, t0); !errors.Is(err, domain.ErrInvalidQuiz) {
+		t.Fatalf("position above max: %v", err)
+	}
 	many := make([]domain.Question, domain.MaxQuestions+1)
 	for i := range many {
 		many[i] = question(t, id.ID(10000+i*3), id.ID(10001+i*3), id.ID(10002+i*3))

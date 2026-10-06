@@ -18,6 +18,7 @@ const (
 	MinOptions        = 2
 	MaxOptions        = 10
 	MaxQuestions      = 100
+	MaxPosition       = 10000
 )
 
 type QuestionType string
@@ -102,8 +103,8 @@ type Quiz struct {
 
 // NewQuiz validates the quiz size and that question and option IDs are unique across it.
 func NewQuiz(quizID, courseID, lectureID id.ID, position int, questions []Question, createdAt, updatedAt time.Time) (Quiz, error) {
-	if position < 0 {
-		return Quiz{}, fmt.Errorf("%w: position must not be negative", ErrInvalidQuiz)
+	if position < 0 || position > MaxPosition {
+		return Quiz{}, fmt.Errorf("%w: position must be 0 to %d", ErrInvalidQuiz, MaxPosition)
 	}
 	if len(questions) == 0 || len(questions) > MaxQuestions {
 		return Quiz{}, fmt.Errorf("%w: a quiz has 1 to %d questions", ErrInvalidQuiz, MaxQuestions)

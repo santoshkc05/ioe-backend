@@ -142,7 +142,7 @@ explanation, and labels, and returns `ErrInvalidQuestion` unless:
   option; `true_false` has exactly two options.
 
 `NewQuiz(id, courseID, lectureID, position, questions, createdAt, updatedAt)` returns
-`ErrInvalidQuiz` unless the position is non-negative, there are 1 to 100 questions, and question
+`ErrInvalidQuiz` unless the position is 0 to 10,000, there are 1 to 100 questions, and question
 and option IDs are unique across the quiz.
 
 `Quiz.CheckAnswers(answers)` returns `ErrInvalidAnswer` for an unknown question, an option not in

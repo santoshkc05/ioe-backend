@@ -1700,7 +1700,7 @@ components:
       required: [position, questions]
       additionalProperties: false
       properties:
-        position: { type: integer, minimum: 0 }
+        position: { type: integer, minimum: 0, maximum: 10000 }
         questions:
           type: array
           minItems: 1

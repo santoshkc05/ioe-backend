@@ -69,7 +69,7 @@ func (r quizzes) Insert(ctx context.Context, q domain.Quiz) error {
 		return err
 	}
 	return r.q.InsertQuiz(ctx, sqlcgen.InsertQuizParams{
-		ID: int64(q.ID), CourseID: int64(q.CourseID), LectureID: int64(q.LectureID), Position: int32(q.Position), //nolint:gosec // domain bounds position by request size
+		ID: int64(q.ID), CourseID: int64(q.CourseID), LectureID: int64(q.LectureID), Position: int32(q.Position), //nolint:gosec // domain.NewQuiz bounds position to MaxPosition
 		Questions: doc, CreatedAt: q.CreatedAt, UpdatedAt: q.UpdatedAt,
 	})
 }
