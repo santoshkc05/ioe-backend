@@ -84,3 +84,20 @@ sql:
         overrides:
           - db_type: timestamptz
             go_type: time.Time
+  - engine: postgresql
+    schema: migrations
+    queries: internal/assessment/adapters/postgres/queries.sql
+    gen:
+      go:
+        package: sqlcgen
+        out: internal/assessment/adapters/postgres/sqlcgen
+        sql_package: pgx/v5
+        overrides:
+          - db_type: timestamptz
+            go_type: time.Time
+          - db_type: jsonb
+            go_type: encoding/json.RawMessage
+          - column: assessment.quiz_attempts.idempotency_key
+            go_type:
+              type: string
+              pointer: true
