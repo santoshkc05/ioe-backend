@@ -946,3 +946,180 @@ func TestQuizzesEndToEnd(t *testing.T) {
 		t.Fatalf("after delete: %d %v", code, qs)
 	}
 }
+
+func TestExamsEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string), body["user"].(map[string]any)["id"].(string)
+	}
+	adminTok, _ := signIn("sub-admin", "admin@example.com")
+	studentTok, studentID := signIn("sub-student", "student@example.com")
+	strangerTok, _ := signIn("sub-stranger", "stranger@example.com")
+	admin, student, stranger := bearer(adminTok), bearer(studentTok), bearer(strangerTok)
+	list := func(path string, who map[string]string) (int, []map[string]any) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+path, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for k, v := range who {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var out []map[string]any
+		_ = json.NewDecoder(resp.Body).Decode(&out)
+		return resp.StatusCode, out
+	}
+
+	resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create course: %d %v", resp.StatusCode, body)
+	}
+	courseID := body["id"].(string)
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"L1","text_body":"<p>x</p>"}`, admin); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish course: %d", resp.StatusCode)
+	}
+	examsPath := "/v1/courses/" + courseID + "/exams"
+	examBody := func(limit string, retakes bool) string {
+		return `{"title":"Final","description":"","position":0,"pass_mark":50,"time_limit_seconds":` + limit +
+			`,"retakes_allowed":` + strconv.FormatBool(retakes) + `,"opens_at":null,"closes_at":null,"reveal_policy":"after_attempt",` +
+			`"questions":[{"prompt":"2+2?","type":"single_choice","explanation":"arith","points":2,"reference_lecture_id":"",` +
+			`"options":[{"label":"4","is_correct":true},{"label":"5","is_correct":false}]}]}`
+	}
+
+	// An instructor creates a draft exam; students cannot see it until it is published.
+	resp, body = c.do(http.MethodPost, examsPath, examBody("null", false), admin)
+	if resp.StatusCode != http.StatusCreated || body["status"] != "draft" {
+		t.Fatalf("create exam: %d %v", resp.StatusCode, body)
+	}
+	examID := body["id"].(string)
+	question := body["questions"].([]any)[0].(map[string]any)
+	questionID := question["id"].(string)
+	options := question["options"].([]any)
+	right, wrong := options[0].(map[string]any)["id"].(string), options[1].(map[string]any)["id"].(string)
+	if code, _ := list(examsPath, student); code != http.StatusConflict {
+		t.Fatalf("list before enroll: %d", code)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/enrollments/"+studentID, "", student); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("enroll: %d %v", resp.StatusCode, body)
+	}
+	if code, exams := list(examsPath, student); code != http.StatusOK || len(exams) != 0 {
+		t.Fatalf("drafts listed: %d %v", code, exams)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/exams/"+examID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish exam: %d", resp.StatusCode)
+	}
+	if code, exams := list(examsPath, student); code != http.StatusOK || len(exams) != 1 || exams[0]["availability"] != "open" {
+		t.Fatalf("list: %d %v", code, exams)
+	}
+	resp, body = c.do(http.MethodGet, "/v1/exams/"+examID, "", student)
+	if q := body["questions"].([]any)[0].(map[string]any); resp.StatusCode != http.StatusOK || q["correct_option_ids"] != nil {
+		t.Fatalf("student exam: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodGet, "/v1/exams/"+examID, "", stranger); resp.StatusCode != http.StatusConflict || body["type"] != "enrollment_required" {
+		t.Fatalf("unenrolled: %d %v", resp.StatusCode, body)
+	}
+
+	// The student takes the exam.
+	resp, body = c.do(http.MethodPost, "/v1/exams/"+examID+"/attempts", "", student)
+	if resp.StatusCode != http.StatusCreated || body["deadline"] != nil {
+		t.Fatalf("start: %d %v", resp.StatusCode, body)
+	}
+	attemptID := body["id"].(string)
+	if resp, body = c.do(http.MethodPost, "/v1/exams/"+examID+"/attempts", "", student); resp.StatusCode != http.StatusConflict || body["type"] != "open_attempt_exists" {
+		t.Fatalf("second start: %d %v", resp.StatusCode, body)
+	}
+	answer := func(option string) int {
+		resp, _ := c.do(http.MethodPost, "/v1/exam-attempts/"+attemptID+"/answers", `{"question_id":"`+questionID+`","option_ids":["`+option+`"]}`, student)
+		return resp.StatusCode
+	}
+	if code := answer(wrong); code != http.StatusNoContent {
+		t.Fatalf("answer: %d", code)
+	}
+	if code := answer(right); code != http.StatusNoContent {
+		t.Fatalf("change answer: %d", code)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/exam-attempts/"+attemptID, "", stranger); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("stranger reads attempt: %d", resp.StatusCode)
+	}
+	if resp, body = c.do(http.MethodGet, "/v1/exam-attempts/"+attemptID+"/review", "", student); resp.StatusCode != http.StatusConflict || body["type"] != "reveal_attempt_open" {
+		t.Fatalf("review while open: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/exam-attempts/"+attemptID+"/submit", "", student)
+	if resp.StatusCode != http.StatusOK || body["score"] != 100.0 || body["passed"] != true {
+		t.Fatalf("submit: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodGet, "/v1/exam-attempts/"+attemptID+"/review", "", student)
+	if q := body["questions"].([]any)[0].(map[string]any); resp.StatusCode != http.StatusOK || q["correct_option_ids"].([]any)[0] != right {
+		t.Fatalf("review: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/exams/"+examID+"/attempts", "", student); resp.StatusCode != http.StatusConflict || body["type"] != "retakes_not_allowed" {
+		t.Fatalf("retake: %d %v", resp.StatusCode, body)
+	}
+
+	// After a submission, wording edits pass and answer-key edits are refused.
+	save := func(prompt string, rightCorrect bool) (*http.Response, map[string]any) {
+		return c.do(http.MethodPut, "/v1/exams/"+examID, `{"title":"Final","description":"","position":0,"pass_mark":50,`+
+			`"time_limit_seconds":null,"retakes_allowed":false,"opens_at":null,"closes_at":null,"reveal_policy":"after_attempt",`+
+			`"questions":[{"id":"`+questionID+`","prompt":"`+prompt+`","type":"single_choice","explanation":"arith","points":2,`+
+			`"options":[{"id":"`+right+`","label":"4","is_correct":`+strconv.FormatBool(rightCorrect)+`},`+
+			`{"id":"`+wrong+`","label":"5","is_correct":`+strconv.FormatBool(!rightCorrect)+`}]}]}`, admin)
+	}
+	if resp, body = save("What is 2+2?", true); resp.StatusCode != http.StatusOK || body["locks"].(map[string]any)["submitted_attempt_count"] != 1.0 {
+		t.Fatalf("reword: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = save("What is 2+2?", false); resp.StatusCode != http.StatusConflict || body["type"] != "edit_key_frozen" {
+		t.Fatalf("key change: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodDelete, "/v1/exams/"+examID, "", admin); resp.StatusCode != http.StatusConflict || body["type"] != "exam_has_attempts" {
+		t.Fatalf("delete: %d %v", resp.StatusCode, body)
+	}
+	if code, attempts := list("/v1/exams/"+examID+"/attempts", admin); code != http.StatusOK || len(attempts) != 1 || attempts[0]["still_open"] != false {
+		t.Fatalf("attempts: %d %v", code, attempts)
+	}
+
+	// A timed attempt left past its deadline reads back as auto-submitted.
+	resp, body = c.do(http.MethodPost, examsPath, examBody("1", true), admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create timed exam: %d %v", resp.StatusCode, body)
+	}
+	timedID := body["id"].(string)
+	if resp, _ = c.do(http.MethodPost, "/v1/exams/"+timedID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish timed: %d", resp.StatusCode)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/exams/"+timedID+"/attempts", "", student)
+	if resp.StatusCode != http.StatusCreated || body["deadline"] == nil {
+		t.Fatalf("start timed: %d %v", resp.StatusCode, body)
+	}
+	timedAttempt := body["id"].(string)
+	time.Sleep(1500 * time.Millisecond)
+	resp, body = c.do(http.MethodGet, "/v1/exam-attempts/"+timedAttempt, "", student)
+	if resp.StatusCode != http.StatusOK || body["auto_submitted"] != true || body["score"] != 0.0 {
+		t.Fatalf("expired attempt: %d %v", resp.StatusCode, body)
+	}
+}

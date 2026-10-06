@@ -1118,6 +1118,402 @@ paths:
         "415": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/exams/authoring:
+    get:
+      summary: List a course's exams for authoring
+      description: A course manager (owner or root admin), archived courses included. Drafts are included. Ordered by position, then ID.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "200":
+          description: Exams
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ExamAuthoringSummary" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/exams:
+    get:
+      summary: List a course's published exams for the calling student
+      description: >
+        An actively enrolled student of a published course. Each exam carries its availability
+        and the caller's standing. Reading settles the caller's expired attempts.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "200":
+          description: Exams
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ExamSummary" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      summary: Create a draft exam
+      description: A course manager, on a course that is not archived. Question and option IDs are generated.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveExamRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAuthoring" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/exams-order:
+    put:
+      summary: Reorder a course's exams
+      description: A course manager. exam_ids must list each exam of the course exactly once; positions become their indexes.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [exam_ids]
+              additionalProperties: false
+              properties:
+                exam_ids:
+                  type: array
+                  items: { $ref: "#/components/schemas/ID" }
+      responses:
+        "204": { description: Reordered }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}:
+    get:
+      summary: Read a published exam as a student
+      description: An actively enrolled student. Answer keys and explanations are never included. Drafts are 404.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "200":
+          description: Exam
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Exam" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    put:
+      summary: Replace an exam's settings, position, and questions
+      description: >
+        A course manager. Supplied question and option IDs must belong to this exam; omitted IDs
+        are generated. Status is kept. Edits that would break existing attempts are 409 with an
+        edit_* code and details naming the question and option.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveExamRequest" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAuthoring" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      summary: Delete an exam
+      description: A course manager. 409 exam_has_attempts once any attempt exists.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "204": { description: Deleted }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}/authoring:
+    get:
+      summary: Read an exam for authoring
+      description: A course manager, archived courses included. Includes answer keys and attempt locks.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "200":
+          description: Exam
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAuthoring" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}/settings:
+    patch:
+      summary: Replace an exam's settings and question points
+      description: A course manager. Questions and position are kept; points maps question IDs to new points.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/SaveExamSettingsRequest" }
+      responses:
+        "200":
+          description: Saved
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAuthoring" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}/publish:
+    post:
+      summary: Publish an exam
+      description: A course manager. Idempotent.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "204": { description: Published }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}/unpublish:
+    post:
+      summary: Unpublish an exam
+      description: A course manager. Idempotent. Blocks new attempts; open attempts may still be saved and submitted.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "204": { description: Unpublished }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}/duplicate:
+    post:
+      summary: Duplicate an exam
+      description: A course manager. The copy is a draft with fresh IDs, " (copy)" appended to its title, placed last.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAuthoring" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exams/{examID}/attempts:
+    get:
+      summary: List an exam's attempts
+      description: A course manager. Reading settles expired attempts. Ordered by start time, then ID.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "200":
+          description: Attempts
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/ExamAttemptSummary" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      summary: Start an exam attempt
+      description: >
+        An actively enrolled student, inside the exam's window. The server stamps started_at and
+        computes deadline. 409 exam_not_open (details.opens_at), exam_closed (details.closes_at),
+        open_attempt_exists, or retakes_not_allowed.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/ExamID"
+      responses:
+        "201":
+          description: Started
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAttempt" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exam-attempts/{attemptID}:
+    get:
+      summary: Read the caller's attempt
+      description: The attempt's owner. An expired attempt is graded as of its deadline and returned auto-submitted.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AttemptID"
+      responses:
+        "200":
+          description: Attempt
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAttempt" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exam-attempts/{attemptID}/answers:
+    post:
+      summary: Save one answer
+      description: >
+        The attempt's owner, while the attempt is open and not past its deadline. Replaces any
+        earlier answer to the question; an empty option_ids clears it. 409 attempt_submitted or
+        attempt_expired.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AttemptID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [question_id, option_ids]
+              additionalProperties: false
+              properties:
+                question_id: { $ref: "#/components/schemas/ID" }
+                option_ids:
+                  type: array
+                  items: { $ref: "#/components/schemas/ID" }
+      responses:
+        "204": { description: Saved }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exam-attempts/{attemptID}/submit:
+    post:
+      summary: Submit and grade the caller's attempt
+      description: The attempt's owner, before its deadline. 409 attempt_submitted or attempt_expired.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AttemptID"
+      responses:
+        "200":
+          description: Graded
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamAttempt" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/exam-attempts/{attemptID}/review:
+    get:
+      summary: Review a graded attempt with the answer key
+      description: >
+        The owner, as the exam's reveal policy allows (409 reveal_attempt_open, 403
+        reveal_disabled, or 403 reveal_not_yet with details.reveal_at), or a course manager at any
+        time once graded. Anyone else gets 404.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/AttemptID"
+      responses:
+        "200":
+          description: Review
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ExamReview" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -1167,6 +1563,16 @@ components:
       schema: { type: string, pattern: "^[0-9]+$" }
     QuizID:
       name: quizID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
+    ExamID:
+      name: examID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
+    AttemptID:
+      name: attemptID
       in: path
       required: true
       schema: { $ref: "#/components/schemas/ID" }
@@ -1661,10 +2067,35 @@ components:
             - empty_course
             - unsupported_currency
             - invalid_input
+            - exam_not_open
+            - exam_closed
+            - open_attempt_exists
+            - retakes_not_allowed
+            - exam_has_attempts
+            - attempt_submitted
+            - attempt_expired
+            - reveal_attempt_open
+            - reveal_disabled
+            - reveal_not_yet
+            - edit_would_truncate_attempt
+            - edit_add_during_attempt
+            - edit_question_answered
+            - edit_key_frozen
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
         instance: { type: string, description: Request ID }
+        details:
+          type: object
+          description: >
+            Present on exam_not_open (opens_at), exam_closed (closes_at), reveal_not_yet
+            (reveal_at), and edit_* codes (question_id, option_id when known).
+          properties:
+            opens_at: { type: string, format: date-time }
+            closes_at: { type: string, format: date-time }
+            reveal_at: { type: string, format: date-time }
+            question_id: { $ref: "#/components/schemas/ID" }
+            option_id: { $ref: "#/components/schemas/ID" }
     QuizOption:
       type: object
       required: [id, label]
@@ -1751,3 +2182,236 @@ components:
       properties:
         id: { $ref: "#/components/schemas/ID" }
         recorded: { type: boolean }
+    ExamSettings:
+      type: object
+      required: [title, description, pass_mark, time_limit_seconds, retakes_allowed, reveal_policy]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        pass_mark: { type: integer, minimum: 0, maximum: 100 }
+        time_limit_seconds: { type: [integer, "null"], minimum: 1, maximum: 86400, description: Null when untimed }
+        retakes_allowed: { type: boolean }
+        opens_at: { type: string, format: date-time, description: Absent when the exam has no opening time }
+        closes_at: { type: string, format: date-time, description: Absent when the exam has no closing time }
+        reveal_policy: { type: string, enum: [after_attempt, after_close, never] }
+    ExamQuestion:
+      type: object
+      required: [id, prompt, type, points, options]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        prompt: { type: string }
+        type: { type: string, enum: [single_choice, multiple_choice, true_false] }
+        points: { type: integer, minimum: 1 }
+        options:
+          type: array
+          items: { $ref: "#/components/schemas/QuizOption" }
+        reference_lecture_id: { $ref: "#/components/schemas/ID" }
+    ExamAuthoringQuestion:
+      allOf:
+        - $ref: "#/components/schemas/ExamQuestion"
+        - type: object
+          required: [correct_option_ids, explanation]
+          properties:
+            correct_option_ids:
+              type: array
+              items: { $ref: "#/components/schemas/ID" }
+            explanation: { type: string }
+    Exam:
+      allOf:
+        - $ref: "#/components/schemas/ExamSettings"
+        - type: object
+          required: [id, course_id, position, questions]
+          properties:
+            id: { $ref: "#/components/schemas/ID" }
+            course_id: { $ref: "#/components/schemas/ID" }
+            position: { type: integer, minimum: 0 }
+            questions:
+              type: array
+              items: { $ref: "#/components/schemas/ExamQuestion" }
+    ExamLocks:
+      type: object
+      required: [has_open_attempts, has_submitted_attempts, answered_question_ids, open_attempt_count, submitted_attempt_count]
+      properties:
+        has_open_attempts: { type: boolean }
+        has_submitted_attempts: { type: boolean }
+        answered_question_ids:
+          type: array
+          items: { $ref: "#/components/schemas/ID" }
+        open_attempt_count: { type: integer }
+        submitted_attempt_count: { type: integer }
+    ExamAuthoring:
+      allOf:
+        - $ref: "#/components/schemas/ExamSettings"
+        - type: object
+          required: [id, course_id, position, status, locks, questions]
+          properties:
+            id: { $ref: "#/components/schemas/ID" }
+            course_id: { $ref: "#/components/schemas/ID" }
+            position: { type: integer, minimum: 0 }
+            status: { type: string, enum: [draft, published] }
+            locks: { $ref: "#/components/schemas/ExamLocks" }
+            questions:
+              type: array
+              items: { $ref: "#/components/schemas/ExamAuthoringQuestion" }
+    ExamAuthoringSummary:
+      allOf:
+        - $ref: "#/components/schemas/ExamSettings"
+        - type: object
+          required: [id, position, status, question_count, total_points]
+          properties:
+            id: { $ref: "#/components/schemas/ID" }
+            position: { type: integer, minimum: 0 }
+            status: { type: string, enum: [draft, published] }
+            question_count: { type: integer }
+            total_points: { type: integer }
+    ExamSummary:
+      allOf:
+        - $ref: "#/components/schemas/ExamSettings"
+        - type: object
+          required: [id, position, question_count, total_points, availability, attempt_count]
+          properties:
+            id: { $ref: "#/components/schemas/ID" }
+            position: { type: integer, minimum: 0 }
+            question_count: { type: integer }
+            total_points: { type: integer }
+            availability: { type: string, enum: [not_open, open, closed] }
+            open_attempt_id: { $ref: "#/components/schemas/ID" }
+            best_score: { type: integer, minimum: 0, maximum: 100 }
+            best_passed: { type: boolean }
+            attempt_count: { type: integer }
+    ExamQuestionInput:
+      type: object
+      required: [prompt, type, options]
+      additionalProperties: false
+      properties:
+        id: { type: string, description: Empty or omitted for a new question }
+        prompt: { type: string, maxLength: 5000 }
+        type: { type: string, enum: [single_choice, multiple_choice, true_false] }
+        explanation: { type: string, maxLength: 5000 }
+        points: { type: integer, minimum: 1, description: Defaults to 1 }
+        reference_lecture_id: { type: string, description: Empty or omitted when absent }
+        options:
+          type: array
+          minItems: 2
+          maxItems: 10
+          items:
+            type: object
+            required: [label, is_correct]
+            additionalProperties: false
+            properties:
+              id: { type: string, description: Empty or omitted for a new option }
+              label: { type: string, maxLength: 1000 }
+              is_correct: { type: boolean }
+    SaveExamRequest:
+      type: object
+      required: [title, pass_mark, reveal_policy, questions]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 5000 }
+        position: { type: integer, minimum: 0, maximum: 10000 }
+        pass_mark: { type: integer, minimum: 0, maximum: 100 }
+        time_limit_seconds: { type: [integer, "null"], minimum: 1, maximum: 86400 }
+        retakes_allowed: { type: boolean }
+        opens_at: { type: [string, "null"], format: date-time }
+        closes_at: { type: [string, "null"], format: date-time, description: Must be after opens_at; required by after_close }
+        reveal_policy: { type: string, enum: [after_attempt, after_close, never] }
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 100
+          items: { $ref: "#/components/schemas/ExamQuestionInput" }
+    SaveExamSettingsRequest:
+      type: object
+      required: [title, pass_mark, reveal_policy]
+      additionalProperties: false
+      properties:
+        title: { type: string, maxLength: 200 }
+        description: { type: string, maxLength: 5000 }
+        pass_mark: { type: integer, minimum: 0, maximum: 100 }
+        points:
+          type: object
+          description: Question ID to points; omitted questions keep theirs
+          additionalProperties: { type: integer, minimum: 1 }
+        time_limit_seconds: { type: [integer, "null"], minimum: 1, maximum: 86400 }
+        retakes_allowed: { type: boolean }
+        opens_at: { type: [string, "null"], format: date-time }
+        closes_at: { type: [string, "null"], format: date-time }
+        reveal_policy: { type: string, enum: [after_attempt, after_close, never] }
+    ExamAnswer:
+      type: object
+      required: [question_id, option_ids]
+      description: Grading fields appear only once the attempt is graded.
+      properties:
+        question_id: { $ref: "#/components/schemas/ID" }
+        option_ids:
+          type: array
+          items: { $ref: "#/components/schemas/ID" }
+        is_correct: { type: boolean }
+        points_possible: { type: integer }
+        points_awarded: { type: integer }
+        reference_lecture_id: { $ref: "#/components/schemas/ID" }
+    ExamAttempt:
+      type: object
+      required: [id, course_id, exam_id, user_id, started_at, auto_submitted, answers]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        course_id: { $ref: "#/components/schemas/ID" }
+        exam_id: { $ref: "#/components/schemas/ID" }
+        user_id: { $ref: "#/components/schemas/ID" }
+        started_at: { type: string, format: date-time }
+        deadline: { type: string, format: date-time, description: Absent when untimed and unwindowed }
+        submitted_at: { type: string, format: date-time }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        passed: { type: boolean }
+        auto_submitted: { type: boolean }
+        answers:
+          type: array
+          items: { $ref: "#/components/schemas/ExamAnswer" }
+    ExamAttemptSummary:
+      type: object
+      required: [id, user_id, started_at, auto_submitted, still_open]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        user_id: { $ref: "#/components/schemas/ID" }
+        started_at: { type: string, format: date-time }
+        submitted_at: { type: string, format: date-time }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        passed: { type: boolean }
+        auto_submitted: { type: boolean }
+        still_open: { type: boolean }
+    ExamReview:
+      type: object
+      required: [attempt_id, exam_id, title, score, passed, pass_mark, submitted_at, auto_submitted, questions]
+      properties:
+        attempt_id: { $ref: "#/components/schemas/ID" }
+        exam_id: { $ref: "#/components/schemas/ID" }
+        title: { type: string }
+        score: { type: integer, minimum: 0, maximum: 100 }
+        passed: { type: boolean }
+        pass_mark: { type: integer }
+        submitted_at: { type: string, format: date-time }
+        auto_submitted: { type: boolean }
+        questions:
+          type: array
+          items:
+            type: object
+            required: [id, position, prompt, type, options, selected_option_ids, correct_option_ids, explanation, points_possible, points_awarded]
+            properties:
+              id: { $ref: "#/components/schemas/ID" }
+              position: { type: integer }
+              prompt: { type: string }
+              type: { type: string, enum: [single_choice, multiple_choice, true_false] }
+              options:
+                type: array
+                items: { $ref: "#/components/schemas/QuizOption" }
+              selected_option_ids:
+                type: array
+                items: { $ref: "#/components/schemas/ID" }
+              correct_option_ids:
+                type: array
+                items: { $ref: "#/components/schemas/ID" }
+              explanation: { type: string }
+              points_possible: { type: integer }
+              points_awarded: { type: integer }
+              reference_lecture_id: { $ref: "#/components/schemas/ID" }
