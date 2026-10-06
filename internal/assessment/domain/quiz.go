@@ -109,39 +109,15 @@ func NewQuiz(quizID, courseID, lectureID id.ID, position int, questions []Questi
 	if len(questions) == 0 || len(questions) > MaxQuestions {
 		return Quiz{}, fmt.Errorf("%w: a quiz has 1 to %d questions", ErrInvalidQuiz, MaxQuestions)
 	}
-	seen := make(map[id.ID]struct{})
-	claim := func(v id.ID) error {
-		if _, dup := seen[v]; dup {
-			return fmt.Errorf("%w: id %s is used twice", ErrInvalidQuiz, v)
-		}
-		seen[v] = struct{}{}
-		return nil
-	}
-	for _, q := range questions {
-		if err := claim(q.ID); err != nil {
-			return Quiz{}, err
-		}
-		for _, o := range q.Options {
-			if err := claim(o.ID); err != nil {
-				return Quiz{}, err
-			}
-		}
+	if err := checkUniqueIDs(questions); err != nil {
+		return Quiz{}, fmt.Errorf("%w: %w", ErrInvalidQuiz, err)
 	}
 	return Quiz{ID: quizID, CourseID: courseID, LectureID: lectureID, Position: position,
 		Questions: slices.Clone(questions), CreatedAt: createdAt.UTC(), UpdatedAt: updatedAt.UTC()}, nil
 }
 
 // IDs returns every question and option ID in the quiz.
-func (q Quiz) IDs() map[id.ID]struct{} {
-	out := make(map[id.ID]struct{})
-	for _, qu := range q.Questions {
-		out[qu.ID] = struct{}{}
-		for _, o := range qu.Options {
-			out[o.ID] = struct{}{}
-		}
-	}
-	return out
-}
+func (q Quiz) IDs() map[id.ID]struct{} { return questionIDs(q.Questions) }
 
 type Answer struct {
 	QuestionID id.ID
