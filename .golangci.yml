@@ -47,6 +47,8 @@ linters:
               desc: platform must not depend on bounded contexts
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
               desc: platform must not depend on bounded contexts
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
+              desc: platform must not depend on bounded contexts
         platform-contentblocks:
           list-mode: strict
           files:
@@ -96,6 +98,8 @@ linters:
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
               desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
+              desc: bounded contexts must not import each other
         notification-independent:
           list-mode: lax
           files:
@@ -114,6 +118,8 @@ linters:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/assessment
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
               desc: bounded contexts must not import each other
         notification-app:
           list-mode: strict
@@ -163,6 +169,8 @@ linters:
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
               desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
+              desc: bounded contexts must not import each other
         enrollment-domain:
           list-mode: strict
           files:
@@ -201,6 +209,8 @@ linters:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/assessment
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
               desc: bounded contexts must not import each other
         progress-domain:
           list-mode: strict
@@ -241,6 +251,8 @@ linters:
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
               desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
+              desc: bounded contexts must not import each other
         media-domain:
           list-mode: strict
           files:
@@ -278,6 +290,8 @@ linters:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/assessment
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
               desc: bounded contexts must not import each other
         assessment-domain:
           list-mode: strict
@@ -317,6 +331,8 @@ linters:
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
               desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
+              desc: bounded contexts must not import each other
         payment-domain:
           list-mode: strict
           files:
@@ -355,6 +371,51 @@ linters:
             - pkg: github.com/santoshkc2200/ioe-backend/internal/media
               desc: bounded contexts must not import each other
             - pkg: github.com/santoshkc2200/ioe-backend/internal/assessment
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/blog
+              desc: bounded contexts must not import each other
+        blog-domain:
+          list-mode: strict
+          files:
+            - "**/internal/blog/domain/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
+        blog-app:
+          list-mode: strict
+          files:
+            - "**/internal/blog/app/**"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/santoshkc2200/ioe-backend/internal/blog/domain
+            - github.com/santoshkc2200/ioe-backend/internal/platform/auth
+            - github.com/santoshkc2200/ioe-backend/internal/platform/clock
+            - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
+            - github.com/santoshkc2200/ioe-backend/internal/platform/id
+        blog-independent:
+          list-mode: lax
+          files:
+            - "**/internal/blog/**"
+          deny:
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/identity
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/notification
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/courseauthoring
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/enrollment
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/progress
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/media
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/assessment
+              desc: bounded contexts must not import each other
+            - pkg: github.com/santoshkc2200/ioe-backend/internal/payment
               desc: bounded contexts must not import each other
   exclusions:
     generated: strict
