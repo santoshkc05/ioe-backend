@@ -36,7 +36,7 @@ tests. The copied folder is then deleted.
 - Review or approval workflow.
 - Video, quiz, flashcard, or media-asset-backed image blocks.
 - Comments, reactions, RSS, search, scheduled publishing.
-- Outbound webhooks, rate limiting specific to blog, multi-tenancy.
+- Outbound webhooks, multi-tenancy.
 - Frontend changes.
 
 ## Decisions
@@ -46,12 +46,14 @@ tests. The copied folder is then deleted.
 | Authors | `instructor` and `root_admin` create posts. Students and anonymous users only read live posts. |
 | Management | The author or a root admin edits, publishes, archives, and discards drafts. Only a root admin unpublishes. |
 | Review | None. Publish is immediate. |
-| Content | `platform/contentblocks`, kinds `text` and `image` only. Images use an https `url` and no `mediaAssetID`; rich-doc text must contain no image asset IDs. |
+| Content | `platform/contentblocks`, kinds `text` and `image` only. Images use an `https://` `url` and no `mediaAssetID`. Text blocks are sanitized HTML, which allows no images. |
 | Versions | Relational snapshot tables (`post_versions`, `post_version_blocks`), as in `courseauthoring`. |
 | Slugs | Globally unique. History is append-only; a slug that ever belonged to a post can never be claimed by another post. |
 | Old-slug reads | `GET /v1/blog/public/posts/{slug}` returns 200 with the live post, its canonical `slug`, and the `requestedSlug`. The client redirects its own page when they differ. |
 | Tags | Up to 10 per post, normalized, stored as `text[]` on the draft and on each version. Public tag reads use live versions only. |
-| Sitemap | Keyset pagination on `(published_at DESC, post_id DESC)` with an opaque cursor. |
+| Pagination | Public list and sitemap index both use keyset pagination on `(first_published_at DESC, post_id DESC)` with an opaque `next_cursor`, like the course catalog. `first_published_at` never changes, so republishing does not reorder pages. |
+| Rate limits | Public routes use `httpserver.RateLimiter` per client IP (120 per minute), like the course catalog. Content writes are limited per user and post (60 per minute), like lecture content. |
+| Patch validation | The client-block-ID set checks behind content PATCH move from `courseauthoring/app` into `platform/contentblocks`, so blog and course authoring share one implementation. |
 | Events | `blog.post_published` and `blog.post_unpublished` written to the outbox in the state-change transaction. No consumers yet. |
 
 ## Architecture
@@ -106,8 +108,9 @@ Any other transition returns `ErrInvalidTransition`. Archived posts reject every
 ### Value objects
 
 - `Slug`: lowercase ASCII `a-z0-9` and `-`, 1 to 96 characters, no leading, trailing, or repeated
-  hyphen. `SlugFromTitle` folds the title to that alphabet and falls back to `post-<id>` when nothing
-  remains. Ported from the copied `slug.go` and its tests.
+  hyphen. `SlugFromTitle` folds the title to that alphabet and falls back to `post-<id>` when fewer
+  than 3 characters remain. `WithSuffix(n)` appends `-n` within the length limit. Ported from the
+  copied `slug.go` and its tests.
 - `Tag`: trimmed, lowercased, 1 to 32 characters of `a-z0-9-`. `NewTags` deduplicates while keeping
   order and rejects more than 10.
 
@@ -118,15 +121,18 @@ Any other transition returns `ErrInvalidTransition`. Archived posts reject every
 
 ### Block policy
 
-`ValidateBlogBlocks` runs `contentblocks.ValidateBlocks` and then rejects any block whose kind is not
-`text` or `image`, any image with a `mediaAssetID`, and any text block whose rich document has
-`ImageAssetIDs()`. Violations return `ErrBlockKindNotAllowed` or a validation error.
+`NewContent` runs `contentblocks.ValidateBlocks` and then rejects any block whose kind is not `text`
+or `image` (`ErrBlockKindNotAllowed`) and any image without an `https://` URL or with a
+`mediaAssetID` (`ErrInvalidImage`). `ReadingMinutes` counts words in text blocks after stripping
+tags: 220 words per minute, rounded up, minimum 1.
 
 ### Errors
 
-`ErrNotFound`, `ErrForbidden`, `ErrInvalidTransition`, `ErrSlugTaken`, `ErrNotPublishable`,
-`ErrConcurrentModification`, `ErrConcurrentContentModification`, `ErrBlockKindNotAllowed`, plus
-validation errors for title, summary, cover URL, slug, and tags.
+Domain: `ErrInvalidStatusTransition`, `ErrPostArchived`, `ErrEmptyPost`, `ErrBlockKindNotAllowed`,
+`ErrInvalidImage`, `ErrInvalidSummary`, `ErrInvalidCoverURL`, `ErrInvalidSlug`, `ErrInvalidTag`,
+`ErrTooManyTags`. Application: `ErrNotFound`, `ErrForbidden`, `ErrConcurrentModification`,
+`ErrSlugTaken`, `ErrInvalidInput`, `ErrRevisionRequired`, `ErrPatchTooLarge`, and
+`RevisionConflictError` carrying the current content.
 
 ## Application (`internal/blog/app`)
 
@@ -137,11 +143,15 @@ validation errors for title, summary, cover URL, slug, and tags.
   `RestoreFromVersion`.
 - `PostContentRepository`: `FindHeader`, `FindHeaderForUpdate`, `ListBlocks`, `ApplyPatch`
   (base-revision checked), `Replace`.
-- `SlugRepository`: `Reserve(slug, postID)` inserting into history and returning `ErrSlugTaken` when
-  the slug belongs to another post; `Resolve(slug)` returning the owning post.
-- `PublicReadRepository`: `ListLive`, `GetLiveByPostID`, `ListTags`, `ListIndexPage`.
-- `EventPublisher`, `TxRunner{RunInTx(ctx, fn func(Repos) error)}`, `UserDirectory`
-  (batch lookup of display names, same shape as `payment/app.UserDirectory`).
+- `SlugRepository`: `Reserve(slug, postID)` inserts into history with `ON CONFLICT DO NOTHING` and
+  returns `ErrSlugTaken` when the slug belongs to another post (no statement error, so the
+  transaction stays usable for the next suffix); `Resolve(slug)` returns the owning post. Create
+  reserves before inserting the post; the history foreign key is deferred to commit.
+- `PublicRepository`: `ListLive(tag, after, limit)`, `FindLive(postID)`, `ListTags`,
+  `ListIndex(after, limit)`.
+- `EventPublisher`, `TxRunner{RunInTx(ctx, fn func(Repos) error)}`, and
+  `UserDirectory{Names(ctx, ids) (map[id.ID]string, error)}`. Identity has no batch read, so the
+  `cmd/api` adapter deduplicates IDs and calls `GetMe` once per author; a page holds at most 50.
 
 ### PostService (authenticated)
 
@@ -165,12 +175,15 @@ diff, and write under a row lock on the post header only. A stale `baseRevision`
 
 ### PublicService (anonymous)
 
-- `List(tag, limit, offset)`: live post cards with author names.
+- `List(tag, cursor, limit)`: live post cards with author names, newest first publication first.
 - `GetBySlug(slug)`: resolves current or historical slug to a post; returns the live version with the
   canonical slug and the requested slug. Unknown, draft, and archived posts all return `ErrNotFound`
   and are indistinguishable.
 - `Tags()`: tag counts over live versions.
 - `Index(cursor, limit)`: slug, `first_published_at`, `published_at` per live post.
+
+The slug is not versioned: a slug change on a live post takes effect publicly at once, and the old
+slug keeps resolving.
 
 ## Persistence (`internal/blog/adapters/postgres`)
 
@@ -178,16 +191,16 @@ Migration `00013_blog.sql` creates schema `blog`:
 
 - `posts`: `id`, `author_id`, `title`, `summary`, `cover_url` (CHECK empty or `^https://`),
   `tags text[]`, `slug` UNIQUE, `status` CHECK, `content_revision`, `last_version`,
-  `live_version`, `first_published_at`, `version`, `created_at`, `updated_at`. Index on `author_id`.
+  `live_version`, `first_published_at`, `version`, `created_at`, `updated_at`. Index on `author_id`;
+  partial index on (`first_published_at DESC`, `id DESC`) where `live_version IS NOT NULL`.
   `live_version` references `post_versions (post_id, number)`, with a CHECK that an archived post is
   not live.
 - `post_blocks`: `id`, `post_id`, `kind` CHECK IN (`text`, `image`), `position`, `client_block_id`,
   `payload jsonb`; UNIQUE (`post_id`, `client_block_id`) and (`post_id`, `position`).
 - `post_versions`: PK (`post_id`, `number`); `title`, `summary`, `cover_url`, `tags text[]`,
-  `reading_time_minutes`, `published_by`, `published_at`. GIN index on `tags`; index on
-  (`published_at DESC`, `post_id DESC`).
+  `reading_time_minutes`, `published_by`, `published_at`. GIN index on `tags`.
 - `post_version_blocks`: copied blocks, FK to `post_versions`.
-- `post_slugs`: `slug` PK, `post_id` FK, `created_at`.
+- `post_slugs`: `slug` PK, `post_id` FK (deferrable, initially deferred), `created_at`.
 
 Public reads join `posts` to `post_versions` on `live_version` and never read draft columns.
 `sqlc.yaml` gains a `blog` entry generating `internal/blog/adapters/postgres/sqlcgen`.
@@ -213,26 +226,27 @@ PATCH  /v1/blog/posts/{postID}/content
 GET    /v1/users/{authorID}/blog/posts
 ```
 
-Content writes use the same body-size limit as lecture content. Authenticated responses send
+Content writes are rate-limited per user and post. Authenticated responses send
 `Cache-Control: no-store`.
 
 ### Public
 
 ```text
-GET /v1/blog/public/posts?tag=&limit=&offset=
+GET /v1/blog/public/posts?tag=&limit=&cursor=
 GET /v1/blog/public/posts/{slug}
 GET /v1/blog/public/tags
 GET /v1/blog/public/index?cursor=&limit=
 ```
 
-`limit` defaults to 20 and is capped at 100. The index cursor is opaque base64 of
-`published_at|post_id`; an invalid cursor returns 422. Public responses send
-`Cache-Control: public, max-age=60`.
+List `limit` defaults to 20, maximum 50; index `limit` defaults to 100, maximum 500. Cursors are
+opaque base64url of `first_published_at_millis:post_id`; an invalid cursor or limit returns 400.
+Public responses send `Cache-Control: public, max-age=60` and are rate-limited per client IP.
 
 ### Errors
 
-Mapped through `platform/problem`: not found 404, forbidden 403, slug taken / invalid transition /
-concurrent modification 409, validation and not publishable 422.
+Mapped through `platform/problem`, following `courseauthoring`: not found 404, forbidden 403, slug
+taken / invalid transition / archived / concurrent modification / revision conflict 409, empty post
+400 `empty_post`, validation 400 `invalid_input`, rate limited 429.
 
 ### OpenAPI
 
@@ -250,9 +264,10 @@ concurrent modification 409, validation and not publishable 422.
   historical slug fails; stale content revision conflicts; public old-slug read returns the
   canonical slug; draft, archived, and unknown slugs are all not found.
 - HTTP: status and problem mapping, authenticated versus public routes, limit and cursor validation.
-- PostgreSQL integration (testcontainers): migration up and down, publish transaction and version
-  copy, live read, slug history uniqueness, index pagination stable and complete, tag counts from
-  live versions only, concurrent content patch conflict.
+- PostgreSQL integration (testcontainers): publish transaction and version copy, live read, slug
+  history uniqueness, index pagination stable and complete across a republish, tag counts from live
+  versions only, concurrent content patch conflict.
+- Course authoring's existing tests pass unchanged after the patch-validation move.
 - All gates in `AGENTS.md`. Integration tests are reported as passing only when they actually ran.
 
 ## Removal of the copied package
@@ -263,8 +278,8 @@ JSONB-document code is kept.
 
 ## Risks
 
-- Slug suffixing on create can race; the unique constraint on `post_slugs` is the source of truth and
-  the service retries on `ErrSlugTaken`.
+- Slug suffixing on create can race; the `post_slugs` primary key is the source of truth and the
+  service tries the next suffix on `ErrSlugTaken`, up to 50 attempts.
 - Tag arrays are duplicated on draft and versions; public tag reads must use only live versions,
   which the integration test asserts.
 - Reading time is computed at publish time from text blocks only; changing the formula does not
