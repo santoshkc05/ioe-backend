@@ -1,6 +1,10 @@
 package app
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks"
+)
 
 var (
 	ErrNotFound               = errors.New("not found")
@@ -10,9 +14,9 @@ var (
 	ErrInvalidInput           = errors.New("invalid input")
 	ErrRevisionRequired       = errors.New("base_revision is required")
 	ErrPatchTooLarge          = errors.New("patch exceeds a size limit")
-	ErrBlockSetMismatch       = errors.New("order, upserts and deletes do not match the lecture's blocks")
-	ErrOrderDeleteOverlap     = errors.New("a block cannot appear in both order and deletes")
-	ErrDuplicateClientBlockID = errors.New("duplicate client block id")
+	ErrBlockSetMismatch       = contentblocks.ErrBlockSetMismatch
+	ErrOrderDeleteOverlap     = contentblocks.ErrOrderDeleteOverlap
+	ErrDuplicateClientBlockID = contentblocks.ErrDuplicateClientBlockID
 	ErrInvalidMediaReference  = errors.New("invalid media reference")
 	ErrInvalidQuizReference   = errors.New("invalid quiz reference")
 )
