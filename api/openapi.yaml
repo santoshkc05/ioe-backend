@@ -2156,58 +2156,12 @@ components:
         expires_at: { type: string, format: date-time }
     Problem:
       type: object
-      required: [type, title, status]
+      required: [type, code, title, status]
       properties:
-        type:
-          type: string
-          enum:
-            - invalid_request
-            - invalid_token
-            - refresh_reuse_detected
-            - email_unverified
-            - origin_not_allowed
-            - not_found
-            - method_not_allowed
-            - payload_too_large
-            - unsupported_media_type
-            - rate_limited
-            - internal
-            - forbidden
-            - enrollment_required
-            - concurrent_modification
-            - course_not_editable
-            - invalid_transition
-            - revision_conflict
-            - lecture_content_revision_required
-            - patch_too_large
-            - block_set_mismatch
-            - order_delete_overlap
-            - duplicate_client_block_id
-            - invalid_client_block_id
-            - unsafe_content
-            - duplicate_title
-            - empty_course
-            - unsupported_currency
-            - invalid_input
-            - exam_not_open
-            - exam_closed
-            - open_attempt_exists
-            - retakes_not_allowed
-            - exam_has_attempts
-            - attempt_submitted
-            - attempt_expired
-            - reveal_attempt_open
-            - reveal_disabled
-            - reveal_not_yet
-            - edit_would_truncate_attempt
-            - edit_add_during_attempt
-            - edit_question_answered
-            - edit_key_frozen
-            - payment_required
-            - course_free
-            - already_enrolled
-            - already_purchased
-            - payment_unavailable
+        type: { $ref: "#/components/schemas/ProblemType" }
+        code:
+          allOf: [{ $ref: "#/components/schemas/ProblemType" }]
+          description: Same value as type, for clients that read a code member.
         title: { type: string }
         status: { type: integer }
         detail: { type: string }
@@ -2223,6 +2177,56 @@ components:
             reveal_at: { type: string, format: date-time }
             question_id: { $ref: "#/components/schemas/ID" }
             option_id: { $ref: "#/components/schemas/ID" }
+    ProblemType:
+      type: string
+      enum:
+        - invalid_request
+        - invalid_token
+        - refresh_reuse_detected
+        - email_unverified
+        - origin_not_allowed
+        - not_found
+        - method_not_allowed
+        - payload_too_large
+        - unsupported_media_type
+        - rate_limited
+        - internal
+        - forbidden
+        - enrollment_required
+        - concurrent_modification
+        - course_not_editable
+        - invalid_transition
+        - revision_conflict
+        - lecture_content_revision_required
+        - patch_too_large
+        - block_set_mismatch
+        - order_delete_overlap
+        - duplicate_client_block_id
+        - invalid_client_block_id
+        - unsafe_content
+        - duplicate_title
+        - empty_course
+        - unsupported_currency
+        - invalid_input
+        - exam_not_open
+        - exam_closed
+        - open_attempt_exists
+        - retakes_not_allowed
+        - exam_has_attempts
+        - attempt_submitted
+        - attempt_expired
+        - reveal_attempt_open
+        - reveal_disabled
+        - reveal_not_yet
+        - edit_would_truncate_attempt
+        - edit_add_during_attempt
+        - edit_question_answered
+        - edit_key_frozen
+        - payment_required
+        - course_free
+        - already_enrolled
+        - already_purchased
+        - payment_unavailable
     QuizOption:
       type: object
       required: [id, label]

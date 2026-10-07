@@ -21,8 +21,10 @@ const (
 )
 
 // Problem is an RFC 9457 problem details document. Instance carries the request ID.
+// Code is an extension member repeating Type for clients that read a `code` field.
 type Problem struct {
 	Type     string `json:"type"`
+	Code     string `json:"code"`
 	Title    string `json:"title"`
 	Status   int    `json:"status"`
 	Detail   string `json:"detail,omitempty"`
@@ -34,19 +36,19 @@ func Write(w http.ResponseWriter, r *http.Request, status int, typ, title, detai
 	w.Header().Set("Content-Type", "application/problem+json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(Problem{
-		Type: typ, Title: title, Status: status, Detail: detail,
+		Type: typ, Code: typ, Title: title, Status: status, Detail: detail,
 		Instance: logging.RequestID(r.Context()),
 	})
 }
 
 // WriteWithExtensions sends a problem response with RFC 9457 extension members.
-// Keys that collide with standard members are ignored.
+// Keys that collide with standard members or code are ignored.
 func WriteWithExtensions(w http.ResponseWriter, r *http.Request, status int, typ, title, detail string, ext map[string]any) {
-	body := make(map[string]any, len(ext)+5)
+	body := make(map[string]any, len(ext)+6)
 	for k, v := range ext {
 		body[k] = v
 	}
-	body["type"], body["title"], body["status"] = typ, title, status
+	body["type"], body["code"], body["title"], body["status"] = typ, typ, title, status
 	delete(body, "detail")
 	delete(body, "instance")
 	if detail != "" {
