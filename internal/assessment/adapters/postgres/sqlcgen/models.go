@@ -152,6 +152,22 @@ type MediaAsset struct {
 	CreatedAt time.Time
 }
 
+type PaymentPurchase struct {
+	ID          int64
+	UserID      int64
+	CourseID    int64
+	AmountMinor int64
+	Currency    string
+	Gateway     string
+	GatewayRef  string
+	GatewayTxn  string
+	Status      string
+	CreatedAt   time.Time
+	SettledAt   *time.Time
+	GrantedAt   *time.Time
+	Version     int64
+}
+
 type PlatformOutboxMessage struct {
 	Offset        int64
 	Uuid          string
