@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -41,15 +42,76 @@ type AttemptDetail struct {
 	RevealPermitted bool
 }
 
+// liveExams returns the course's exams that the live version pins as published.
+func (s *ExamService) liveExams(ctx context.Context, r Repos, pins Pins) ([]domain.Exam, error) {
+	all, err := r.Exams.FindRevisions(ctx, pins.ids(KindExam))
+	if err != nil {
+		return nil, err
+	}
+	out := all[:0]
+	for _, e := range all {
+		if e.Status == domain.ExamPublished {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// liveExam returns one exam at its live pin when that revision is published; ErrNotFound otherwise.
+func (s *ExamService) liveExam(ctx context.Context, examID id.ID) (domain.Exam, error) {
+	var courseID id.ID
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		first, err := r.Exams.FindRevisions(ctx, map[id.ID]int{examID: 1})
+		if err != nil || len(first) == 0 {
+			return cmp.Or(err, ErrNotFound)
+		}
+		courseID = first[0].CourseID
+		return nil
+	})
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	pins, live, err := s.courses.LivePins(ctx, courseID)
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	rev, ok := pins[Ref{Kind: KindExam, ID: examID}]
+	if !live || !ok {
+		return domain.Exam{}, ErrNotFound
+	}
+	var got []domain.Exam
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
+		got, err = r.Exams.FindRevisions(ctx, map[id.ID]int{examID: rev})
+		return err
+	})
+	if err != nil || len(got) == 0 || got[0].Status != domain.ExamPublished {
+		return domain.Exam{}, cmp.Or(err, ErrNotFound)
+	}
+	return got[0], nil
+}
+
+// attemptExam returns the revision attempt a was taken against.
+func attemptExam(ctx context.Context, r Repos, a domain.ExamAttempt) (domain.Exam, error) {
+	got, err := r.Exams.FindRevisions(ctx, map[id.ID]int{a.ExamID: a.Revision})
+	if err != nil || len(got) == 0 {
+		return domain.Exam{}, cmp.Or(err, ErrNotFound)
+	}
+	return got[0], nil
+}
+
 // List returns the course's published exams with the caller's standing, settling the
 // caller's expired attempts.
 func (s *ExamService) List(ctx context.Context, p auth.Principal, courseID id.ID) ([]StudentExam, error) {
 	if err := s.canTake(ctx, p, courseID); err != nil {
 		return nil, err
 	}
+	pins, _, err := s.courses.LivePins(ctx, courseID)
+	if err != nil {
+		return nil, err
+	}
 	var out []StudentExam
-	err := s.tx.RunInTx(ctx, func(r Repos) error {
-		exams, err := r.Exams.ListByCourse(ctx, courseID, true)
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
+		exams, err := s.liveExams(ctx, r, pins)
 		if err != nil {
 			return err
 		}
@@ -65,7 +127,11 @@ func (s *ExamService) List(ctx context.Context, p auth.Principal, courseID id.ID
 				if a.ExamID != e.ID {
 					continue
 				}
-				if err := settle(ctx, r, e, &a, now); err != nil {
+				ae, err := attemptExam(ctx, r, a)
+				if err != nil {
+					return err
+				}
+				if err := settle(ctx, r, ae, &a, now); err != nil {
 					return err
 				}
 				se.add(a)
@@ -79,15 +145,12 @@ func (s *ExamService) List(ctx context.Context, p auth.Principal, courseID id.ID
 
 // Get returns a published exam to an enrolled student once its window opens. Drafts are ErrNotFound.
 func (s *ExamService) Get(ctx context.Context, p auth.Principal, examID id.ID) (domain.Exam, error) {
-	e, err := s.find(ctx, examID)
+	e, err := s.liveExam(ctx, examID)
 	if err != nil {
 		return domain.Exam{}, err
 	}
 	if err := s.canTake(ctx, p, e.CourseID); err != nil {
 		return domain.Exam{}, err
-	}
-	if e.Status != domain.ExamPublished {
-		return domain.Exam{}, ErrNotFound
 	}
 	if e.Availability(s.clock.Now()) == domain.AvailabilityNotOpen {
 		return domain.Exam{}, &WindowError{Err: ErrExamNotOpen, At: *e.OpensAt}
@@ -97,7 +160,7 @@ func (s *ExamService) Get(ctx context.Context, p auth.Principal, examID id.ID) (
 
 // Start opens a new attempt for the caller inside the exam's window.
 func (s *ExamService) Start(ctx context.Context, p auth.Principal, examID id.ID) (AttemptDetail, error) {
-	e, err := s.find(ctx, examID)
+	e, err := s.liveExam(ctx, examID)
 	if err != nil {
 		return AttemptDetail{}, err
 	}
@@ -106,13 +169,6 @@ func (s *ExamService) Start(ctx context.Context, p auth.Principal, examID id.ID)
 	}
 	var out AttemptDetail
 	err = s.tx.RunInTx(ctx, func(r Repos) error {
-		e, err := r.Exams.Find(ctx, examID, LockShare)
-		if err != nil {
-			return err
-		}
-		if e.Status != domain.ExamPublished {
-			return ErrNotFound
-		}
 		now := s.clock.Now()
 		switch e.Availability(now) {
 		case domain.AvailabilityNotOpen:
@@ -124,7 +180,11 @@ func (s *ExamService) Start(ctx context.Context, p auth.Principal, examID id.ID)
 		open, err := r.Exams.FindOpenAttempt(ctx, examID, p.UserID)
 		switch {
 		case err == nil:
-			if err := settle(ctx, r, e, &open, now); err != nil {
+			openExam, err := attemptExam(ctx, r, open)
+			if err != nil {
+				return err
+			}
+			if err := settle(ctx, r, openExam, &open, now); err != nil {
 				return err
 			}
 			if open.Open() {
@@ -243,7 +303,7 @@ func (s *ExamService) Review(ctx context.Context, p auth.Principal, attemptID id
 		if err != nil {
 			return err
 		}
-		e, err := r.Exams.Find(ctx, a.ExamID, LockNone)
+		e, err := attemptExam(ctx, r, a)
 		if err != nil {
 			return err
 		}
@@ -265,23 +325,29 @@ func (s *ExamService) Review(ctx context.Context, p auth.Principal, attemptID id
 	return out, err
 }
 
-// ListAttempts returns every attempt on an exam to a manager of its course, settling expired
-// ones.
+// ListAttempts returns every attempt on an exam to a manager of its course, settling expired ones.
 func (s *ExamService) ListAttempts(ctx context.Context, p auth.Principal, examID id.ID) ([]domain.ExamAttempt, error) {
 	if err := s.authorize(ctx, p, examID, s.courses.CanReadAsManager); err != nil {
 		return nil, err
 	}
 	var out []domain.ExamAttempt
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
-		e, err := r.Exams.Find(ctx, examID, LockNone)
-		if err != nil {
-			return err
-		}
+		var err error
 		if out, err = r.Exams.ListAttempts(ctx, examID); err != nil {
 			return err
 		}
+		cache := make(map[int]domain.Exam)
 		now := s.clock.Now()
 		for i := range out {
+			rev := out[i].Revision
+			e, ok := cache[rev]
+			if !ok {
+				e, err = attemptExam(ctx, r, out[i])
+				if err != nil {
+					return err
+				}
+				cache[rev] = e
+			}
 			if err := settle(ctx, r, e, &out[i], now); err != nil {
 				return err
 			}
@@ -306,7 +372,7 @@ func (s *ExamService) canTake(ctx context.Context, p auth.Principal, courseID id
 	return nil
 }
 
-// ownAttempt loads p's attempt and its exam. Another user's attempt is ErrNotFound.
+// ownAttempt loads p's attempt and the revision it was taken against. Another user's attempt is ErrNotFound.
 func ownAttempt(ctx context.Context, r Repos, p auth.Principal, attemptID id.ID, forUpdate bool) (domain.ExamAttempt, domain.Exam, error) {
 	a, err := r.Exams.FindAttempt(ctx, attemptID, forUpdate)
 	if err != nil {
@@ -315,22 +381,8 @@ func ownAttempt(ctx context.Context, r Repos, p auth.Principal, attemptID id.ID,
 	if a.UserID != p.UserID {
 		return domain.ExamAttempt{}, domain.Exam{}, ErrNotFound
 	}
-	e, err := r.Exams.Find(ctx, a.ExamID, LockNone)
+	e, err := attemptExam(ctx, r, a)
 	return a, e, err
-}
-
-// settleExamAttempts settles all expired attempts for an exam.
-func settleExamAttempts(ctx context.Context, r Repos, e domain.Exam, now time.Time) error {
-	attempts, err := r.Exams.ListAttempts(ctx, e.ID)
-	if err != nil {
-		return err
-	}
-	for i := range attempts {
-		if err := settle(ctx, r, e, &attempts[i], now); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // settle grades a in place as of its deadline when it has expired and stores the result.

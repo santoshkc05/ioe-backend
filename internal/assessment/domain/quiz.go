@@ -95,6 +95,7 @@ type Quiz struct {
 	ID        id.ID
 	CourseID  id.ID
 	LectureID id.ID
+	Revision  int // set by storage; 0 before the first save
 	Position  int
 	Questions []Question
 	CreatedAt time.Time
@@ -163,6 +164,7 @@ func (q Quiz) CheckAnswers(answers []Answer) error {
 type QuizAttempt struct {
 	ID             id.ID
 	QuizID         id.ID
+	Revision       int // the quiz revision the answers were checked against
 	UserID         id.ID
 	Answers        []Answer
 	IdempotencyKey string // empty when the request had no key

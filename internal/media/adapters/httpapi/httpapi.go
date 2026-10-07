@@ -195,6 +195,16 @@ var errorMappings = []errorMapping{
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {
+	var inUse *app.InUseError
+	if errors.As(err, &inUse) {
+		ids := make([]string, len(inUse.LectureIDs))
+		for i, v := range inUse.LectureIDs {
+			ids[i] = v.String()
+		}
+		problem.WriteWithExtensions(w, r, http.StatusConflict, "asset_in_use", "Asset In Use", "",
+			map[string]any{"lecture_ids": ids})
+		return
+	}
 	for _, m := range errorMappings {
 		if errors.Is(err, m.err) {
 			detail := ""

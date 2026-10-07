@@ -65,3 +65,14 @@ func checkBlockRefs(ctx context.Context, assets AssetCatalog, quizzes QuizCatalo
 	}
 	return checkQuizRefs(ctx, quizzes, courseID, lectureID, inputQuizRefs(blocks))
 }
+
+// blockQuizRefs lists the quizzes stored blocks reference.
+func blockQuizRefs(blocks []contentblocks.Block) []quizRef {
+	var refs []quizRef
+	for _, b := range blocks {
+		if b.Type() == contentblocks.BlockTypeQuiz {
+			refs = append(refs, quizRef{id: b.QuizID(), clientBlockID: b.ClientBlockID()})
+		}
+	}
+	return refs
+}

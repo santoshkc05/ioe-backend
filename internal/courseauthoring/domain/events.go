@@ -28,3 +28,21 @@ type CourseArchived struct {
 }
 
 func (CourseArchived) EventName() string { return "courseauthoring.course.archived" }
+
+type CourseUnpublished struct {
+	CourseID   id.ID     `json:"course_id"`
+	OwnerID    id.ID     `json:"owner_id"`
+	OccurredAt time.Time `json:"occurred_at"`
+}
+
+func (CourseUnpublished) EventName() string { return "courseauthoring.course.unpublished" }
+
+// DraftDiscarded carries the live version's pins so assessment can reset its working copy.
+type DraftDiscarded struct {
+	CourseID   id.ID           `json:"course_id"`
+	ActorID    id.ID           `json:"actor_id"`
+	Pins       []AssessmentPin `json:"pins"`
+	OccurredAt time.Time       `json:"occurred_at"`
+}
+
+func (DraftDiscarded) EventName() string { return "courseauthoring.course.draft_discarded" }

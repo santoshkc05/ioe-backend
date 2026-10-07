@@ -41,13 +41,49 @@ func (r contents) ListBlocks(ctx context.Context, lectureID id.ID) ([]contentblo
 	}
 	out := make([]contentblocks.Block, 0, len(rows))
 	for _, row := range rows {
-		b, err := contentblocks.DecodePayload(contentblocks.BlockType(row.Kind), row.Payload)
+		b, err := decodeBlock(row.ID, row.ClientBlockID, row.Kind, row.Position, row.Payload)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, b.WithIdentity(id.ID(row.ID), row.ClientBlockID, int(row.Position)))
+		out = append(out, b)
 	}
 	return out, nil
+}
+
+func (r contents) FindVersionLecture(ctx context.Context, courseID id.ID, number int, lectureID id.ID) (app.LectureHeader, error) {
+	row, err := r.q.GetVersionLecture(ctx, sqlcgen.GetVersionLectureParams{
+		CourseID: int64(courseID), Number: int32(number), ID: int64(lectureID), //nolint:gosec // one per publish
+	})
+	if err != nil {
+		return app.LectureHeader{}, notFound(err)
+	}
+	return app.LectureHeader{LectureID: id.ID(row.ID), CourseID: courseID, Title: row.Title, FreePreview: row.FreePreview}, nil
+}
+
+func (r contents) ListVersionBlocks(ctx context.Context, courseID id.ID, number int, lectureID id.ID) ([]contentblocks.Block, error) {
+	rows, err := r.q.ListVersionBlocks(ctx, sqlcgen.ListVersionBlocksParams{
+		CourseID: int64(courseID), Number: int32(number), LectureID: int64(lectureID), //nolint:gosec // one per publish
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]contentblocks.Block, 0, len(rows))
+	for _, row := range rows {
+		b, err := decodeBlock(row.ID, row.ClientBlockID, row.Kind, row.Position, row.Payload)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+func decodeBlock(blockID int64, clientBlockID, kind string, position int32, payload json.RawMessage) (contentblocks.Block, error) {
+	b, err := contentblocks.DecodePayload(contentblocks.BlockType(kind), payload)
+	if err != nil {
+		return contentblocks.Block{}, err
+	}
+	return b.WithIdentity(id.ID(blockID), clientBlockID, int(position)), nil
 }
 
 type upsertBlockElem struct {

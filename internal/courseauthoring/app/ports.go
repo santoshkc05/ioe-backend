@@ -3,6 +3,7 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/courseauthoring/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks"
@@ -13,13 +14,43 @@ import (
 // Update returns ErrConcurrentModification when c.Version is stale and increments
 // c.Version on success. Insert sets c.Version to 1. ListPublished returns up to q.Limit
 // published courses with ID below q.After (any ID when q.After is zero) matching the
-// filters, ordered by ID descending.
+// filters from their live versions, ordered by ID descending. ListInReview returns
+// in_review courses, longest waiting first. LockForUpdate locks the course row until the
+// transaction ends; it returns ErrNotFound when the course does not exist. ListReviews
+// returns a course's review trail oldest first.
+//
+// FindVersion returns the course as published version number: details, sections and
+// lectures from the snapshot, identity, Live and CreatedAt from the course, UpdatedAt the
+// publish time, Status published. It returns ErrNotFound when the version does not exist.
+// ListVersions returns a course's versions, newest first. InsertVersion snapshots the
+// stored working copy (sections, lectures and blocks) and c's details as version
+// c.Live.Number.
 type CourseRepository interface {
 	FindByID(ctx context.Context, courseID id.ID) (domain.Course, error)
+	FindVersion(ctx context.Context, courseID id.ID, number int) (domain.Course, error)
+	ListVersions(ctx context.Context, courseID id.ID) ([]VersionSummary, error)
 	ListByOwner(ctx context.Context, ownerID id.ID) ([]domain.Course, error)
 	ListPublished(ctx context.Context, q CatalogQuery) ([]CourseSummary, error)
+	ListInReview(ctx context.Context) ([]domain.Course, error)
+	LockForUpdate(ctx context.Context, courseID id.ID) error
+	InsertVersion(ctx context.Context, c *domain.Course, publishedBy id.ID) error
 	Insert(ctx context.Context, c *domain.Course) error
 	Update(ctx context.Context, c *domain.Course) error
+	InsertReview(ctx context.Context, r domain.Review) error
+	ListReviews(ctx context.Context, courseID id.ID) ([]domain.Review, error)
+	// ReplaceSubmittedPins replaces the pins captured at the course's last submit.
+	ReplaceSubmittedPins(ctx context.Context, courseID id.ID, pins []domain.AssessmentPin) error
+	ListSubmittedPins(ctx context.Context, courseID id.ID) ([]domain.AssessmentPin, error)
+	InsertVersionPins(ctx context.Context, courseID id.ID, number int, pins []domain.AssessmentPin) error
+	// ListVersionPins returns version number's pins, by kind then ID; empty when none.
+	ListVersionPins(ctx context.Context, courseID id.ID, number int) ([]domain.AssessmentPin, error)
+}
+
+// VersionSummary describes one published version without its content.
+type VersionSummary struct {
+	Number      int
+	PublishedBy id.ID
+	PublishedAt time.Time
 }
 
 // LectureHeader is a lecture's identity and content revision without its blocks.
@@ -39,12 +70,15 @@ type BlockWritePlan struct {
 }
 
 // LectureContentRepository reads and writes one lecture's blocks. Find* return ErrNotFound
-// when the lecture does not exist in courseID. ApplyPatch returns ErrConcurrentModification
-// when baseRevision is stale.
+// when the lecture does not exist in courseID. FindVersionLecture and ListVersionBlocks read
+// published version number of courseID; the live header's ContentRevision is 0. ApplyPatch returns
+// ErrConcurrentModification when baseRevision is stale.
 type LectureContentRepository interface {
 	FindLecture(ctx context.Context, courseID, lectureID id.ID) (LectureHeader, error)
 	FindLectureForUpdate(ctx context.Context, courseID, lectureID id.ID) (LectureHeader, error)
 	ListBlocks(ctx context.Context, lectureID id.ID) ([]contentblocks.Block, error)
+	FindVersionLecture(ctx context.Context, courseID id.ID, number int, lectureID id.ID) (LectureHeader, error)
+	ListVersionBlocks(ctx context.Context, courseID id.ID, number int, lectureID id.ID) ([]contentblocks.Block, error)
 	ApplyPatch(ctx context.Context, courseID, lectureID id.ID, baseRevision int64, plan BlockWritePlan) (int64, error)
 	ReplaceBlocks(ctx context.Context, courseID, lectureID id.ID, blocks []contentblocks.Block) (int64, error)
 }

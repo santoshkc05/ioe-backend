@@ -23,7 +23,6 @@ import (
 type examStub struct {
 	exams    []domain.Exam
 	exam     domain.Exam
-	detail   app.ExamDetail
 	students []app.StudentExam
 	attempts []domain.ExamAttempt
 	attempt  app.AttemptDetail
@@ -42,32 +41,32 @@ func (s *examStub) record(name string, p auth.Principal, target id.ID) {
 	s.called, s.p, s.target = name, p, target
 }
 
-func (s *examStub) ListAuthoring(_ context.Context, p auth.Principal, courseID id.ID) ([]domain.Exam, error) {
+func (s *examStub) ListAuthoring(_ context.Context, p auth.Principal, courseID id.ID, _ int) ([]domain.Exam, error) {
 	s.record("listAuthoring", p, courseID)
 	return s.exams, s.err
 }
 
-func (s *examStub) GetAuthoring(_ context.Context, p auth.Principal, examID id.ID) (app.ExamDetail, error) {
+func (s *examStub) GetAuthoring(_ context.Context, p auth.Principal, examID id.ID) (domain.Exam, error) {
 	s.record("getAuthoring", p, examID)
-	return s.detail, s.err
+	return s.exam, s.err
 }
 
-func (s *examStub) Create(_ context.Context, p auth.Principal, courseID id.ID, in app.ExamInput) (app.ExamDetail, error) {
+func (s *examStub) Create(_ context.Context, p auth.Principal, courseID id.ID, in app.ExamInput) (domain.Exam, error) {
 	s.record("create", p, courseID)
 	s.in = in
-	return s.detail, s.err
+	return s.exam, s.err
 }
 
-func (s *examStub) Save(_ context.Context, p auth.Principal, examID id.ID, in app.ExamInput) (app.ExamDetail, error) {
+func (s *examStub) Save(_ context.Context, p auth.Principal, examID id.ID, in app.ExamInput) (domain.Exam, error) {
 	s.record("save", p, examID)
 	s.in = in
-	return s.detail, s.err
+	return s.exam, s.err
 }
 
-func (s *examStub) SaveSettings(_ context.Context, p auth.Principal, examID id.ID, in app.ExamSettingsInput) (app.ExamDetail, error) {
+func (s *examStub) SaveSettings(_ context.Context, p auth.Principal, examID id.ID, in app.ExamSettingsInput) (domain.Exam, error) {
 	s.record("saveSettings", p, examID)
 	s.settings = in
-	return s.detail, s.err
+	return s.exam, s.err
 }
 
 func (s *examStub) Reorder(_ context.Context, p auth.Principal, courseID id.ID, examIDs []id.ID) error {
@@ -86,9 +85,9 @@ func (s *examStub) Unpublish(_ context.Context, p auth.Principal, examID id.ID) 
 	return s.err
 }
 
-func (s *examStub) Duplicate(_ context.Context, p auth.Principal, examID id.ID) (app.ExamDetail, error) {
+func (s *examStub) Duplicate(_ context.Context, p auth.Principal, examID id.ID) (domain.Exam, error) {
 	s.record("duplicate", p, examID)
-	return s.detail, s.err
+	return s.exam, s.err
 }
 
 func (s *examStub) Delete(_ context.Context, p auth.Principal, examID id.ID) error {
@@ -148,7 +147,7 @@ func newExamServer(s *examStub) http.Handler {
 // lecture 50) and question 12 (multiple choice, option 121 correct, 122; 1 point).
 func sampleExam() domain.Exam {
 	closes := t0.Add(2 * time.Hour)
-	return domain.Exam{ID: 1, CourseID: 10, Title: "Final", Description: "d", Position: 2, Status: domain.ExamPublished,
+	return domain.Exam{ID: 1, CourseID: 10, Title: "Final", Description: "d", Position: 2, Revision: 1, Status: domain.ExamPublished,
 		PassMark: 50, TimeLimit: 30 * time.Minute, ClosesAt: &closes, RevealPolicy: domain.RevealAfterClose,
 		Questions: []domain.Question{
 			{ID: 11, Prompt: "2+2?", Type: domain.QuestionSingleChoice, Explanation: "arith", Points: 2, ReferenceLectureID: 50,
@@ -177,7 +176,7 @@ func decode(t *testing.T, b []byte) map[string]any {
 
 func TestExamRouteDispatch(t *testing.T) {
 	e := sampleExam()
-	full := &examStub{exams: []domain.Exam{e}, exam: e, detail: app.ExamDetail{Exam: e},
+	full := &examStub{exams: []domain.Exam{e}, exam: e,
 		attempt: app.AttemptDetail{Attempt: gradedAttempt(e), Exam: e}}
 	cases := []struct {
 		method, path, body string
@@ -257,21 +256,20 @@ func TestUntimedExamWire(t *testing.T) {
 }
 
 func TestExamAuthoringWire(t *testing.T) {
-	d := app.ExamDetail{Exam: sampleExam(), Locks: domain.Locks{OpenAttempts: 1, SubmittedAttempts: 2,
-		AnsweredQuestionIDs: map[id.ID]struct{}{12: {}, 11: {}}}}
-	_, body := call(newExamServer(&examStub{detail: d}), "GET", "/v1/exams/1/authoring", "")
+	e := sampleExam()
+	_, body := call(newExamServer(&examStub{exam: e}), "GET", "/v1/exams/1/authoring", "")
 	got := decode(t, body)
-	locks, _ := json.Marshal(got["locks"])
-	if string(locks) != `{"answered_question_ids":["11","12"],"has_open_attempts":true,"has_submitted_attempts":true,"open_attempt_count":1,"submitted_attempt_count":2}` {
-		t.Fatalf("locks = %s", locks)
+	if got["revision"] != 1.0 {
+		t.Fatalf("revision = %v", got["revision"])
 	}
 	q := got["questions"].([]any)[0].(map[string]any)
 	if got["status"] != "published" || q["explanation"] != "arith" || q["correct_option_ids"].([]any)[0] != "111" {
 		t.Fatalf("authoring = %s", body)
 	}
-	_, body = call(newExamServer(&examStub{detail: app.ExamDetail{Exam: sampleExam()}}), "POST", "/v1/courses/10/exams", saveExamBody)
-	if !strings.Contains(string(body), `"answered_question_ids":[]`) {
-		t.Fatalf("empty locks = %s", body)
+	_, body = call(newExamServer(&examStub{exam: sampleExam()}), "POST", "/v1/courses/10/exams", saveExamBody)
+	got = decode(t, body)
+	if got["revision"] != 1.0 {
+		t.Fatalf("revision = %v", got["revision"])
 	}
 }
 
@@ -298,7 +296,7 @@ const settingsBody = `{"title":"Final","description":"","pass_mark":70,"points":
 	`"retakes_allowed":false,"opens_at":"2026-10-06T08:00:00Z","closes_at":null,"reveal_policy":"never"}`
 
 func TestSaveExamDecodes(t *testing.T) {
-	s := &examStub{detail: app.ExamDetail{Exam: sampleExam()}}
+	s := &examStub{exam: sampleExam()}
 	if code, body := call(newExamServer(s), "PUT", "/v1/exams/1", saveExamBody); code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", code, body)
 	}
@@ -311,7 +309,7 @@ func TestSaveExamDecodes(t *testing.T) {
 }
 
 func TestSaveSettingsDecodes(t *testing.T) {
-	s := &examStub{detail: app.ExamDetail{Exam: sampleExam()}}
+	s := &examStub{exam: sampleExam()}
 	if code, body := call(newExamServer(s), "PATCH", "/v1/exams/1/settings", settingsBody); code != http.StatusOK {
 		t.Fatalf("code=%d body=%s", code, body)
 	}
@@ -378,7 +376,7 @@ func TestExamAttemptWire(t *testing.T) {
 	open := domain.NewExamAttempt(7, e, 200, t0)
 	open.Answers = []domain.ExamAnswer{{QuestionID: 12, OptionIDs: []id.ID{121}}, {QuestionID: 11, OptionIDs: []id.ID{112}}}
 	_, body := call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: open, Exam: e}}), "POST", "/v1/exams/1/attempts", "")
-	want := `{"id":"7","course_id":"10","exam_id":"1","user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
+	want := `{"id":"7","course_id":"10","exam_id":"1","revision":1,"user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
 		`"deadline":"2026-10-06T09:30:00Z","auto_submitted":false,"answers":[{"question_id":"11","option_ids":["112"]},` +
 		`{"question_id":"12","option_ids":["121"]}]}`
 	if strings.TrimSpace(string(body)) != want {
@@ -387,7 +385,7 @@ func TestExamAttemptWire(t *testing.T) {
 
 	graded := gradedAttempt(e)
 	_, body = call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: graded, Exam: e, RevealPermitted: true}}), "POST", "/v1/exam-attempts/7/submit", "")
-	want = `{"id":"7","course_id":"10","exam_id":"1","user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
+	want = `{"id":"7","course_id":"10","exam_id":"1","revision":1,"user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
 		`"deadline":"2026-10-06T09:30:00Z","submitted_at":"2026-10-06T09:01:00Z","score":66,"passed":true,"auto_submitted":false,` +
 		`"answers":[{"question_id":"11","option_ids":["111"],"is_correct":true,"points_possible":2,"points_awarded":2,"reference_lecture_id":"50"},` +
 		`{"question_id":"12","option_ids":[],"is_correct":false,"points_possible":1,"points_awarded":0}]}`
@@ -396,7 +394,7 @@ func TestExamAttemptWire(t *testing.T) {
 	}
 
 	_, body = call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: graded, Exam: e, RevealPermitted: false}}), "POST", "/v1/exam-attempts/7/submit", "")
-	want = `{"id":"7","course_id":"10","exam_id":"1","user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
+	want = `{"id":"7","course_id":"10","exam_id":"1","revision":1,"user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
 		`"deadline":"2026-10-06T09:30:00Z","submitted_at":"2026-10-06T09:01:00Z","score":66,"passed":true,"auto_submitted":false,` +
 		`"answers":[{"question_id":"11","option_ids":["111"]},` +
 		`{"question_id":"12","option_ids":[]}]}`
@@ -420,7 +418,7 @@ func TestAttemptSummaryWire(t *testing.T) {
 func TestReviewWire(t *testing.T) {
 	e := sampleExam()
 	_, body := call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: gradedAttempt(e), Exam: e}}), "GET", "/v1/exam-attempts/7/review", "")
-	want := `{"attempt_id":"7","exam_id":"1","title":"Final","score":66,"passed":true,"pass_mark":50,` +
+	want := `{"attempt_id":"7","exam_id":"1","revision":1,"title":"Final","score":66,"passed":true,"pass_mark":50,` +
 		`"submitted_at":"2026-10-06T09:01:00Z","auto_submitted":false,"questions":[` +
 		`{"id":"11","position":0,"prompt":"2+2?","type":"single_choice","options":[{"id":"111","label":"4"},{"id":"112","label":"5"}],` +
 		`"selected_option_ids":["111"],"correct_option_ids":["111"],"explanation":"arith","points_possible":2,"points_awarded":2,"reference_lecture_id":"50"},` +
@@ -459,17 +457,12 @@ func TestExamErrorMapping(t *testing.T) {
 		{&app.WindowError{Err: app.ErrExamClosed, At: closes}, 409, "exam_closed", `{"closes_at":"2026-10-06T11:00:00Z"}`},
 		{app.ErrOpenAttemptExists, 409, "open_attempt_exists", ""},
 		{app.ErrRetakesNotAllowed, 409, "retakes_not_allowed", ""},
-		{app.ErrExamHasAttempts, 409, "exam_has_attempts", ""},
 		{app.ErrEnrollmentRequired, 409, "enrollment_required", ""},
 		{domain.ErrAttemptSubmitted, 409, "attempt_submitted", ""},
 		{domain.ErrAttemptExpired, 409, "attempt_expired", ""},
 		{domain.ErrRevealAttemptOpen, 409, "reveal_attempt_open", ""},
 		{domain.ErrRevealDisabled, 403, "reveal_disabled", ""},
 		{&domain.RevealNotYetError{At: closes}, 403, "reveal_not_yet", `{"reveal_at":"2026-10-06T11:00:00Z"}`},
-		{&domain.EditViolation{Err: domain.ErrEditWouldTruncateAttempt}, 409, "edit_would_truncate_attempt", ""},
-		{&domain.EditViolation{Err: domain.ErrEditAddDuringAttempt, QuestionID: 13}, 409, "edit_add_during_attempt", `{"question_id":"13"}`},
-		{&domain.EditViolation{Err: domain.ErrEditQuestionAnswered, QuestionID: 11}, 409, "edit_question_answered", `{"question_id":"11"}`},
-		{&domain.EditViolation{Err: domain.ErrEditKeyFrozen, QuestionID: 11, OptionID: 112}, 409, "edit_key_frozen", `{"option_id":"112","question_id":"11"}`},
 		{errors.Join(app.ErrInvalidInput, domain.ErrInvalidAnswer), 400, "invalid_input", ""},
 	}
 	for _, tc := range cases {
@@ -483,5 +476,19 @@ func TestExamErrorMapping(t *testing.T) {
 		if code != tc.status || got["type"] != tc.typ || details != tc.details {
 			t.Errorf("%v: code=%d body=%s", tc.err, code, body)
 		}
+	}
+}
+
+func TestExamAuthoringListVersionParam(t *testing.T) {
+	s := &examStub{}
+	for _, bad := range []string{"?version=0", "?version=-1", "?version=abc"} {
+		code, _ := call(newExamServer(s), "GET", "/v1/courses/10/exams/authoring"+bad, "")
+		if code != http.StatusBadRequest {
+			t.Errorf("%s: code=%d, want 400", bad, code)
+		}
+	}
+	code, _ := call(newExamServer(s), "GET", "/v1/courses/10/exams/authoring?version=2", "")
+	if code != http.StatusOK {
+		t.Fatalf("version 2: code=%d", code)
 	}
 }

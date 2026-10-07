@@ -3,6 +3,8 @@ package app
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 
 	"github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
@@ -99,4 +101,65 @@ func blocksReference(blocks []contentblocks.Block, assetID id.ID) bool {
 		}
 	}
 	return false
+}
+
+// blockAssetRefs lists the media assets stored blocks reference.
+func blockAssetRefs(blocks []contentblocks.Block) []assetRef {
+	var refs []assetRef
+	for _, b := range blocks {
+		cid := b.ClientBlockID()
+		if v, ok := b.Video(); ok {
+			refs = append(refs, assetRef{id: v.MediaAssetID(), kind: AssetVideo, clientBlockID: cid})
+		}
+		if img, ok := b.Image(); ok {
+			refs = append(refs, assetRef{id: img.MediaAssetID(), kind: AssetImage, clientBlockID: cid})
+		}
+		if deck, ok := b.Deck(); ok {
+			for _, c := range deck.Cards() {
+				if !c.MediaAssetID.IsZero() {
+					refs = append(refs, assetRef{id: c.MediaAssetID, kind: AssetImage, clientBlockID: cid})
+				}
+			}
+		}
+	}
+	return refs
+}
+
+// AssetUsage returns the lectures, by ID, whose working-copy or live-version blocks reference
+// assetID. It applies no authorization: media calls it after authorizing a delete.
+func (s *ContentService) AssetUsage(ctx context.Context, courseID, assetID id.ID) ([]id.ID, error) {
+	used := map[id.ID]struct{}{}
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		c, err := r.Courses.FindByID(ctx, courseID)
+		if err != nil {
+			return err
+		}
+		for _, l := range c.Lectures {
+			blocks, err := r.Contents.ListBlocks(ctx, l.ID)
+			if err != nil {
+				return err
+			}
+			if blocksReference(blocks, assetID) {
+				used[l.ID] = struct{}{}
+			}
+		}
+		if !c.IsLive() {
+			return nil
+		}
+		live, err := r.Courses.FindVersion(ctx, courseID, c.Live.Number)
+		if err != nil {
+			return err
+		}
+		for _, l := range live.Lectures {
+			blocks, err := r.Contents.ListVersionBlocks(ctx, courseID, c.Live.Number, l.ID)
+			if err != nil {
+				return err
+			}
+			if blocksReference(blocks, assetID) {
+				used[l.ID] = struct{}{}
+			}
+		}
+		return nil
+	})
+	return slices.Sorted(maps.Keys(used)), err
 }

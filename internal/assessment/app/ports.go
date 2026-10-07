@@ -3,24 +3,60 @@ package app
 
 import (
 	"context"
+	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/assessment/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
-// QuizRepository reads and writes quizzes in the current transaction.
+// Kind names the assessment kinds a course version pins.
+type Kind string
+
+const (
+	KindQuiz Kind = "quiz"
+	KindExam Kind = "exam"
+)
+
+// Ref names one quiz or exam.
+type Ref struct {
+	Kind Kind
+	ID   id.ID
+}
+
+// Pins maps each pinned quiz or exam to its revision.
+type Pins map[Ref]int
+
+// Head is a quiz's or exam's current revision, deleted ones included.
+type Head struct {
+	Ref      Ref
+	Revision int
+	Deleted  bool
+}
+
+// QuizRepository reads and writes quizzes in the current transaction. Find, FindForUpdate,
+// ListByLecture and LecturesOf see only quizzes that are not deleted, at their head revision.
 type QuizRepository interface {
-	// Find returns ErrNotFound when the quiz does not exist.
+	// Find returns ErrNotFound when the quiz does not exist or is deleted.
 	Find(ctx context.Context, quizID id.ID) (domain.Quiz, error)
+	// FindForUpdate is Find holding the quiz row lock until the transaction ends.
+	FindForUpdate(ctx context.Context, quizID id.ID) (domain.Quiz, error)
+	// FindRevisions returns the given revision of each quiz, deleted quizzes included, ordered
+	// by position, then ID. Unknown pairs are absent.
+	FindRevisions(ctx context.Context, revs map[id.ID]int) ([]domain.Quiz, error)
 	// ListByLecture orders by position, then ID.
 	ListByLecture(ctx context.Context, courseID, lectureID id.ID) ([]domain.Quiz, error)
-	Insert(ctx context.Context, q domain.Quiz) error
-	// Replace overwrites position, questions and updated time; ErrNotFound when absent, so a
-	// concurrent delete is never undone.
-	Replace(ctx context.Context, q domain.Quiz) error
-	// Delete removes the quiz and its attempts; a no-op when absent.
-	Delete(ctx context.Context, quizID id.ID) error
+	// Insert stores q as revision 1; q.Revision must be 1.
+	Insert(ctx context.Context, q domain.Quiz, by id.ID) error
+	// AppendRevision stores q as revision q.Revision and moves the head to it. It returns
+	// ErrNotFound unless the head is q.Revision-1 and the quiz is not deleted.
+	AppendRevision(ctx context.Context, q domain.Quiz, by id.ID) error
+	// Delete marks the quiz deleted; a no-op when absent or already deleted.
+	Delete(ctx context.Context, quizID id.ID, now time.Time) error
+	// Undelete clears the deleted mark; a no-op when absent or not deleted.
+	Undelete(ctx context.Context, quizID id.ID, now time.Time) error
+	// Heads returns every quiz of the course, deleted ones included.
+	Heads(ctx context.Context, courseID id.ID) ([]Head, error)
 	// LecturesOf returns the lecture of each given quiz that belongs to courseID.
 	LecturesOf(ctx context.Context, courseID id.ID, quizIDs []id.ID) (map[id.ID]id.ID, error)
 	// RecordAttempt inserts the attempt and returns its ID, or returns the ID of the existing
@@ -33,27 +69,27 @@ type LockMode int
 
 const (
 	LockNone   LockMode = iota
-	LockShare           // FOR SHARE: blocks edits, not other starts
-	LockUpdate          // FOR UPDATE: serializes edits with starts and other edits
+	LockUpdate          // FOR UPDATE: serializes edits
+	LockShare  = LockNone
 )
 
-// ExamRepository reads and writes exams and their attempts in the current transaction.
+// ExamRepository reads and writes exams and their attempts in the current transaction. Find
+// and ListByCourse see only exams that are not deleted, at their head revision.
 type ExamRepository interface {
-	// Find returns ErrNotFound when the exam does not exist.
+	// Find returns ErrNotFound when the exam does not exist or is deleted.
 	Find(ctx context.Context, examID id.ID, lock LockMode) (domain.Exam, error)
+	// FindRevisions has QuizRepository.FindRevisions' contract.
+	FindRevisions(ctx context.Context, revs map[id.ID]int) ([]domain.Exam, error)
 	// ListByCourse orders by position, then ID.
-	ListByCourse(ctx context.Context, courseID id.ID, publishedOnly bool) ([]domain.Exam, error)
-	Insert(ctx context.Context, e domain.Exam) error
-	// Replace overwrites every mutable column; ErrNotFound when absent.
-	Replace(ctx context.Context, e domain.Exam) error
-	// Delete removes the exam, a no-op when absent; ErrExamHasAttempts when an attempt exists.
-	Delete(ctx context.Context, examID id.ID) error
-	// NextPosition returns one past the highest exam position in the course, or 0.
+	ListByCourse(ctx context.Context, courseID id.ID) ([]domain.Exam, error)
+	Insert(ctx context.Context, e domain.Exam, by id.ID) error
+	AppendRevision(ctx context.Context, e domain.Exam, by id.ID) error
+	Delete(ctx context.Context, examID id.ID, now time.Time) error
+	Undelete(ctx context.Context, examID id.ID, now time.Time) error
+	Heads(ctx context.Context, courseID id.ID) ([]Head, error)
+	// NextPosition returns one past the highest head position of the course's exams, or 0.
 	NextPosition(ctx context.Context, courseID id.ID) (int, error)
-	// SetPositions sets each listed exam of the course to its index in examIDs.
-	SetPositions(ctx context.Context, courseID id.ID, examIDs []id.ID) error
 
-	Locks(ctx context.Context, examID id.ID) (domain.Locks, error)
 	// FindAttempt returns ErrNotFound when the attempt does not exist.
 	FindAttempt(ctx context.Context, attemptID id.ID, forUpdate bool) (domain.ExamAttempt, error)
 	// FindOpenAttempt returns ErrNotFound when the user has no open attempt on the exam.
@@ -85,22 +121,24 @@ type TxRunner interface {
 
 // CourseAccess is backed by courseauthoring.
 type CourseAccess interface {
-	// CanManageLecture returns nil when p manages the course, the course is not archived, and
-	// the lecture is in the course; otherwise ErrNotFound, ErrForbidden, or
-	// ErrCourseNotEditable.
-	CanManageLecture(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error
+	// BeginEdit authorizes p to change the course's quizzes and exams and applies the course
+	// edit rule: ErrNotFound, ErrForbidden, or ErrCourseNotEditable while archived, in review or
+	// approved; a published course moves to draft. lectureID zero skips the lecture check;
+	// otherwise ErrNotFound when the lecture is not in the course's working copy.
+	BeginEdit(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error
 	// CanReadLecture applies the lecture content read rule: ErrNotFound or
 	// ErrEnrollmentRequired.
 	CanReadLecture(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error
-	// CanManageCourse returns nil when p manages the course and it is not archived; otherwise
-	// ErrNotFound, ErrForbidden, or ErrCourseNotEditable.
-	CanManageCourse(ctx context.Context, p auth.Principal, courseID id.ID) error
 	// CanReadAsManager returns nil when p manages the course, archived included; otherwise
 	// ErrNotFound or ErrForbidden.
 	CanReadAsManager(ctx context.Context, p auth.Principal, courseID id.ID) error
 	// CanReadCourse returns nil when the course is visible to p (published, or p manages it);
 	// otherwise ErrNotFound.
 	CanReadCourse(ctx context.Context, p auth.Principal, courseID id.ID) error
+	// LivePins returns the live version's pins, and false when the course is not live.
+	LivePins(ctx context.Context, courseID id.ID) (Pins, bool, error)
+	// VersionPins returns version number's pins to a manager: ErrNotFound or ErrForbidden.
+	VersionPins(ctx context.Context, p auth.Principal, courseID id.ID, number int) (Pins, error)
 }
 
 // EnrollmentQuery is backed by enrollment.

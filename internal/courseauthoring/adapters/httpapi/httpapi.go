@@ -20,12 +20,22 @@ import (
 type CourseService interface {
 	Create(ctx context.Context, p auth.Principal, in app.CreateCourseInput) (domain.Course, error)
 	Get(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error)
+	GetLive(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error)
 	ListByOwner(ctx context.Context, p auth.Principal, ownerID id.ID) ([]domain.Course, error)
 	ListPublished(ctx context.Context, q app.CatalogQuery) (app.CatalogPage, error)
 	UpdateDetails(ctx context.Context, p auth.Principal, courseID id.ID, in app.DetailsInput) error
 	SetPrice(ctx context.Context, p auth.Principal, courseID id.ID, amountMinor int64, currency string) (domain.Course, error)
 	Publish(ctx context.Context, p auth.Principal, courseID id.ID) error
 	Archive(ctx context.Context, p auth.Principal, courseID id.ID) error
+	Submit(ctx context.Context, p auth.Principal, courseID id.ID) error
+	Approve(ctx context.Context, p auth.Principal, courseID id.ID, note string) error
+	RequestChanges(ctx context.Context, p auth.Principal, courseID id.ID, note string) error
+	Unpublish(ctx context.Context, p auth.Principal, courseID id.ID, note string) error
+	ListReviews(ctx context.Context, p auth.Principal, courseID id.ID) ([]domain.Review, error)
+	ListInReview(ctx context.Context, p auth.Principal) ([]domain.Course, error)
+	ListVersions(ctx context.Context, p auth.Principal, courseID id.ID) ([]app.VersionSummary, error)
+	GetVersion(ctx context.Context, p auth.Principal, courseID id.ID, number int) (domain.Course, error)
+	DiscardDraft(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error)
 	AddSection(ctx context.Context, p auth.Principal, courseID id.ID, title string) (domain.Course, error)
 	RenameSection(ctx context.Context, p auth.Principal, courseID, sectionID id.ID, title string) error
 	RemoveSection(ctx context.Context, p auth.Principal, courseID, sectionID id.ID) error
@@ -40,6 +50,7 @@ type CourseService interface {
 // ContentService is the lecture content use-case surface the handlers call.
 type ContentService interface {
 	Get(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) (app.LectureContentView, error)
+	GetLive(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) (app.LectureContentView, error)
 	Replace(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, blocks []app.BlockInput, legacy app.LegacyContent) error
 	Patch(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, in app.PatchInput) (int64, error)
 }
@@ -78,6 +89,16 @@ func (h *Handler) Register(r *httpserver.Router) {
 	r.Handle("POST /v1/courses/{courseID}/price", a(h.setPrice))
 	r.Handle("POST /v1/courses/{courseID}/publish", a(h.publish))
 	r.Handle("POST /v1/courses/{courseID}/archive", a(h.archive))
+	r.Handle("POST /v1/courses/{courseID}/submit", a(h.submit))
+	r.Handle("POST /v1/courses/{courseID}/approve", a(h.approve))
+	r.Handle("POST /v1/courses/{courseID}/request-changes", a(h.requestChanges))
+	r.Handle("POST /v1/courses/{courseID}/unpublish", a(h.unpublish))
+	r.Handle("GET /v1/courses/{courseID}/reviews", a(h.listReviews))
+	r.Handle("GET /v1/courses/in-review", a(h.listInReview))
+	r.Handle("GET /v1/courses/{courseID}/versions", a(h.listVersions))
+	r.Handle("GET /v1/courses/{courseID}/versions/{versionNumber}", a(h.getVersion))
+	r.Handle("POST /v1/courses/{courseID}/discard-draft", a(h.discardDraft))
+	r.Handle("GET /v1/settings/course-publishing", a(h.publishingSettings))
 	r.Handle("POST /v1/courses/{courseID}/sections", a(h.addSection))
 	r.Handle("PATCH /v1/courses/{courseID}/sections/{sectionID}", a(h.renameSection))
 	r.Handle("DELETE /v1/courses/{courseID}/sections/{sectionID}", a(h.removeSection))
@@ -107,6 +128,19 @@ func pathIDs(w http.ResponseWriter, r *http.Request, names ...string) ([]id.ID, 
 	return out, true
 }
 
+// wantsLive parses the view query parameter: "live" selects the live version, "draft" or
+// absence the default (the working copy for managers, the live version for everyone else).
+func wantsLive(w http.ResponseWriter, r *http.Request) (live, ok bool) {
+	switch r.URL.Query().Get("view") {
+	case "", "draft":
+		return false, true
+	case "live":
+		return true, true
+	}
+	problem.Write(w, r, http.StatusBadRequest, "invalid_input", "Invalid Input", "view must be draft or live")
+	return false, false
+}
+
 // principal returns the caller, or the zero Principal on a public route without a token.
 // The zero Principal manages no course, so it sees published courses only.
 func principal(r *http.Request) auth.Principal {
@@ -132,6 +166,7 @@ var errorMappings = []errorMapping{
 	{app.ErrConcurrentModification, http.StatusConflict, "concurrent_modification", "Concurrent Modification"},
 	{domain.ErrCourseNotEditable, http.StatusConflict, "course_not_editable", "Course Not Editable"},
 	{domain.ErrInvalidStatusTransition, http.StatusConflict, "invalid_transition", "Invalid Transition"},
+	{domain.ErrApprovalRequired, http.StatusConflict, "approval_required", "Approval Required"},
 	{app.ErrRevisionRequired, http.StatusBadRequest, "lecture_content_revision_required", "Revision Required"},
 	{app.ErrPatchTooLarge, http.StatusBadRequest, "patch_too_large", "Patch Too Large"},
 	{app.ErrBlockSetMismatch, http.StatusBadRequest, "block_set_mismatch", "Block Set Mismatch"},
@@ -142,6 +177,8 @@ var errorMappings = []errorMapping{
 	{contentblocks.ErrUnsafeContent, http.StatusBadRequest, "unsafe_content", "Unsafe Content"},
 	{domain.ErrDuplicateSectionTitle, http.StatusBadRequest, "duplicate_title", "Duplicate Title"},
 	{domain.ErrCourseHasNoLectures, http.StatusBadRequest, "empty_course", "Empty Course"},
+	{domain.ErrReviewNoteRequired, http.StatusBadRequest, "review_note_required", "Review Note Required"},
+	{domain.ErrReviewNoteTooLong, http.StatusBadRequest, "invalid_input", "Invalid Input"},
 	{domain.ErrUnsupportedCurrency, http.StatusBadRequest, "unsupported_currency", "Unsupported Currency"},
 	{app.ErrInvalidMediaReference, http.StatusBadRequest, "invalid_media_reference", "Invalid Media Reference"},
 	{app.ErrInvalidQuizReference, http.StatusBadRequest, "invalid_quiz_reference", "Invalid Quiz Reference"},

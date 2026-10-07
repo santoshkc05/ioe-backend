@@ -16,7 +16,6 @@ var (
 	ErrExamClosed        = errors.New("exam is closed")
 	ErrOpenAttemptExists = errors.New("an open attempt already exists")
 	ErrRetakesNotAllowed = errors.New("retakes are not allowed")
-	ErrExamHasAttempts   = errors.New("exam has attempts")
 )
 
 // WindowError is ErrExamNotOpen or ErrExamClosed with the time the window opens or closed.

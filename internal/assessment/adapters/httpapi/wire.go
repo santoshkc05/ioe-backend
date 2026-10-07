@@ -81,6 +81,7 @@ type quizWire struct {
 	ID        id.ID          `json:"id"`
 	LectureID id.ID          `json:"lecture_id"`
 	Position  int            `json:"position"`
+	Revision  int            `json:"revision"`
 	Questions []questionWire `json:"questions"`
 }
 
@@ -90,7 +91,7 @@ type attemptWire struct {
 }
 
 func toQuizWire(q domain.Quiz) quizWire {
-	w := quizWire{ID: q.ID, LectureID: q.LectureID, Position: q.Position, Questions: make([]questionWire, len(q.Questions))}
+	w := quizWire{ID: q.ID, LectureID: q.LectureID, Position: q.Position, Revision: q.Revision, Questions: make([]questionWire, len(q.Questions))}
 	for i, qu := range q.Questions {
 		qw := questionWire{ID: qu.ID, Prompt: qu.Prompt, Type: string(qu.Type), Explanation: qu.Explanation,
 			Options: make([]optionWire, len(qu.Options)), CorrectOptionIDs: []id.ID{}}

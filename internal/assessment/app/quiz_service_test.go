@@ -32,7 +32,7 @@ const (
 
 type fixture struct {
 	svc    *app.QuizService
-	query  *app.QuizQuery
+	query  *app.AssessmentQuery
 	exams  *app.ExamService
 	store  *memStore
 	clock  *fixedClock
@@ -50,6 +50,9 @@ func newFixture(t *testing.T) fixture {
 		hidden:   map[id.ID]bool{archived: true, hidden: true},
 		free:     map[id.ID]bool{free: true},
 		enrolled: enr,
+		live:     map[id.ID]app.Pins{},
+		versions: map[[2]int64]app.Pins{},
+		frozen:   map[id.ID]bool{},
 	}
 	ids, err := id.NewGenerator(1)
 	if err != nil {
@@ -59,9 +62,39 @@ func newFixture(t *testing.T) fixture {
 	probe := enrollmentProbe{t: t, store: store, set: enr}
 	return fixture{
 		svc:   app.NewQuizService(store, access, probe, ids, clk),
-		query: app.NewQuizQuery(store),
+		query: app.NewAssessmentQuery(store),
 		exams: app.NewExamService(store, access, probe, ids, clk),
 		store: store, clock: clk, access: access,
+	}
+}
+
+// goLive pins every non-deleted quiz and exam of course at its head, as a publish would.
+func (f *fixture) goLive(t *testing.T, courseID id.ID) {
+	t.Helper()
+	heads, err := f.query.Heads(ctx, courseID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pins := app.Pins{}
+	for _, h := range heads {
+		pins[h.Ref] = h.Revision
+	}
+	f.access.live[courseID] = pins
+}
+
+func quizInput(position int, prompt string) app.QuizInput {
+	return app.QuizInput{
+		Position: position,
+		Questions: []app.QuestionInput{
+			{
+				Prompt: prompt,
+				Type:   "single_choice",
+				Options: []app.OptionInput{
+					{Label: "a", IsCorrect: true},
+					{Label: "b"},
+				},
+			},
+		},
 	}
 }
 
@@ -99,19 +132,20 @@ func TestCreateAndList(t *testing.T) {
 	if q.Questions[0].ID.IsZero() || q.Questions[0].Options[0].ID.IsZero() {
 		t.Fatal("IDs were not generated")
 	}
+	f.goLive(t, course)
 	for _, p := range []auth.Principal{owner, admin, student} {
-		got, err := f.svc.List(ctx, p, course, locked)
+		got, err := f.svc.List(ctx, p, course, locked, 0)
 		if err != nil || len(got) != 1 || got[0].ID != q.ID {
 			t.Fatalf("%d: got=%v err=%v", p.UserID, got, err)
 		}
 	}
-	if _, err := f.svc.List(ctx, stranger, course, locked); !errors.Is(err, app.ErrEnrollmentRequired) {
+	if _, err := f.svc.List(ctx, stranger, course, locked, 0); !errors.Is(err, app.ErrEnrollmentRequired) {
 		t.Fatalf("stranger locked: %v", err)
 	}
-	if got, err := f.svc.List(ctx, stranger, course, free); err != nil || len(got) != 0 {
+	if got, err := f.svc.List(ctx, stranger, course, free, 0); err != nil || len(got) != 0 {
 		t.Fatalf("stranger free: %v %v", got, err)
 	}
-	if _, err := f.svc.List(ctx, owner, course, 60); !errors.Is(err, app.ErrNotFound) {
+	if _, err := f.svc.List(ctx, owner, course, 60, 0); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("lecture of other course: %v", err)
 	}
 }
@@ -234,6 +268,7 @@ func TestUpdateAfterDeleteIsNotFound(t *testing.T) {
 func TestDelete(t *testing.T) {
 	f := newFixture(t)
 	q := f.create(t, locked)
+	f.goLive(t, course)
 	if _, err := f.svc.RecordAttempt(ctx, student, q.ID, student.UserID, answersFor(q), "k"); err != nil {
 		t.Fatal(err)
 	}
@@ -246,14 +281,15 @@ func TestDelete(t *testing.T) {
 	if err := f.svc.Delete(ctx, owner, q.ID); err != nil {
 		t.Fatal(err)
 	}
-	if len(f.store.quizzes) != 0 || len(f.store.attempts) != 0 {
-		t.Fatalf("left quizzes=%d attempts=%d", len(f.store.quizzes), len(f.store.attempts))
+	if len(f.store.attempts) != 1 {
+		t.Fatalf("left attempts=%d, want 1", len(f.store.attempts))
 	}
 }
 
 func TestRecordAttemptIsIdempotent(t *testing.T) {
 	f := newFixture(t)
 	q := f.create(t, locked)
+	f.goLive(t, course)
 	first, err := f.svc.RecordAttempt(ctx, student, q.ID, student.UserID, answersFor(q), "key-1")
 	if err != nil || first.IsZero() {
 		t.Fatalf("first=%v err=%v", first, err)
@@ -279,6 +315,7 @@ func TestRecordAttemptRejections(t *testing.T) {
 	f := newFixture(t)
 	q := f.create(t, locked)
 	freeQuiz := f.create(t, free)
+	f.goLive(t, course)
 	cases := []struct {
 		name    string
 		p       auth.Principal
@@ -320,5 +357,96 @@ func TestQuizQueryLectures(t *testing.T) {
 	}
 	if got, err := f.query.Lectures(ctx, course, nil); err != nil || len(got) != 0 {
 		t.Fatalf("empty: %v %v", got, err)
+	}
+}
+
+func TestStudentsSeeLiveRevisionUntilRepublish(t *testing.T) {
+	f := newFixture(t)
+	q, err := f.svc.Create(ctx, owner, course, locked, quizInput(0, "v1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.goLive(t, course)
+	if _, err := f.svc.Update(ctx, owner, course, locked, q.ID, quizInput(0, "v2")); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.List(ctx, student, course, locked, 0)
+	if err != nil || len(got) != 1 || got[0].Questions[0].Prompt != "v1" || got[0].Revision != 1 {
+		t.Fatalf("student sees %+v, %v", got, err)
+	}
+	mine, err := f.svc.List(ctx, owner, course, locked, 0)
+	if err != nil || mine[0].Questions[0].Prompt != "v2" || mine[0].Revision != 2 {
+		t.Fatalf("manager sees %+v, %v", mine, err)
+	}
+	f.goLive(t, course)
+	got, _ = f.svc.List(ctx, student, course, locked, 0)
+	if got[0].Questions[0].Prompt != "v2" {
+		t.Fatalf("after republish student sees %q", got[0].Questions[0].Prompt)
+	}
+}
+
+func TestDeletedDraftQuizStaysLive(t *testing.T) {
+	f := newFixture(t)
+	q, _ := f.svc.Create(ctx, owner, course, locked, quizInput(0, "v1"))
+	f.goLive(t, course)
+	if err := f.svc.Delete(ctx, owner, q.ID); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.List(ctx, student, course, locked, 0)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("student list after draft delete: %+v, %v", got, err)
+	}
+	if _, err := f.svc.RecordAttempt(ctx, student, q.ID, student.UserID, nil, ""); err != nil {
+		t.Fatalf("attempt on pinned deleted quiz: %v", err)
+	}
+	if mine, _ := f.svc.List(ctx, owner, course, locked, 0); len(mine) != 0 {
+		t.Fatalf("manager still sees deleted quiz in draft: %+v", mine)
+	}
+}
+
+func TestUnpublishedCourseHidesQuizzes(t *testing.T) {
+	f := newFixture(t)
+	q, _ := f.svc.Create(ctx, owner, course, locked, quizInput(0, "v1"))
+	// Not live: no pins at all.
+	if got, err := f.svc.List(ctx, student, course, locked, 0); err != nil || len(got) != 0 {
+		t.Fatalf("list = %+v, %v", got, err)
+	}
+	if _, err := f.svc.RecordAttempt(ctx, student, q.ID, student.UserID, nil, ""); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("attempt = %v, want ErrNotFound", err)
+	}
+}
+
+func TestQuizAttemptRecordsLiveRevision(t *testing.T) {
+	f := newFixture(t)
+	q, _ := f.svc.Create(ctx, owner, course, locked, quizInput(0, "v1"))
+	f.goLive(t, course)
+	_, _ = f.svc.Update(ctx, owner, course, locked, q.ID, quizInput(0, "v2"))
+	if _, err := f.svc.RecordAttempt(ctx, student, q.ID, student.UserID, nil, ""); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.store.attempts[len(f.store.attempts)-1].Revision; got != 1 {
+		t.Fatalf("attempt revision = %d, want 1", got)
+	}
+}
+
+func TestQuizEditsFollowCourseFreeze(t *testing.T) {
+	f := newFixture(t)
+	f.access.frozen[course] = true
+	if _, err := f.svc.Create(ctx, owner, course, locked, quizInput(0, "v1")); !errors.Is(err, app.ErrCourseNotEditable) {
+		t.Fatalf("create on frozen course = %v", err)
+	}
+}
+
+func TestManagerReadsVersion(t *testing.T) {
+	f := newFixture(t)
+	q, _ := f.svc.Create(ctx, owner, course, locked, quizInput(0, "v1"))
+	_, _ = f.svc.Update(ctx, owner, course, locked, q.ID, quizInput(0, "v2"))
+	f.access.versions[[2]int64{int64(course), 1}] = app.Pins{{Kind: app.KindQuiz, ID: q.ID}: 1}
+	got, err := f.svc.List(ctx, owner, course, locked, 1)
+	if err != nil || got[0].Questions[0].Prompt != "v1" {
+		t.Fatalf("version 1 = %+v, %v", got, err)
+	}
+	if _, err := f.svc.List(ctx, student, course, locked, 1); !errors.Is(err, app.ErrForbidden) {
+		t.Fatalf("student version read = %v, want ErrForbidden", err)
 	}
 }

@@ -12,21 +12,12 @@ import (
 )
 
 type AssessmentExam struct {
-	ID               int64
-	CourseID         int64
-	Title            string
-	Description      string
-	Position         int32
-	Status           string
-	PassMark         int32
-	TimeLimitSeconds pgtype.Int4
-	RetakesAllowed   bool
-	OpensAt          pgtype.Timestamptz
-	ClosesAt         pgtype.Timestamptz
-	RevealPolicy     string
-	Questions        json.RawMessage
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	ID           int64
+	CourseID     int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	HeadRevision int32
+	DeletedAt    *time.Time
 }
 
 type AssessmentExamAttempt struct {
@@ -35,21 +26,61 @@ type AssessmentExamAttempt struct {
 	CourseID      int64
 	UserID        int64
 	StartedAt     time.Time
-	SubmittedAt   pgtype.Timestamptz
+	SubmittedAt   *time.Time
 	Score         pgtype.Int4
 	Passed        pgtype.Bool
 	AutoSubmitted bool
 	Answers       json.RawMessage
+	Revision      int32
+}
+
+type AssessmentExamRevision struct {
+	ExamID           int64
+	Revision         int32
+	Title            string
+	Description      string
+	Position         int32
+	Status           string
+	PassMark         int32
+	TimeLimitSeconds pgtype.Int4
+	RetakesAllowed   bool
+	OpensAt          *time.Time
+	ClosesAt         *time.Time
+	RevealPolicy     string
+	Questions        json.RawMessage
+	CreatedBy        int64
+	CreatedAt        time.Time
+}
+
+type AssessmentExamRevisionRow struct {
+	ID               int64
+	CourseID         int64
+	Revision         int32
+	HeadRevision     int32
+	DeletedAt        *time.Time
+	Title            string
+	Description      string
+	Position         int32
+	Status           string
+	PassMark         int32
+	TimeLimitSeconds pgtype.Int4
+	RetakesAllowed   bool
+	OpensAt          *time.Time
+	ClosesAt         *time.Time
+	RevealPolicy     string
+	Questions        json.RawMessage
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 type AssessmentQuiz struct {
-	ID        int64
-	CourseID  int64
-	LectureID int64
-	Position  int32
-	Questions json.RawMessage
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID           int64
+	CourseID     int64
+	LectureID    int64
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	HeadRevision int32
+	DeletedAt    *time.Time
 }
 
 type AssessmentQuizAttempt struct {
@@ -59,6 +90,29 @@ type AssessmentQuizAttempt struct {
 	Answers        json.RawMessage
 	IdempotencyKey pgtype.Text
 	SubmittedAt    time.Time
+	Revision       int32
+}
+
+type AssessmentQuizRevision struct {
+	QuizID    int64
+	Revision  int32
+	Position  int32
+	Questions json.RawMessage
+	CreatedBy int64
+	CreatedAt time.Time
+}
+
+type AssessmentQuizRevisionRow struct {
+	ID           int64
+	CourseID     int64
+	LectureID    int64
+	Revision     int32
+	HeadRevision int32
+	DeletedAt    *time.Time
+	Position     int32
+	Questions    json.RawMessage
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 type CourseauthoringCourse struct {
@@ -74,6 +128,77 @@ type CourseauthoringCourse struct {
 	Version          int64
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	SubmittedAt      *time.Time
+	ReviewedAt       *time.Time
+	ReviewNote       string
+	LastVersion      int32
+	LiveVersion      *int32
+}
+
+type CourseauthoringCourseReview struct {
+	ID        int64
+	CourseID  int64
+	ActorID   int64
+	Decision  string
+	Note      string
+	CreatedAt time.Time
+}
+
+type CourseauthoringCourseSubmittedAssessment struct {
+	CourseID     int64
+	Kind         string
+	AssessmentID int64
+	Revision     int32
+}
+
+type CourseauthoringCourseVersion struct {
+	CourseID         int64
+	Number           int32
+	Title            string
+	Description      string
+	Level            string
+	ThumbnailUrl     string
+	PriceAmountMinor int64
+	PriceCurrency    string
+	PublishedBy      int64
+	PublishedAt      time.Time
+}
+
+type CourseauthoringCourseVersionAssessment struct {
+	CourseID     int64
+	Number       int32
+	Kind         string
+	AssessmentID int64
+	Revision     int32
+}
+
+type CourseauthoringCourseVersionBlock struct {
+	CourseID      int64
+	Number        int32
+	LectureID     int64
+	ID            int64
+	Kind          string
+	Position      int32
+	ClientBlockID string
+	Payload       json.RawMessage
+}
+
+type CourseauthoringCourseVersionLecture struct {
+	CourseID    int64
+	Number      int32
+	ID          int64
+	SectionID   *int64
+	Title       string
+	FreePreview bool
+	SortOrder   int32
+}
+
+type CourseauthoringCourseVersionSection struct {
+	CourseID  int64
+	Number    int32
+	ID        int64
+	Title     string
+	SortOrder int32
 }
 
 type CourseauthoringLecture struct {
@@ -114,7 +239,7 @@ type EnrollmentEnrollment struct {
 	Status       string
 	CancelReason string
 	EnrolledAt   time.Time
-	CanceledAt   pgtype.Timestamptz
+	CanceledAt   *time.Time
 	Version      int64
 }
 
@@ -125,8 +250,8 @@ type IdentityRefreshToken struct {
 	TokenHash       []byte
 	FamilyExpiresAt time.Time
 	ExpiresAt       time.Time
-	UsedAt          pgtype.Timestamptz
-	RevokedAt       pgtype.Timestamptz
+	UsedAt          *time.Time
+	RevokedAt       *time.Time
 	CreatedAt       time.Time
 	UserAgent       string
 	Ip              string
@@ -163,8 +288,8 @@ type PaymentPurchase struct {
 	GatewayTxn  string
 	Status      string
 	CreatedAt   time.Time
-	SettledAt   pgtype.Timestamptz
-	GrantedAt   pgtype.Timestamptz
+	SettledAt   *time.Time
+	GrantedAt   *time.Time
 	Version     int64
 }
 

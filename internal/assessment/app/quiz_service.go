@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"time"
@@ -54,22 +55,34 @@ func NewQuizService(tx TxRunner, courses CourseAccess, enrollments EnrollmentQue
 	return &QuizService{tx: tx, courses: courses, enrollments: enrollments, ids: ids, clock: clk}
 }
 
-// List returns the lecture's quizzes, answer keys included, to anyone who may read the lecture.
-func (s *QuizService) List(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) ([]domain.Quiz, error) {
-	if err := s.courses.CanReadLecture(ctx, p, courseID, lectureID); err != nil {
+// List returns a lecture's quizzes, answer keys included. version 0 serves managers the working
+// copy and everyone else the live version; version n serves managers published version n.
+func (s *QuizService) List(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, version int) ([]domain.Quiz, error) {
+	pins, err := readPins(ctx, s.courses, p, courseID, version, func() error {
+		return s.courses.CanReadLecture(ctx, p, courseID, lectureID)
+	})
+	if err != nil {
 		return nil, err
 	}
 	var out []domain.Quiz
-	err := s.tx.RunInTx(ctx, func(r Repos) error {
-		var err error
-		out, err = r.Quizzes.ListByLecture(ctx, courseID, lectureID)
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
+		if pins == nil {
+			out, err = r.Quizzes.ListByLecture(ctx, courseID, lectureID)
+			return err
+		}
+		all, err := r.Quizzes.FindRevisions(ctx, pins.ids(KindQuiz))
+		for _, q := range all {
+			if q.CourseID == courseID && q.LectureID == lectureID {
+				out = append(out, q)
+			}
+		}
 		return err
 	})
 	return out, err
 }
 
 func (s *QuizService) Create(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, in QuizInput) (domain.Quiz, error) {
-	if err := s.courses.CanManageLecture(ctx, p, courseID, lectureID); err != nil {
+	if err := s.courses.BeginEdit(ctx, p, courseID, lectureID); err != nil {
 		return domain.Quiz{}, err
 	}
 	now := s.clock.Now()
@@ -77,43 +90,44 @@ func (s *QuizService) Create(ctx context.Context, p auth.Principal, courseID, le
 	if err != nil {
 		return domain.Quiz{}, err
 	}
-	return q, s.tx.RunInTx(ctx, func(r Repos) error { return r.Quizzes.Insert(ctx, q) })
+	q.Revision = 1
+	return q, s.tx.RunInTx(ctx, func(r Repos) error { return r.Quizzes.Insert(ctx, q, p.UserID) })
 }
 
-// Update replaces a quiz's position and questions. The quiz must belong to the path's course
-// and lecture; supplied question and option IDs must already belong to the quiz.
+// Update appends a revision with the quiz's new position and questions. The quiz must belong to
+// the path's course and lecture; supplied question and option IDs must already belong to it.
 func (s *QuizService) Update(ctx context.Context, p auth.Principal, courseID, lectureID, quizID id.ID, in QuizInput) (domain.Quiz, error) {
-	if err := s.courses.CanManageLecture(ctx, p, courseID, lectureID); err != nil {
+	if err := s.courses.BeginEdit(ctx, p, courseID, lectureID); err != nil {
 		return domain.Quiz{}, err
 	}
 	var out domain.Quiz
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
-		cur, err := r.Quizzes.Find(ctx, quizID)
+		cur, err := r.Quizzes.FindForUpdate(ctx, quizID)
 		if err != nil {
 			return err
 		}
 		if cur.CourseID != courseID || cur.LectureID != lectureID {
 			return ErrNotFound
 		}
-		out, err = s.buildQuiz(quizID, courseID, lectureID, in, cur.IDs(), cur.CreatedAt, s.clock.Now())
-		if err != nil {
+		if out, err = s.buildQuiz(quizID, courseID, lectureID, in, cur.IDs(), cur.CreatedAt, s.clock.Now()); err != nil {
 			return err
 		}
-		return r.Quizzes.Replace(ctx, out)
+		out.Revision = cur.Revision + 1
+		return r.Quizzes.AppendRevision(ctx, out, p.UserID)
 	})
 	return out, err
 }
 
-// Delete removes a quiz and its attempts. Lecture blocks that reference it are left alone.
+// Delete removes a quiz from the working copy. Published versions and attempts keep it.
 func (s *QuizService) Delete(ctx context.Context, p auth.Principal, quizID id.ID) error {
 	q, err := s.find(ctx, quizID)
 	if err != nil {
 		return err
 	}
-	if err := s.courses.CanManageLecture(ctx, p, q.CourseID, q.LectureID); err != nil {
+	if err := s.courses.BeginEdit(ctx, p, q.CourseID, q.LectureID); err != nil {
 		return err
 	}
-	return s.tx.RunInTx(ctx, func(r Repos) error { return r.Quizzes.Delete(ctx, quizID) })
+	return s.tx.RunInTx(ctx, func(r Repos) error { return r.Quizzes.Delete(ctx, quizID, s.clock.Now()) })
 }
 
 // RecordAttempt stores userID's answers. Only the user themselves, with an active enrollment,
@@ -129,7 +143,7 @@ func (s *QuizService) RecordAttempt(ctx context.Context, p auth.Principal, quizI
 	if err != nil {
 		return 0, err
 	}
-	q, err := s.find(ctx, quizID)
+	q, err := s.liveQuiz(ctx, quizID)
 	if err != nil {
 		return 0, err
 	}
@@ -146,7 +160,7 @@ func (s *QuizService) RecordAttempt(ctx context.Context, p auth.Principal, quizI
 	if err := q.CheckAnswers(parsed); err != nil {
 		return 0, fmt.Errorf("%w: %w", ErrInvalidInput, err)
 	}
-	attempt := domain.QuizAttempt{ID: s.ids.New(), QuizID: quizID, UserID: userID, Answers: parsed,
+	attempt := domain.QuizAttempt{ID: s.ids.New(), QuizID: quizID, Revision: q.Revision, UserID: userID, Answers: parsed,
 		IdempotencyKey: key, SubmittedAt: s.clock.Now()}
 	var out id.ID
 	err = s.tx.RunInTx(ctx, func(r Repos) error {
@@ -155,6 +169,39 @@ func (s *QuizService) RecordAttempt(ctx context.Context, p auth.Principal, quizI
 		return err
 	})
 	return out, err
+}
+
+// liveQuiz returns the quiz at its live pin. Deleted quizzes resolve while still pinned.
+func (s *QuizService) liveQuiz(ctx context.Context, quizID id.ID) (domain.Quiz, error) {
+	var courseID id.ID
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		heads, err := r.Quizzes.FindRevisions(ctx, map[id.ID]int{quizID: 1})
+		if err != nil || len(heads) == 0 {
+			return cmp.Or(err, ErrNotFound)
+		}
+		courseID = heads[0].CourseID
+		return nil
+	})
+	if err != nil {
+		return domain.Quiz{}, err
+	}
+	pins, live, err := s.courses.LivePins(ctx, courseID)
+	if err != nil {
+		return domain.Quiz{}, err
+	}
+	rev, ok := pins[Ref{Kind: KindQuiz, ID: quizID}]
+	if !live || !ok {
+		return domain.Quiz{}, ErrNotFound
+	}
+	var q []domain.Quiz
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
+		q, err = r.Quizzes.FindRevisions(ctx, map[id.ID]int{quizID: rev})
+		return err
+	})
+	if err != nil || len(q) == 0 {
+		return domain.Quiz{}, cmp.Or(err, ErrNotFound)
+	}
+	return q[0], nil
 }
 
 func (s *QuizService) find(ctx context.Context, quizID id.ID) (domain.Quiz, error) {

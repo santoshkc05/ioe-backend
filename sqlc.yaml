@@ -33,11 +33,25 @@ sql:
         overrides:
           - db_type: timestamptz
             go_type: time.Time
+          - db_type: timestamptz
+            nullable: true
+            go_type:
+              import: time
+              type: Time
+              pointer: true
           - db_type: jsonb
             go_type: encoding/json.RawMessage
           - column: courseauthoring.lectures.section_id
             go_type:
               type: int64
+              pointer: true
+          - column: courseauthoring.course_version_lectures.section_id
+            go_type:
+              type: int64
+              pointer: true
+          - column: courseauthoring.courses.live_version
+            go_type:
+              type: int32
               pointer: true
   - engine: postgresql
     schema: migrations

@@ -3,6 +3,7 @@ package app_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,7 @@ func newAssetFixture(t *testing.T) assetFixture {
 		{777, foreignAsset}:       app.AssetVideo,
 	}
 	f.contents = app.NewContentService(f.store, testIDs(t), enrolled{}, cat, quizCatalog{})
-	f.courses = app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, cat, quizCatalog{})
+	f.courses = app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, cat, quizCatalog{}, &fakeAssessments{heads: map[id.ID][]domain.AssessmentPin{}})
 	return assetFixture{contentFixture: f, cat: cat}
 }
 
@@ -121,7 +122,7 @@ func TestMediaReferenceDoesNotPreemptAuthorization(t *testing.T) {
 	if _, err := f.courses.AddLecture(ctx, otherInstr, f.course.ID, app.AddLectureInput{Title: "X", Blocks: foreign}); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("draft add err = %v", err)
 	}
-	if err := f.courses.Publish(ctx, owner, f.course.ID); err != nil {
+	if err := publish(f.courses, f.course.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.contents.Replace(ctx, student, f.course.ID, f.locked, foreign, app.LegacyContent{}); !errors.Is(err, app.ErrForbidden) {
@@ -160,11 +161,20 @@ func (q catalogProbe) Lectures(context.Context, id.ID, []id.ID) (map[id.ID]id.ID
 	return map[id.ID]id.ID{}, nil
 }
 
+func (q catalogProbe) Heads(context.Context, id.ID) ([]domain.AssessmentPin, error) {
+	if !q.store.mu.TryLock() {
+		q.t.Error("assessment catalog consulted inside the content transaction")
+		return nil, nil
+	}
+	q.store.mu.Unlock()
+	return nil, nil
+}
+
 func TestCatalogIsConsultedOutsideTx(t *testing.T) {
 	f := newContentFixture(t, enrolled{})
 	probe := catalogProbe{t: t, store: f.store}
 	contents := app.NewContentService(f.store, testIDs(t), enrolled{}, probe, probe)
-	courses := app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, probe, probe)
+	courses := app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, probe, probe, probe)
 	_ = contents.Replace(ctx, owner, f.course.ID, f.locked, []app.BlockInput{videoBlock("v", videoAsset)}, app.LegacyContent{})
 	v, _ := contents.Get(ctx, owner, f.course.ID, f.locked)
 	_, _ = contents.Patch(ctx, owner, f.course.ID, f.locked, app.PatchInput{BaseRevision: ptr(v.ContentRevision),
@@ -186,7 +196,7 @@ func TestCheckManage(t *testing.T) {
 	if err := f.courses.CheckManage(ctx, otherInstr, f.course.ID); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("other on draft err = %v", err)
 	}
-	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	_ = publish(f.courses, f.course.ID)
 	if err := f.courses.CheckManage(ctx, otherInstr, f.course.ID); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("other on published err = %v", err)
 	}
@@ -207,7 +217,7 @@ func TestCheckManagerRead(t *testing.T) {
 	if err := f.courses.CheckManagerRead(ctx, otherInstr, f.course.ID); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("other on draft err = %v", err)
 	}
-	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	_ = publish(f.courses, f.course.ID)
 	if err := f.courses.CheckManagerRead(ctx, otherInstr, f.course.ID); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("other on published err = %v", err)
 	}
@@ -229,7 +239,7 @@ func TestCheckAssetRead(t *testing.T) {
 	if err := f.contents.Replace(ctx, owner, f.course.ID, f.locked, blocks, app.LegacyContent{}); err != nil {
 		t.Fatal(err)
 	}
-	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	_ = publish(f.courses, f.course.ID)
 	if err := f.contents.CheckAssetRead(ctx, owner, f.course.ID, f.locked, videoAsset); err != nil {
 		t.Fatalf("owner video err = %v", err)
 	}
@@ -245,5 +255,33 @@ func TestCheckAssetRead(t *testing.T) {
 	enrolledContents := app.NewContentService(f.store, testIDs(t), enrolled{{f.course.ID, student.UserID}: true}, f.cat, quizCatalog{})
 	if err := enrolledContents.CheckAssetRead(ctx, student, f.course.ID, f.locked, videoAsset); err != nil {
 		t.Fatalf("enrolled err = %v", err)
+	}
+}
+
+func (f *assetFixture) putVideoBlock(t *testing.T, lectureID, assetID id.ID) {
+	t.Helper()
+	f.cat[[2]id.ID{f.course.ID, assetID}] = app.AssetVideo
+	if err := f.contents.Replace(ctx, owner, f.course.ID, lectureID, []app.BlockInput{videoBlock("v", assetID)}, app.LegacyContent{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAssetUsage(t *testing.T) {
+	f := newAssetFixture(t)
+	f.putVideoBlock(t, f.locked, 555) // working copy references asset 555
+	got, err := f.contents.AssetUsage(ctx, f.course.ID, 555)
+	if err != nil || !slices.Equal(got, []id.ID{f.locked}) {
+		t.Fatalf("draft usage = %v, %v", got, err)
+	}
+	if err := publish(f.courses, f.course.ID); err != nil {
+		t.Fatal(err)
+	}
+	f.putVideoBlock(t, f.locked, 556) // draft drops 555; live still has it
+	got, err = f.contents.AssetUsage(ctx, f.course.ID, 555)
+	if err != nil || !slices.Equal(got, []id.ID{f.locked}) {
+		t.Fatalf("live usage = %v, %v", got, err)
+	}
+	if got, _ := f.contents.AssetUsage(ctx, f.course.ID, 999); len(got) != 0 {
+		t.Fatalf("unused asset reported in use: %v", got)
 	}
 }

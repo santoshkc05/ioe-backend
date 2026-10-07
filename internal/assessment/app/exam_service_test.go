@@ -11,14 +11,30 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
-func examInput() app.ExamInput {
+func examInput(title ...string) app.ExamInput {
+	t := "Final"
+	if len(title) > 0 {
+		t = title[0]
+	}
 	return app.ExamInput{
-		ExamSettings: app.ExamSettings{Title: "Final", PassMark: 50, RevealPolicy: "after_attempt"},
+		ExamSettings: app.ExamSettings{Title: t, PassMark: 50, RevealPolicy: "after_attempt"},
 		Questions: []app.QuestionInput{
 			{Prompt: "2+2?", Type: "single_choice", Explanation: "arith", Points: 2, ReferenceLectureID: "50",
 				Options: []app.OptionInput{{Label: "4", IsCorrect: true}, {Label: "5"}}},
 			{Prompt: "Primes?", Type: "multiple_choice", Options: []app.OptionInput{
 				{Label: "2", IsCorrect: true}, {Label: "3", IsCorrect: true}, {Label: "4"}}},
+		},
+	}
+}
+
+func newQuestionInput(prompt string) app.QuestionInput {
+	return app.QuestionInput{
+		Prompt: prompt,
+		Type:   "single_choice",
+		Points: 1,
+		Options: []app.OptionInput{
+			{Label: "a", IsCorrect: true},
+			{Label: "b"},
 		},
 	}
 }
@@ -44,11 +60,11 @@ func inputOf(e domain.Exam) app.ExamInput {
 
 func (f fixture) createExam(t *testing.T, in app.ExamInput) domain.Exam {
 	t.Helper()
-	d, err := f.exams.Create(ctx, owner, course, in)
+	e, err := f.exams.Create(ctx, owner, course, in)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return d.Exam
+	return e
 }
 
 // addAttempt stores an attempt directly, graded at t0 when submitted is true.
@@ -67,18 +83,14 @@ func intPtr(v int) *int { return &v }
 
 func TestCreateExam(t *testing.T) {
 	f := newFixture(t)
-	d, err := f.exams.Create(ctx, admin, course, examInput())
+	e, err := f.exams.Create(ctx, admin, course, examInput())
 	if err != nil {
 		t.Fatal(err)
 	}
-	e := d.Exam
 	if e.Status != domain.ExamDraft || e.CourseID != course || e.Title != "Final" || !e.CreatedAt.Equal(t0) ||
 		e.Questions[0].Points != 2 || e.Questions[1].Points != 1 || e.Questions[0].ReferenceLectureID != 50 ||
-		e.Questions[0].ID.IsZero() || e.Questions[1].Options[2].ID.IsZero() {
+		e.Questions[0].ID.IsZero() || e.Questions[1].Options[2].ID.IsZero() || e.Revision != 1 {
 		t.Fatalf("created %+v", e)
-	}
-	if d.Locks.OpenAttempts != 0 || len(d.Locks.AnsweredQuestionIDs) != 0 {
-		t.Fatalf("locks = %+v", d.Locks)
 	}
 	if _, ok := f.store.exams[e.ID]; !ok {
 		t.Fatal("not stored")
@@ -132,16 +144,16 @@ func TestListAndGetAuthoring(t *testing.T) {
 	second.Position = 1
 	b := f.createExam(t, second)
 	a := f.createExam(t, examInput())
-	got, err := f.exams.ListAuthoring(ctx, owner, course)
+	got, err := f.exams.ListAuthoring(ctx, owner, course, 0)
 	if err != nil || len(got) != 2 || got[0].ID != a.ID || got[1].ID != b.ID {
 		t.Fatalf("list = %v, %v", got, err)
 	}
 	f.addAttempt(t, a, 900, false, domain.ExamAnswer{QuestionID: a.Questions[0].ID, OptionIDs: []id.ID{a.Questions[0].Options[0].ID}})
-	d, err := f.exams.GetAuthoring(ctx, admin, a.ID)
-	if err != nil || d.Exam.ID != a.ID || d.Locks.OpenAttempts != 1 || len(d.Locks.AnsweredQuestionIDs) != 1 {
-		t.Fatalf("get = %+v, %v", d, err)
+	e, err := f.exams.GetAuthoring(ctx, admin, a.ID)
+	if err != nil || e.ID != a.ID {
+		t.Fatalf("get = %+v, %v", e, err)
 	}
-	if _, err := f.exams.ListAuthoring(ctx, student, course); !errors.Is(err, app.ErrForbidden) {
+	if _, err := f.exams.ListAuthoring(ctx, student, course, 0); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("student list: %v", err)
 	}
 	if _, err := f.exams.GetAuthoring(ctx, student, a.ID); !errors.Is(err, app.ErrForbidden) {
@@ -151,7 +163,7 @@ func TestListAndGetAuthoring(t *testing.T) {
 		t.Fatalf("missing: %v", err)
 	}
 	f.access.archived[course] = true
-	if _, err := f.exams.ListAuthoring(ctx, owner, course); err != nil {
+	if _, err := f.exams.ListAuthoring(ctx, owner, course, 0); err != nil {
 		t.Fatalf("archived course read: %v", err)
 	}
 }
@@ -166,18 +178,15 @@ func TestSaveExam(t *testing.T) {
 	in.Questions = append(in.Questions, app.QuestionInput{Prompt: "New?", Type: "true_false",
 		Options: []app.OptionInput{{Label: "yes", IsCorrect: true}, {Label: "no"}}})
 	f.store.locks = nil
-	d, err := f.exams.Save(ctx, owner, e.ID, in)
+	saved, err := f.exams.Save(ctx, owner, e.ID, in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := f.store.exams[e.ID]
 	if got.Title != "Renamed" || got.Position != 3 || got.Status != domain.ExamPublished || !got.CreatedAt.Equal(t0) ||
 		!got.UpdatedAt.Equal(t0.Add(time.Hour)) || len(got.Questions) != 3 || got.Questions[0].ID != e.Questions[0].ID ||
-		d.Exam.Title != "Renamed" {
+		saved.Title != "Renamed" || saved.Revision != 3 {
 		t.Fatalf("saved %+v", got)
-	}
-	if len(f.store.locks) == 0 || f.store.locks[len(f.store.locks)-1] != app.LockUpdate {
-		t.Fatalf("locks = %v", f.store.locks)
 	}
 
 	foreign := inputOf(e)
@@ -190,27 +199,6 @@ func TestSaveExam(t *testing.T) {
 	}
 }
 
-func TestSaveExamGuardsAttempts(t *testing.T) {
-	f := newFixture(t)
-	e := f.createExam(t, examInput())
-	f.addAttempt(t, e, 900, true)
-	flipped := inputOf(e)
-	flipped.Questions[0].Options[0].IsCorrect, flipped.Questions[0].Options[1].IsCorrect = false, true
-	_, err := f.exams.Save(ctx, owner, e.ID, flipped)
-	var v *domain.EditViolation
-	if !errors.Is(err, domain.ErrEditKeyFrozen) || !errors.As(err, &v) || v.QuestionID != e.Questions[0].ID {
-		t.Fatalf("key change: %v", err)
-	}
-	if f.store.exams[e.ID].Questions[0].Options[0].IsCorrect != true {
-		t.Fatal("refused edit was stored")
-	}
-	reworded := inputOf(e)
-	reworded.Questions[0].Prompt = "What is 2+2?"
-	if _, err := f.exams.Save(ctx, owner, e.ID, reworded); err != nil {
-		t.Fatalf("rewording: %v", err)
-	}
-}
-
 func TestSaveSettings(t *testing.T) {
 	f := newFixture(t)
 	e := f.createExam(t, examInput())
@@ -218,13 +206,13 @@ func TestSaveSettings(t *testing.T) {
 		ExamSettings: app.ExamSettings{Title: "Midterm", PassMark: 70, TimeLimitSeconds: intPtr(600), RevealPolicy: "never"},
 		Points:       map[string]int{e.Questions[1].ID.String(): 5},
 	}
-	d, err := f.exams.SaveSettings(ctx, owner, e.ID, in)
+	saved, err := f.exams.SaveSettings(ctx, owner, e.ID, in)
 	if err != nil {
 		t.Fatal(err)
 	}
 	got := f.store.exams[e.ID]
 	if got.Title != "Midterm" || got.PassMark != 70 || got.TimeLimit != 10*time.Minute || got.RevealPolicy != domain.RevealNever ||
-		got.Questions[0].Points != 2 || got.Questions[1].Points != 5 || got.Questions[0].Prompt != "2+2?" || d.Exam.Title != "Midterm" {
+		got.Questions[0].Points != 2 || got.Questions[1].Points != 5 || got.Questions[0].Prompt != "2+2?" || saved.Title != "Midterm" {
 		t.Fatalf("saved %+v", got)
 	}
 	for name, points := range map[string]map[string]int{
@@ -289,11 +277,10 @@ func TestDuplicateExam(t *testing.T) {
 	long.Position = 4
 	src := f.createExam(t, long)
 	_ = f.exams.Publish(ctx, owner, src.ID)
-	d, err := f.exams.Duplicate(ctx, owner, src.ID)
+	cp, err := f.exams.Duplicate(ctx, owner, src.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cp := d.Exam
 	if cp.ID == src.ID || cp.Status != domain.ExamDraft || cp.Position != 5 || len([]rune(cp.Title)) != domain.MaxTitleLen ||
 		len(cp.Questions) != 2 || cp.Questions[0].Prompt != "2+2?" || !cp.Questions[0].Options[0].IsCorrect {
 		t.Fatalf("copy %+v", cp)
@@ -308,8 +295,8 @@ func TestDuplicateExam(t *testing.T) {
 		t.Fatal("source changed")
 	}
 	short := f.createExam(t, examInput())
-	if d, _ := f.exams.Duplicate(ctx, owner, short.ID); d.Exam.Title != "Final (copy)" {
-		t.Fatalf("title = %q", d.Exam.Title)
+	if cp, _ := f.exams.Duplicate(ctx, owner, short.ID); cp.Title != "Final (copy)" {
+		t.Fatalf("title = %q", cp.Title)
 	}
 }
 
@@ -318,10 +305,6 @@ func TestDeleteExam(t *testing.T) {
 	e := f.createExam(t, examInput())
 	if err := f.exams.Delete(ctx, student, e.ID); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("student: %v", err)
-	}
-	f.addAttempt(t, e, 900, true)
-	if err := f.exams.Delete(ctx, owner, e.ID); !errors.Is(err, app.ErrExamHasAttempts) {
-		t.Fatalf("with attempts: %v", err)
 	}
 	empty := f.createExam(t, examInput())
 	if err := f.exams.Delete(ctx, owner, empty.ID); err != nil {
@@ -332,30 +315,78 @@ func TestDeleteExam(t *testing.T) {
 	}
 }
 
-func TestSaveExamSettlesExpiredAttempts(t *testing.T) {
+func TestExamPublishWaitsForCoursePublish(t *testing.T) {
 	f := newFixture(t)
-	in := examInput()
-	in.TimeLimitSeconds = intPtr(30)
-	e := f.createExam(t, in)
+	e, _ := f.exams.Create(ctx, owner, course, examInput("Final"))
+	f.goLive(t, course) // exam pinned as draft
+	if err := f.exams.Publish(ctx, owner, e.ID); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.exams.List(ctx, student, course); len(got) != 0 {
+		t.Fatalf("draft-pinned exam visible: %+v", got)
+	}
+	f.goLive(t, course)
+	if got, _ := f.exams.List(ctx, student, course); len(got) != 1 {
+		t.Fatalf("published exam missing after republish")
+	}
+}
+
+func TestAttemptGradedAgainstItsRevision(t *testing.T) {
+	f := newFixture(t)
+	e, _ := f.exams.Create(ctx, owner, course, examInput("Final"))
 	_ = f.exams.Publish(ctx, owner, e.ID)
-	att := f.addAttempt(t, e, 900, false)
-
-	f.clock.now = t0.Add(time.Minute)
-
-	editInput := inputOf(e)
-	editInput.Questions = append(editInput.Questions, app.QuestionInput{
-		Prompt:  "Question 3?",
-		Type:    "true_false",
-		Options: []app.OptionInput{{Label: "yes", IsCorrect: true}, {Label: "no"}},
-	})
-	d, err := f.exams.Save(ctx, owner, e.ID, editInput)
+	f.goLive(t, course)
+	a, err := f.exams.Start(ctx, student, e.ID)
 	if err != nil {
-		t.Fatalf("save should succeed after settling expired attempt, got: %v", err)
+		t.Fatal(err)
 	}
-	if d.Locks.OpenAttempts != 0 || d.Locks.SubmittedAttempts != 1 {
-		t.Fatalf("locks = %+v; want 0 open, 1 submitted", d.Locks)
+	// The draft swaps every question; the open attempt keeps revision 2's questions.
+	in := examInput("Final")
+	in.Questions = []app.QuestionInput{newQuestionInput("new?")}
+	if _, err := f.exams.Save(ctx, owner, e.ID, in); err != nil {
+		t.Fatalf("edit with an open attempt: %v", err)
 	}
-	if !f.store.examAttempts[att.ID].AutoSubmitted {
-		t.Fatal("attempt should be settled as auto-submitted")
+	f.goLive(t, course)
+	q := a.Exam.Questions[0]
+	if err := f.exams.SaveAnswer(ctx, student, a.Attempt.ID, app.AnswerInput{QuestionID: q.ID.String(),
+		OptionIDs: []string{q.Options[0].ID.String()}}); err != nil {
+		t.Fatalf("answer old revision's question: %v", err)
+	}
+	done, err := f.exams.Submit(ctx, student, a.Attempt.ID)
+	if err != nil || done.Exam.Revision != a.Exam.Revision {
+		t.Fatalf("graded against %d, want %d (%v)", done.Exam.Revision, a.Exam.Revision, err)
+	}
+}
+
+func TestDraftDeadlineExtensionDoesNotMoveOpenAttempt(t *testing.T) {
+	f := newFixture(t)
+	in := examInput("Timed")
+	limit := 600
+	in.TimeLimitSeconds = &limit
+	e, _ := f.exams.Create(ctx, owner, course, in)
+	_ = f.exams.Publish(ctx, owner, e.ID)
+	f.goLive(t, course)
+	a, _ := f.exams.Start(ctx, student, e.ID)
+	longer := 1200
+	in.TimeLimitSeconds = &longer
+	_, _ = f.exams.Save(ctx, owner, e.ID, in)
+	f.goLive(t, course)
+	got, _ := f.exams.GetAttempt(ctx, student, a.Attempt.ID)
+	if d := got.Attempt.Deadline(got.Exam); !d.Equal(a.Attempt.StartedAt.Add(600 * time.Second)) {
+		t.Fatalf("deadline = %v, want start + 10m", d)
+	}
+}
+
+func TestDeleteExamWithAttemptsKeepsThem(t *testing.T) {
+	f := newFixture(t)
+	e, _ := f.exams.Create(ctx, owner, course, examInput("Final"))
+	_ = f.exams.Publish(ctx, owner, e.ID)
+	f.goLive(t, course)
+	a, _ := f.exams.Start(ctx, student, e.ID)
+	if err := f.exams.Delete(ctx, owner, e.ID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if _, err := f.exams.GetAttempt(ctx, student, a.Attempt.ID); err != nil {
+		t.Fatalf("attempt after delete: %v", err)
 	}
 }

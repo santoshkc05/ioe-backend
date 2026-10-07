@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"go.opentelemetry.io/otel"
 
+	assessmentevents "github.com/santoshkc2200/ioe-backend/internal/assessment/adapters/events"
 	assessmentpg "github.com/santoshkc2200/ioe-backend/internal/assessment/adapters/postgres"
 	assessmentapp "github.com/santoshkc2200/ioe-backend/internal/assessment/app"
 	courseauthoringhttp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/httpapi"
@@ -79,8 +80,9 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	enrollmentAccess := enrollmentapp.NewAccessQuery(enrollmentTx)
 	mediaAssets := mediapg.New(pool)
 	assessmentTx := assessmentpg.NewTxRunner(pool)
+	assessmentQ := assessmentapp.NewAssessmentQuery(assessmentTx)
 	courses, contents := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess,
-		mediaAssetCatalog{query: mediaapp.NewAssetQuery(mediaAssets)}, assessmentapp.NewQuizQuery(assessmentTx), identityHandler, ips, logger)
+		mediaAssetCatalog{query: mediaapp.NewAssetQuery(mediaAssets)}, assessmentQ, assessmentHeads{query: assessmentQ}, identityHandler, ips, logger)
 	enrollments := registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
 	payments := registerPayment(router, pool, courses, enrollmentAccess, enrollments, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
@@ -94,6 +96,8 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err := registerNotifications(fw, cfg, logger); err != nil {
 		return nil, errors.Join(err, fw.Close())
 	}
+	fw.Handle(assessmentevents.DraftDiscardedTopic,
+		assessmentevents.New(assessmentapp.NewRestoreService(assessmentTx, clk)).DraftDiscarded)
 	return &application{handler: handler, forwarder: fw, payments: payments}, nil
 }
 
@@ -134,9 +138,9 @@ func registerIdentity(r *httpserver.Router, svc *identityapp.Service, admin *ide
 
 // registerCourseAuthoring mounts course authoring and returns its course and content services
 // for contexts that read course facts or check lecture access.
-func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, assets courseauthoringapp.AssetCatalog, quizzes courseauthoringapp.QuizCatalog, authn *httpapi.Handler, ips httpserver.IPResolver, logger *slog.Logger) (*courseauthoringapp.CourseService, *courseauthoringapp.ContentService) {
+func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.Generator, clk clock.Clock, enrollments courseauthoringapp.EnrollmentQuery, assets courseauthoringapp.AssetCatalog, quizzes courseauthoringapp.QuizCatalog, assessments courseauthoringapp.AssessmentCatalog, authn *httpapi.Handler, ips httpserver.IPResolver, logger *slog.Logger) (*courseauthoringapp.CourseService, *courseauthoringapp.ContentService) {
 	tx := courseauthoringpg.NewTxRunner(pool, clk)
-	courses := courseauthoringapp.NewCourseService(tx, ids, clk, assets, quizzes)
+	courses := courseauthoringapp.NewCourseService(tx, ids, clk, assets, quizzes, assessments)
 	contents := courseauthoringapp.NewContentService(tx, ids, enrollments, assets, quizzes)
 	courseauthoringhttp.New(
 		courses,

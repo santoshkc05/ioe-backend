@@ -34,12 +34,6 @@ type ExamSettingsInput struct {
 	Points map[string]int // question ID → points; omitted questions keep theirs
 }
 
-// ExamDetail is an exam with the attempt locks on it: the authoring view.
-type ExamDetail struct {
-	Exam  domain.Exam
-	Locks domain.Locks
-}
-
 // ExamService implements exam authoring and attempts. Course access and enrollment checks run
 // before the assessment transaction opens: each takes its own pool connection.
 type ExamService struct {
@@ -54,59 +48,68 @@ func NewExamService(tx TxRunner, courses CourseAccess, enrollments EnrollmentQue
 	return &ExamService{tx: tx, courses: courses, enrollments: enrollments, ids: ids, clock: clk}
 }
 
-// ListAuthoring returns every exam of a course the caller manages, drafts included.
-func (s *ExamService) ListAuthoring(ctx context.Context, p auth.Principal, courseID id.ID) ([]domain.Exam, error) {
+// ListAuthoring returns every exam of a course the caller manages: version 0 serves working-copy
+// heads; version n serves published version n.
+func (s *ExamService) ListAuthoring(ctx context.Context, p auth.Principal, courseID id.ID, version int) ([]domain.Exam, error) {
+	if version > 0 {
+		pins, err := s.courses.VersionPins(ctx, p, courseID, version)
+		if err != nil {
+			return nil, err
+		}
+		var out []domain.Exam
+		err = s.tx.RunInTx(ctx, func(r Repos) error {
+			var err error
+			out, err = r.Exams.FindRevisions(ctx, pins.ids(KindExam))
+			return err
+		})
+		return out, err
+	}
 	if err := s.courses.CanReadAsManager(ctx, p, courseID); err != nil {
 		return nil, err
 	}
 	var out []domain.Exam
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
-		out, err = r.Exams.ListByCourse(ctx, courseID, false)
+		out, err = r.Exams.ListByCourse(ctx, courseID)
 		return err
 	})
 	return out, err
 }
 
-func (s *ExamService) GetAuthoring(ctx context.Context, p auth.Principal, examID id.ID) (ExamDetail, error) {
+// GetAuthoring returns an exam at its head revision to a course manager.
+func (s *ExamService) GetAuthoring(ctx context.Context, p auth.Principal, examID id.ID) (domain.Exam, error) {
 	if err := s.authorize(ctx, p, examID, s.courses.CanReadAsManager); err != nil {
-		return ExamDetail{}, err
+		return domain.Exam{}, err
 	}
-	var out ExamDetail
+	var out domain.Exam
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
-		e, err := r.Exams.Find(ctx, examID, LockNone)
-		if err != nil {
-			return err
-		}
-		if err := settleExamAttempts(ctx, r, e, s.clock.Now()); err != nil {
-			return err
-		}
-		locks, err := r.Exams.Locks(ctx, examID)
-		out = ExamDetail{Exam: e, Locks: locks}
+		var err error
+		out, err = r.Exams.Find(ctx, examID, LockNone)
 		return err
 	})
 	return out, err
 }
 
 // Create adds a draft exam. Question and option IDs are generated.
-func (s *ExamService) Create(ctx context.Context, p auth.Principal, courseID id.ID, in ExamInput) (ExamDetail, error) {
-	if err := s.courses.CanManageCourse(ctx, p, courseID); err != nil {
-		return ExamDetail{}, err
+func (s *ExamService) Create(ctx context.Context, p auth.Principal, courseID id.ID, in ExamInput) (domain.Exam, error) {
+	if err := s.courses.BeginEdit(ctx, p, courseID, 0); err != nil {
+		return domain.Exam{}, err
 	}
 	now := s.clock.Now()
 	e, err := s.buildExam(domain.Exam{ID: s.ids.New(), CourseID: courseID, Status: domain.ExamDraft, CreatedAt: now, UpdatedAt: now}, in, nil)
 	if err != nil {
-		return ExamDetail{}, err
+		return domain.Exam{}, err
 	}
-	if err := s.tx.RunInTx(ctx, func(r Repos) error { return r.Exams.Insert(ctx, e) }); err != nil {
-		return ExamDetail{}, err
+	e.Revision = 1
+	if err := s.tx.RunInTx(ctx, func(r Repos) error { return r.Exams.Insert(ctx, e, p.UserID) }); err != nil {
+		return domain.Exam{}, err
 	}
-	return ExamDetail{Exam: e}, nil
+	return e, nil
 }
 
 // Save replaces an exam's settings, position, and questions. Supplied question and option IDs
 // must already belong to the exam; status is kept.
-func (s *ExamService) Save(ctx context.Context, p auth.Principal, examID id.ID, in ExamInput) (ExamDetail, error) {
+func (s *ExamService) Save(ctx context.Context, p auth.Principal, examID id.ID, in ExamInput) (domain.Exam, error) {
 	return s.edit(ctx, p, examID, func(cur domain.Exam, now time.Time) (domain.Exam, error) {
 		base := domain.Exam{ID: cur.ID, CourseID: cur.CourseID, Status: cur.Status, CreatedAt: cur.CreatedAt, UpdatedAt: now}
 		return s.buildExam(base, in, cur.IDs())
@@ -114,7 +117,7 @@ func (s *ExamService) Save(ctx context.Context, p auth.Principal, examID id.ID, 
 }
 
 // SaveSettings replaces an exam's settings and the points of the listed questions.
-func (s *ExamService) SaveSettings(ctx context.Context, p auth.Principal, examID id.ID, in ExamSettingsInput) (ExamDetail, error) {
+func (s *ExamService) SaveSettings(ctx context.Context, p auth.Principal, examID id.ID, in ExamSettingsInput) (domain.Exam, error) {
 	return s.edit(ctx, p, examID, func(cur domain.Exam, now time.Time) (domain.Exam, error) {
 		next := cur
 		next.Questions = slices.Clone(cur.Questions)
@@ -143,11 +146,11 @@ func (s *ExamService) SaveSettings(ctx context.Context, p auth.Principal, examID
 // Reorder sets exam positions to their order in examIDs, which must list each exam of the
 // course exactly once.
 func (s *ExamService) Reorder(ctx context.Context, p auth.Principal, courseID id.ID, examIDs []id.ID) error {
-	if err := s.courses.CanManageCourse(ctx, p, courseID); err != nil {
+	if err := s.courses.BeginEdit(ctx, p, courseID, 0); err != nil {
 		return err
 	}
 	return s.tx.RunInTx(ctx, func(r Repos) error {
-		exams, err := r.Exams.ListByCourse(ctx, courseID, false)
+		exams, err := r.Exams.ListByCourse(ctx, courseID)
 		if err != nil {
 			return err
 		}
@@ -164,15 +167,31 @@ func (s *ExamService) Reorder(ctx context.Context, p auth.Principal, courseID id
 		if len(want) > 0 {
 			return fmt.Errorf("%w: exam_ids must list each exam of the course once", ErrInvalidInput)
 		}
-		return r.Exams.SetPositions(ctx, courseID, examIDs)
+		now := s.clock.Now()
+		for pos, v := range examIDs {
+			e, err := r.Exams.Find(ctx, v, LockUpdate)
+			if err != nil {
+				return err
+			}
+			if e.Position != pos {
+				e.Position = pos
+				e.UpdatedAt = now
+				e.Revision++
+				if err := r.Exams.AppendRevision(ctx, e, p.UserID); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
 	})
 }
 
+// Publish marks the exam published. Takes effect for students on the next course publish.
 func (s *ExamService) Publish(ctx context.Context, p auth.Principal, examID id.ID) error {
 	return s.setStatus(ctx, p, examID, domain.ExamPublished)
 }
 
-// Unpublish hides the exam and blocks new attempts. Open attempts continue.
+// Unpublish hides the exam and blocks new attempts. Takes effect for students on the next course publish.
 func (s *ExamService) Unpublish(ctx context.Context, p auth.Principal, examID id.ID) error {
 	return s.setStatus(ctx, p, examID, domain.ExamDraft)
 }
@@ -186,16 +205,16 @@ func (s *ExamService) setStatus(ctx context.Context, p auth.Principal, examID id
 }
 
 // Duplicate copies an exam with fresh IDs as a draft at the end of the course's exams.
-func (s *ExamService) Duplicate(ctx context.Context, p auth.Principal, examID id.ID) (ExamDetail, error) {
-	if err := s.authorize(ctx, p, examID, s.courses.CanManageCourse); err != nil {
-		return ExamDetail{}, err
+func (s *ExamService) Duplicate(ctx context.Context, p auth.Principal, examID id.ID) (domain.Exam, error) {
+	src, err := s.find(ctx, examID)
+	if err != nil {
+		return domain.Exam{}, err
+	}
+	if err := s.courses.BeginEdit(ctx, p, src.CourseID, 0); err != nil {
+		return domain.Exam{}, err
 	}
 	var out domain.Exam
-	err := s.tx.RunInTx(ctx, func(r Repos) error {
-		src, err := r.Exams.Find(ctx, examID, LockNone)
-		if err != nil {
-			return err
-		}
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
 		position, err := r.Exams.NextPosition(ctx, src.CourseID)
 		if err != nil {
 			return err
@@ -216,17 +235,22 @@ func (s *ExamService) Duplicate(ctx context.Context, p auth.Principal, examID id
 		if out, err = validExam(cp); err != nil {
 			return err
 		}
-		return r.Exams.Insert(ctx, out)
+		out.Revision = 1
+		return r.Exams.Insert(ctx, out, p.UserID)
 	})
-	return ExamDetail{Exam: out}, err
+	return out, err
 }
 
-// Delete removes an exam that has no attempts.
+// Delete removes an exam from the working copy. Published versions and attempts keep it.
 func (s *ExamService) Delete(ctx context.Context, p auth.Principal, examID id.ID) error {
-	if err := s.authorize(ctx, p, examID, s.courses.CanManageCourse); err != nil {
+	e, err := s.find(ctx, examID)
+	if err != nil {
 		return err
 	}
-	return s.tx.RunInTx(ctx, func(r Repos) error { return r.Exams.Delete(ctx, examID) })
+	if err := s.courses.BeginEdit(ctx, p, e.CourseID, 0); err != nil {
+		return err
+	}
+	return s.tx.RunInTx(ctx, func(r Repos) error { return r.Exams.Delete(ctx, examID, s.clock.Now()) })
 }
 
 func (s *ExamService) find(ctx context.Context, examID id.ID) (domain.Exam, error) {
@@ -248,38 +272,26 @@ func (s *ExamService) authorize(ctx context.Context, p auth.Principal, examID id
 	return check(ctx, p, e.CourseID)
 }
 
-// edit authorizes p to manage the exam's course, then, holding the exam's row lock, builds the
-// replacement with change and refuses it when it would break existing attempts.
-func (s *ExamService) edit(ctx context.Context, p auth.Principal, examID id.ID, change func(cur domain.Exam, now time.Time) (domain.Exam, error)) (ExamDetail, error) {
-	if err := s.authorize(ctx, p, examID, s.courses.CanManageCourse); err != nil {
-		return ExamDetail{}, err
+// edit authorizes p to change the exam's course, then appends the revision change builds.
+func (s *ExamService) edit(ctx context.Context, p auth.Principal, examID id.ID, change func(cur domain.Exam, now time.Time) (domain.Exam, error)) (domain.Exam, error) {
+	cur, err := s.find(ctx, examID)
+	if err != nil {
+		return domain.Exam{}, err
 	}
-	var out ExamDetail
-	err := s.tx.RunInTx(ctx, func(r Repos) error {
+	if err := s.courses.BeginEdit(ctx, p, cur.CourseID, 0); err != nil {
+		return domain.Exam{}, err
+	}
+	var out domain.Exam
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
 		cur, err := r.Exams.Find(ctx, examID, LockUpdate)
 		if err != nil {
 			return err
 		}
-		now := s.clock.Now()
-		if err := settleExamAttempts(ctx, r, cur, now); err != nil {
+		if out, err = change(cur, s.clock.Now()); err != nil {
 			return err
 		}
-		next, err := change(cur, now)
-		if err != nil {
-			return err
-		}
-		locks, err := r.Exams.Locks(ctx, examID)
-		if err != nil {
-			return err
-		}
-		if err := domain.CheckExamEdit(cur, next, locks); err != nil {
-			return err
-		}
-		if err := r.Exams.Replace(ctx, next); err != nil {
-			return err
-		}
-		out = ExamDetail{Exam: next, Locks: locks}
-		return nil
+		out.Revision = cur.Revision + 1
+		return r.Exams.AppendRevision(ctx, out, p.UserID)
 	})
 	return out, err
 }

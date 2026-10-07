@@ -47,6 +47,10 @@ func (a mediaCourseAccess) CanReadLectureAsset(ctx context.Context, p auth.Princ
 	return toMediaError(a.contents.CheckAssetRead(ctx, p, courseID, lectureID, assetID))
 }
 
+func (a mediaCourseAccess) AssetUsage(ctx context.Context, courseID, assetID id.ID) ([]id.ID, error) {
+	return a.contents.AssetUsage(ctx, courseID, assetID)
+}
+
 func toMediaError(err error) error {
 	switch {
 	case err == nil:

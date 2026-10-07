@@ -27,6 +27,7 @@ func exam(t *testing.T, examID, courseID id.ID, position int) domain.Exam {
 	if err != nil {
 		t.Fatal(err)
 	}
+	e.Revision = 1
 	return e
 }
 
@@ -43,14 +44,14 @@ func TestExamRoundTripAndOrder(t *testing.T) {
 	b.Status, b.TimeLimit, b.ClosesAt, b.RevealPolicy = domain.ExamPublished, 0, nil, domain.RevealNever
 	runExams(t, tx, func(r app.ExamRepository) error {
 		for _, e := range []domain.Exam{a, b, other} {
-			if err := r.Insert(ctx, e); err != nil {
+			if err := r.Insert(ctx, e, 100); err != nil {
 				return err
 			}
 		}
 		return nil
 	})
 	runExams(t, tx, func(r app.ExamRepository) error {
-		for _, lock := range []app.LockMode{app.LockNone, app.LockShare, app.LockUpdate} {
+		for _, lock := range []app.LockMode{app.LockNone, app.LockUpdate} {
 			got, err := r.Find(ctx, 1, lock)
 			if err != nil {
 				return err
@@ -68,13 +69,9 @@ func TestExamRoundTripAndOrder(t *testing.T) {
 		if _, err := r.Find(ctx, 999, app.LockNone); !errors.Is(err, app.ErrNotFound) {
 			t.Fatalf("missing: %v", err)
 		}
-		all, err := r.ListByCourse(ctx, 10, false)
+		all, err := r.ListByCourse(ctx, 10)
 		if err != nil || len(all) != 2 || all[0].ID != 2 || all[1].ID != 1 {
 			t.Fatalf("list = %+v, %v", all, err)
-		}
-		published, err := r.ListByCourse(ctx, 10, true)
-		if err != nil || len(published) != 1 || published[0].ID != 2 {
-			t.Fatalf("published = %+v, %v", published, err)
 		}
 		if next, err := r.NextPosition(ctx, 10); err != nil || next != 2 {
 			t.Fatalf("next = %d, %v", next, err)
@@ -82,26 +79,48 @@ func TestExamRoundTripAndOrder(t *testing.T) {
 		if next, err := r.NextPosition(ctx, 99); err != nil || next != 0 {
 			t.Fatalf("empty course next = %d, %v", next, err)
 		}
-		return r.SetPositions(ctx, 10, []id.ID{1, 2, 3})
+		return nil
 	})
 	runExams(t, tx, func(r app.ExamRepository) error {
-		all, _ := r.ListByCourse(ctx, 10, false)
-		if all[0].ID != 1 || all[0].Position != 0 || all[1].Position != 1 {
-			t.Fatalf("reordered = %+v", all)
-		}
-		if got, _ := r.Find(ctx, 3, app.LockNone); got.Position != 0 {
-			t.Fatalf("other course moved to %d", got.Position)
-		}
-		a.Title, a.Status, a.Questions = "Renamed", domain.ExamPublished, a.Questions[:1]
-		return r.Replace(ctx, a)
+		a2 := a
+		a2.Revision = 2
+		a2.Title, a2.Status, a2.Questions = "Renamed", domain.ExamPublished, a2.Questions[:1]
+		return r.AppendRevision(ctx, a2, 100)
 	})
 	runExams(t, tx, func(r app.ExamRepository) error {
 		got, _ := r.Find(ctx, 1, app.LockNone)
 		if got.Title != "Renamed" || got.Status != domain.ExamPublished || len(got.Questions) != 1 {
 			t.Fatalf("replaced = %+v", got)
 		}
-		if err := r.Replace(ctx, exam(t, 999, 10, 0)); !errors.Is(err, app.ErrNotFound) {
+		missing := exam(t, 999, 10, 0)
+		missing.Revision = 2
+		if err := r.AppendRevision(ctx, missing, 100); !errors.Is(err, app.ErrNotFound) {
 			t.Fatalf("replace missing: %v", err)
+		}
+		return nil
+	})
+}
+
+func TestExamRevisionsAndSoftDelete(t *testing.T) {
+	tx := postgres.NewTxRunner(pgtest.New(t))
+	e := exam(t, 1, 10, 0)
+	e.Revision = 1
+	runExams(t, tx, func(r app.ExamRepository) error { return r.Insert(ctx, e, 100) })
+	e2 := e
+	e2.Revision, e2.Status, e2.Position = 2, domain.ExamPublished, 4
+	runExams(t, tx, func(r app.ExamRepository) error { return r.AppendRevision(ctx, e2, 100) })
+	runExams(t, tx, func(r app.ExamRepository) error { return r.Delete(ctx, 1, t0) })
+	runExams(t, tx, func(r app.ExamRepository) error {
+		if _, err := r.Find(ctx, 1, app.LockNone); !errors.Is(err, app.ErrNotFound) {
+			t.Fatalf("find deleted: %v", err)
+		}
+		got, err := r.FindRevisions(ctx, map[id.ID]int{1: 1})
+		if err != nil || len(got) != 1 || got[0].Status != domain.ExamDraft {
+			t.Fatalf("revision 1 = %+v, %v", got, err)
+		}
+		next, err := r.NextPosition(ctx, 10)
+		if err != nil || next != 0 {
+			t.Fatalf("next position ignores deleted exams: %d, %v", next, err)
 		}
 		return nil
 	})
@@ -112,7 +131,7 @@ func TestAttemptLifecycle(t *testing.T) {
 	e := exam(t, 1, 10, 0)
 	a := domain.NewExamAttempt(500, e, 200, t0)
 	runExams(t, tx, func(r app.ExamRepository) error {
-		if err := r.Insert(ctx, e); err != nil {
+		if err := r.Insert(ctx, e, 100); err != nil {
 			return err
 		}
 		return r.InsertAttempt(ctx, a)
@@ -134,13 +153,6 @@ func TestAttemptLifecycle(t *testing.T) {
 		if got.ID != 500 || !got.Open() || len(got.Answers) != 2 || got.Answers[0].QuestionID != 101 ||
 			got.Answers[0].OptionIDs[0] != 102 || got.Answers[1].OptionIDs == nil || len(got.Answers[1].OptionIDs) != 0 {
 			t.Fatalf("open attempt = %+v", got)
-		}
-		l, err := r.Locks(ctx, 1)
-		if err != nil {
-			return err
-		}
-		if _, answered := l.AnsweredQuestionIDs[101]; l.OpenAttempts != 1 || l.SubmittedAttempts != 0 || len(l.AnsweredQuestionIDs) != 1 || !answered {
-			t.Fatalf("locks = %+v", l)
 		}
 		if done, err := r.HasSubmitted(ctx, 1, 200); err != nil || done {
 			t.Fatalf("has submitted = %v, %v", done, err)
@@ -180,10 +192,6 @@ func TestAttemptLifecycle(t *testing.T) {
 		if err := r.InsertAttempt(ctx, second); err != nil {
 			return err
 		}
-		l, _ := r.Locks(ctx, 1)
-		if l.OpenAttempts != 1 || l.SubmittedAttempts != 1 {
-			t.Fatalf("locks = %+v", l)
-		}
 		list, err := r.ListAttempts(ctx, 1)
 		if err != nil || len(list) != 2 || list[0].ID != 500 || list[1].ID != 501 {
 			t.Fatalf("list = %+v, %v", list, err)
@@ -194,28 +202,25 @@ func TestAttemptLifecycle(t *testing.T) {
 		}
 		return nil
 	})
-	// A refused delete aborts its transaction, so it runs on its own.
-	if err := tx.RunInTx(ctx, func(r app.Repos) error { return r.Exams.Delete(ctx, 1) }); !errors.Is(err, app.ErrExamHasAttempts) {
-		t.Fatalf("delete with attempts: %v", err)
-	}
 	runExams(t, tx, func(r app.ExamRepository) error {
-		if err := r.Insert(ctx, exam(t, 2, 10, 1)); err != nil {
+		e2 := exam(t, 2, 10, 1)
+		if err := r.Insert(ctx, e2, 100); err != nil {
 			return err
 		}
-		if err := r.Delete(ctx, 2); err != nil {
+		if err := r.Delete(ctx, 2, t0); err != nil {
 			return err
 		}
 		if _, err := r.Find(ctx, 2, app.LockNone); !errors.Is(err, app.ErrNotFound) {
 			t.Fatalf("deleted exam: %v", err)
 		}
-		return r.Delete(ctx, 2)
+		return r.Delete(ctx, 2, t0)
 	})
 }
 
 func TestConcurrentStartsCreateOneAttempt(t *testing.T) {
 	tx := postgres.NewTxRunner(pgtest.New(t))
 	e := exam(t, 1, 10, 0)
-	runExams(t, tx, func(r app.ExamRepository) error { return r.Insert(ctx, e) })
+	runExams(t, tx, func(r app.ExamRepository) error { return r.Insert(ctx, e, 100) })
 	const n = 8
 	errs := make([]error, n)
 	var wg sync.WaitGroup
@@ -247,7 +252,7 @@ func TestConcurrentAnswersKeepBoth(t *testing.T) {
 	tx := postgres.NewTxRunner(pgtest.New(t))
 	e := exam(t, 1, 10, 0)
 	runExams(t, tx, func(r app.ExamRepository) error {
-		if err := r.Insert(ctx, e); err != nil {
+		if err := r.Insert(ctx, e, 100); err != nil {
 			return err
 		}
 		return r.InsertAttempt(ctx, domain.NewExamAttempt(500, e, 200, t0))

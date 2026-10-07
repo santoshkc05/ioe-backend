@@ -36,11 +36,7 @@ func (h *Handler) listByOwner(w http.ResponseWriter, r *http.Request) {
 		h.writeError(w, r, err)
 		return
 	}
-	page := coursePageWire{Courses: make([]courseWire, 0, len(cs)), Total: len(cs)}
-	for _, c := range cs {
-		page.Courses = append(page.Courses, toCourseWire(c))
-	}
-	httpserver.WriteJSON(w, http.StatusOK, page)
+	writeCoursePage(w, cs)
 }
 
 func (h *Handler) getCourse(w http.ResponseWriter, r *http.Request) {
@@ -48,7 +44,15 @@ func (h *Handler) getCourse(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	c, err := h.courses.Get(r.Context(), principal(r), ids[0])
+	live, ok := wantsLive(w, r)
+	if !ok {
+		return
+	}
+	get := h.courses.Get
+	if live {
+		get = h.courses.GetLive
+	}
+	c, err := get(r.Context(), principal(r), ids[0])
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -232,4 +236,12 @@ func (h *Handler) noContent(w http.ResponseWriter, r *http.Request, err error) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func writeCoursePage(w http.ResponseWriter, cs []domain.Course) {
+	page := coursePageWire{Courses: make([]courseWire, 0, len(cs)), Total: len(cs)}
+	for _, c := range cs {
+		page.Courses = append(page.Courses, toCourseWire(c))
+	}
+	httpserver.WriteJSON(w, http.StatusOK, page)
 }

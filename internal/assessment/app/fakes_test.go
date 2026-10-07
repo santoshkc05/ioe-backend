@@ -3,9 +3,9 @@ package app_test
 import (
 	"cmp"
 	"context"
+	"fmt"
 	"maps"
 	"slices"
-	"sort"
 	"sync"
 	"testing"
 	"time"
@@ -25,82 +25,162 @@ func (c *fixedClock) Now() time.Time { return c.now }
 type memStore struct {
 	mu           sync.Mutex
 	quizzes      map[id.ID]domain.Quiz
+	quizRevs     map[id.ID][]domain.Quiz
+	quizDeleted  map[id.ID]bool
 	attempts     []domain.QuizAttempt
 	exams        map[id.ID]domain.Exam
+	examRevs     map[id.ID][]domain.Exam
+	examDeleted  map[id.ID]bool
 	examAttempts map[id.ID]domain.ExamAttempt
 	locks        []app.LockMode // every lock mode passed to Exams.Find, in order
 }
 
 func newMemStore() *memStore {
-	return &memStore{quizzes: map[id.ID]domain.Quiz{}, exams: map[id.ID]domain.Exam{}, examAttempts: map[id.ID]domain.ExamAttempt{}}
+	return &memStore{
+		quizzes:      map[id.ID]domain.Quiz{},
+		quizRevs:     map[id.ID][]domain.Quiz{},
+		quizDeleted:  map[id.ID]bool{},
+		exams:        map[id.ID]domain.Exam{},
+		examRevs:     map[id.ID][]domain.Exam{},
+		examDeleted:  map[id.ID]bool{},
+		examAttempts: map[id.ID]domain.ExamAttempt{},
+	}
+}
+
+func cloneQuizRevs(m map[id.ID][]domain.Quiz) map[id.ID][]domain.Quiz {
+	out := make(map[id.ID][]domain.Quiz, len(m))
+	for k, v := range m {
+		out[k] = slices.Clone(v)
+	}
+	return out
+}
+
+func cloneExamRevs(m map[id.ID][]domain.Exam) map[id.ID][]domain.Exam {
+	out := make(map[id.ID][]domain.Exam, len(m))
+	for k, v := range m {
+		out[k] = slices.Clone(v)
+	}
+	return out
 }
 
 func (m *memStore) RunInTx(_ context.Context, fn func(app.Repos) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	// Run on copies so a failed transaction leaves no trace, as a rollback would.
-	exams, attempts := maps.Clone(m.exams), maps.Clone(m.examAttempts)
+	quizzes, qRevs, qDel := maps.Clone(m.quizzes), cloneQuizRevs(m.quizRevs), maps.Clone(m.quizDeleted)
+	exams, eRevs, eDel := maps.Clone(m.exams), cloneExamRevs(m.examRevs), maps.Clone(m.examDeleted)
+	attempts, eAttempts := slices.Clone(m.attempts), maps.Clone(m.examAttempts)
 	if err := fn(app.Repos{Quizzes: m, Exams: memExams{m}}); err != nil {
-		m.exams, m.examAttempts = exams, attempts
+		m.quizzes, m.quizRevs, m.quizDeleted = quizzes, qRevs, qDel
+		m.exams, m.examRevs, m.examDeleted = exams, eRevs, eDel
+		m.attempts, m.examAttempts = attempts, eAttempts
 		return err
 	}
 	return nil
 }
 
 func (m *memStore) Find(_ context.Context, quizID id.ID) (domain.Quiz, error) {
-	q, ok := m.quizzes[quizID]
-	if !ok {
+	if m.quizDeleted[quizID] {
 		return domain.Quiz{}, app.ErrNotFound
 	}
-	return q, nil
+	revs, ok := m.quizRevs[quizID]
+	if !ok || len(revs) == 0 {
+		return domain.Quiz{}, app.ErrNotFound
+	}
+	return revs[len(revs)-1], nil
 }
 
-func (m *memStore) ListByLecture(_ context.Context, courseID, lectureID id.ID) ([]domain.Quiz, error) {
+func (m *memStore) FindForUpdate(ctx context.Context, quizID id.ID) (domain.Quiz, error) {
+	return m.Find(ctx, quizID)
+}
+
+func (m *memStore) FindRevisions(_ context.Context, revs map[id.ID]int) ([]domain.Quiz, error) {
 	var out []domain.Quiz
-	for _, q := range m.quizzes {
-		if q.CourseID == courseID && q.LectureID == lectureID {
-			out = append(out, q)
+	for qid, rev := range revs {
+		list, ok := m.quizRevs[qid]
+		if !ok || rev <= 0 || rev > len(list) {
+			continue
 		}
+		out = append(out, list[rev-1])
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Position != out[j].Position {
-			return out[i].Position < out[j].Position
-		}
-		return out[i].ID < out[j].ID
+	slices.SortFunc(out, func(a, b domain.Quiz) int {
+		return cmp.Or(cmp.Compare(a.Position, b.Position), cmp.Compare(a.ID, b.ID))
 	})
 	return out, nil
 }
 
-func (m *memStore) Insert(_ context.Context, q domain.Quiz) error {
-	m.quizzes[q.ID] = q
-	return nil
-}
-
-func (m *memStore) Replace(_ context.Context, q domain.Quiz) error {
-	if _, ok := m.quizzes[q.ID]; !ok {
-		return app.ErrNotFound
-	}
-	m.quizzes[q.ID] = q
-	return nil
-}
-
-func (m *memStore) Delete(_ context.Context, quizID id.ID) error {
-	delete(m.quizzes, quizID)
-	kept := m.attempts[:0]
-	for _, a := range m.attempts {
-		if a.QuizID != quizID {
-			kept = append(kept, a)
+func (m *memStore) ListByLecture(_ context.Context, courseID, lectureID id.ID) ([]domain.Quiz, error) {
+	var out []domain.Quiz
+	for qid, revs := range m.quizRevs {
+		if m.quizDeleted[qid] || len(revs) == 0 {
+			continue
+		}
+		head := revs[len(revs)-1]
+		if head.CourseID == courseID && head.LectureID == lectureID {
+			out = append(out, head)
 		}
 	}
-	m.attempts = kept
+	slices.SortFunc(out, func(a, b domain.Quiz) int {
+		return cmp.Or(cmp.Compare(a.Position, b.Position), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
+}
+
+func (m *memStore) Insert(_ context.Context, q domain.Quiz, _ id.ID) error {
+	if q.Revision != 1 {
+		return fmt.Errorf("revision must be 1")
+	}
+	m.quizRevs[q.ID] = []domain.Quiz{q}
+	m.quizzes[q.ID] = q
+	delete(m.quizDeleted, q.ID)
 	return nil
+}
+
+func (m *memStore) AppendRevision(_ context.Context, q domain.Quiz, _ id.ID) error {
+	if m.quizDeleted[q.ID] {
+		return app.ErrNotFound
+	}
+	revs, ok := m.quizRevs[q.ID]
+	if !ok || len(revs) != q.Revision-1 {
+		return app.ErrNotFound
+	}
+	m.quizRevs[q.ID] = append(revs, q)
+	m.quizzes[q.ID] = q
+	return nil
+}
+
+func (m *memStore) Delete(_ context.Context, quizID id.ID, _ time.Time) error {
+	m.quizDeleted[quizID] = true
+	delete(m.quizzes, quizID)
+	return nil
+}
+
+func (m *memStore) Undelete(_ context.Context, quizID id.ID, _ time.Time) error {
+	m.quizDeleted[quizID] = false
+	return nil
+}
+
+func (m *memStore) Heads(_ context.Context, courseID id.ID) ([]app.Head, error) {
+	var out []app.Head
+	for qid, revs := range m.quizRevs {
+		if len(revs) == 0 || revs[0].CourseID != courseID {
+			continue
+		}
+		out = append(out, app.Head{
+			Ref:      app.Ref{Kind: app.KindQuiz, ID: qid},
+			Revision: revs[len(revs)-1].Revision,
+			Deleted:  m.quizDeleted[qid],
+		})
+	}
+	slices.SortFunc(out, func(a, b app.Head) int { return cmp.Compare(a.Ref.ID, b.Ref.ID) })
+	return out, nil
 }
 
 func (m *memStore) LecturesOf(_ context.Context, courseID id.ID, quizIDs []id.ID) (map[id.ID]id.ID, error) {
 	out := map[id.ID]id.ID{}
 	for _, v := range quizIDs {
-		if q, ok := m.quizzes[v]; ok && q.CourseID == courseID {
-			out[v] = q.LectureID
+		if revs, ok := m.quizRevs[v]; ok && len(revs) > 0 && revs[0].CourseID == courseID && !m.quizDeleted[v] {
+			out[v] = revs[0].LectureID
 		}
 	}
 	return out, nil
@@ -138,6 +218,41 @@ type courseAccess struct {
 	hidden   map[id.ID]bool  // course → invisible to non-managers (draft or archived)
 	free     map[id.ID]bool  // free-preview lectures
 	enrolled enrollments
+	live     map[id.ID]app.Pins
+	versions map[[2]int64]app.Pins
+	edits    []id.ID
+	frozen   map[id.ID]bool
+}
+
+func (a *courseAccess) BeginEdit(_ context.Context, p auth.Principal, courseID, lectureID id.ID) error {
+	outsideTx(a.t, a.store)
+	switch {
+	case !a.known(courseID), !lectureID.IsZero() && a.lectures[lectureID] != courseID:
+		return app.ErrNotFound
+	case !a.manages(p):
+		return app.ErrForbidden
+	case a.archived[courseID], a.frozen[courseID]:
+		return app.ErrCourseNotEditable
+	}
+	a.edits = append(a.edits, courseID)
+	return nil
+}
+
+func (a *courseAccess) LivePins(_ context.Context, courseID id.ID) (app.Pins, bool, error) {
+	outsideTx(a.t, a.store)
+	pins, ok := a.live[courseID]
+	return maps.Clone(pins), ok, nil
+}
+
+func (a *courseAccess) VersionPins(ctx context.Context, p auth.Principal, courseID id.ID, number int) (app.Pins, error) {
+	if err := a.CanReadAsManager(ctx, p, courseID); err != nil {
+		return nil, err
+	}
+	pins, ok := a.versions[[2]int64{int64(courseID), int64(number)}]
+	if !ok {
+		return nil, app.ErrNotFound
+	}
+	return maps.Clone(pins), nil
 }
 
 func (a *courseAccess) known(courseID id.ID) bool {
@@ -151,16 +266,6 @@ func (a *courseAccess) known(courseID id.ID) bool {
 
 func (a *courseAccess) manages(p auth.Principal) bool {
 	return p.UserID == a.owner || p.Role == auth.RoleRootAdmin
-}
-
-func (a *courseAccess) CanManageCourse(ctx context.Context, p auth.Principal, courseID id.ID) error {
-	if err := a.CanReadAsManager(ctx, p, courseID); err != nil {
-		return err
-	}
-	if a.archived[courseID] {
-		return app.ErrCourseNotEditable
-	}
-	return nil
 }
 
 func (a *courseAccess) CanReadAsManager(ctx context.Context, p auth.Principal, courseID id.ID) error {
@@ -177,19 +282,6 @@ func (a *courseAccess) CanReadCourse(_ context.Context, p auth.Principal, course
 	outsideTx(a.t, a.store)
 	if !a.known(courseID) || (a.hidden[courseID] && !a.manages(p)) {
 		return app.ErrNotFound
-	}
-	return nil
-}
-
-func (a *courseAccess) CanManageLecture(_ context.Context, p auth.Principal, courseID, lectureID id.ID) error {
-	outsideTx(a.t, a.store)
-	switch {
-	case a.lectures[lectureID] != courseID:
-		return app.ErrNotFound
-	case p.UserID != a.owner && p.Role != auth.RoleRootAdmin:
-		return app.ErrForbidden
-	case a.archived[courseID]:
-		return app.ErrCourseNotEditable
 	}
 	return nil
 }
@@ -223,18 +315,40 @@ type memExams struct{ m *memStore }
 
 func (r memExams) Find(_ context.Context, examID id.ID, lock app.LockMode) (domain.Exam, error) {
 	r.m.locks = append(r.m.locks, lock)
-	e, ok := r.m.exams[examID]
-	if !ok {
+	if r.m.examDeleted[examID] {
 		return domain.Exam{}, app.ErrNotFound
 	}
-	return e, nil
+	revs, ok := r.m.examRevs[examID]
+	if !ok || len(revs) == 0 {
+		return domain.Exam{}, app.ErrNotFound
+	}
+	return revs[len(revs)-1], nil
 }
 
-func (r memExams) ListByCourse(_ context.Context, courseID id.ID, publishedOnly bool) ([]domain.Exam, error) {
+func (r memExams) FindRevisions(_ context.Context, revs map[id.ID]int) ([]domain.Exam, error) {
 	var out []domain.Exam
-	for _, e := range r.m.exams {
-		if e.CourseID == courseID && (!publishedOnly || e.Status == domain.ExamPublished) {
-			out = append(out, e)
+	for eid, rev := range revs {
+		list, ok := r.m.examRevs[eid]
+		if !ok || rev <= 0 || rev > len(list) {
+			continue
+		}
+		out = append(out, list[rev-1])
+	}
+	slices.SortFunc(out, func(a, b domain.Exam) int {
+		return cmp.Or(cmp.Compare(a.Position, b.Position), cmp.Compare(a.ID, b.ID))
+	})
+	return out, nil
+}
+
+func (r memExams) ListByCourse(_ context.Context, courseID id.ID) ([]domain.Exam, error) {
+	var out []domain.Exam
+	for eid, revs := range r.m.examRevs {
+		if r.m.examDeleted[eid] || len(revs) == 0 {
+			continue
+		}
+		head := revs[len(revs)-1]
+		if head.CourseID == courseID {
+			out = append(out, head)
 		}
 	}
 	slices.SortFunc(out, func(a, b domain.Exam) int {
@@ -243,67 +357,68 @@ func (r memExams) ListByCourse(_ context.Context, courseID id.ID, publishedOnly 
 	return out, nil
 }
 
-func (r memExams) Insert(_ context.Context, e domain.Exam) error {
+func (r memExams) Insert(_ context.Context, e domain.Exam, _ id.ID) error {
+	if e.Revision != 1 {
+		return fmt.Errorf("revision must be 1")
+	}
+	r.m.examRevs[e.ID] = []domain.Exam{e}
 	r.m.exams[e.ID] = e
+	delete(r.m.examDeleted, e.ID)
 	return nil
 }
 
-func (r memExams) Replace(_ context.Context, e domain.Exam) error {
-	if _, ok := r.m.exams[e.ID]; !ok {
+func (r memExams) AppendRevision(_ context.Context, e domain.Exam, _ id.ID) error {
+	if r.m.examDeleted[e.ID] {
 		return app.ErrNotFound
 	}
+	revs, ok := r.m.examRevs[e.ID]
+	if !ok || len(revs) != e.Revision-1 {
+		return app.ErrNotFound
+	}
+	r.m.examRevs[e.ID] = append(revs, e)
 	r.m.exams[e.ID] = e
 	return nil
 }
 
-func (r memExams) Delete(_ context.Context, examID id.ID) error {
-	for _, a := range r.m.examAttempts {
-		if a.ExamID == examID {
-			return app.ErrExamHasAttempts
-		}
-	}
+func (r memExams) Delete(_ context.Context, examID id.ID, _ time.Time) error {
+	r.m.examDeleted[examID] = true
 	delete(r.m.exams, examID)
 	return nil
 }
 
-func (r memExams) NextPosition(_ context.Context, courseID id.ID) (int, error) {
-	next := 0
-	for _, e := range r.m.exams {
-		if e.CourseID == courseID && e.Position >= next {
-			next = e.Position + 1
-		}
-	}
-	return next, nil
-}
-
-func (r memExams) SetPositions(_ context.Context, courseID id.ID, examIDs []id.ID) error {
-	for i, v := range examIDs {
-		if e, ok := r.m.exams[v]; ok && e.CourseID == courseID {
-			e.Position = i
-			r.m.exams[v] = e
-		}
-	}
+func (r memExams) Undelete(_ context.Context, examID id.ID, _ time.Time) error {
+	r.m.examDeleted[examID] = false
 	return nil
 }
 
-func (r memExams) Locks(_ context.Context, examID id.ID) (domain.Locks, error) {
-	l := domain.Locks{AnsweredQuestionIDs: map[id.ID]struct{}{}}
-	for _, a := range r.m.examAttempts {
-		if a.ExamID != examID {
+func (r memExams) Heads(_ context.Context, courseID id.ID) ([]app.Head, error) {
+	var out []app.Head
+	for eid, revs := range r.m.examRevs {
+		if len(revs) == 0 || revs[0].CourseID != courseID {
 			continue
 		}
-		if a.Open() {
-			l.OpenAttempts++
-		} else {
-			l.SubmittedAttempts++
+		out = append(out, app.Head{
+			Ref:      app.Ref{Kind: app.KindExam, ID: eid},
+			Revision: revs[len(revs)-1].Revision,
+			Deleted:  r.m.examDeleted[eid],
+		})
+	}
+	slices.SortFunc(out, func(a, b app.Head) int { return cmp.Compare(a.Ref.ID, b.Ref.ID) })
+	return out, nil
+}
+
+func (r memExams) NextPosition(_ context.Context, courseID id.ID) (int, error) {
+	next := 0
+	for eid, revs := range r.m.examRevs {
+		if r.m.examDeleted[eid] || len(revs) == 0 {
+			continue
 		}
-		for _, ans := range a.Answers {
-			if len(ans.OptionIDs) > 0 {
-				l.AnsweredQuestionIDs[ans.QuestionID] = struct{}{}
-			}
+		head := revs[len(revs)-1]
+		if head.CourseID == courseID && head.Position >= next {
+			next = head.Position + 1
 		}
 	}
-	return l, nil
+	return next, nil
 }
 
 func (r memExams) FindAttempt(_ context.Context, attemptID id.ID, _ bool) (domain.ExamAttempt, error) {

@@ -5,11 +5,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/santoshkc2200/ioe-backend/internal/assessment/adapters/postgres/sqlcgen"
 	"github.com/santoshkc2200/ioe-backend/internal/assessment/app"
@@ -19,7 +21,6 @@ import (
 
 const (
 	uniqueViolation     = "23505"
-	foreignKeyViolation = "23503"
 	oneOpenAttemptIndex = "exam_attempts_one_open_idx"
 )
 
@@ -35,16 +36,14 @@ type examAnswerDoc struct {
 type exams struct{ q *sqlcgen.Queries }
 
 func (r exams) Find(ctx context.Context, examID id.ID, lock app.LockMode) (domain.Exam, error) {
-	var row sqlcgen.AssessmentExam
-	var err error
-	switch lock {
-	case app.LockShare:
-		row, err = r.q.GetExamForShare(ctx, int64(examID))
-	case app.LockUpdate:
-		row, err = r.q.GetExamForUpdate(ctx, int64(examID))
-	default:
-		row, err = r.q.GetExam(ctx, int64(examID))
+	if lock == app.LockUpdate {
+		if _, err := r.q.LockExam(ctx, int64(examID)); errors.Is(err, pgx.ErrNoRows) {
+			return domain.Exam{}, app.ErrNotFound
+		} else if err != nil {
+			return domain.Exam{}, err
+		}
 	}
+	row, err := r.q.GetExamHead(ctx, int64(examID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Exam{}, app.ErrNotFound
 	}
@@ -54,92 +53,82 @@ func (r exams) Find(ctx context.Context, examID id.ID, lock app.LockMode) (domai
 	return toExam(row)
 }
 
-func (r exams) ListByCourse(ctx context.Context, courseID id.ID, publishedOnly bool) ([]domain.Exam, error) {
-	rows, err := r.q.ListExamsByCourse(ctx, sqlcgen.ListExamsByCourseParams{CourseID: int64(courseID), PublishedOnly: publishedOnly})
+func (r exams) FindRevisions(ctx context.Context, revs map[id.ID]int) ([]domain.Exam, error) {
+	ids, numbers := revisionArgs(revs)
+	rows, err := r.q.ListExamRevisions(ctx, sqlcgen.ListExamRevisionsParams{ExamIds: ids, Revisions: numbers})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]domain.Exam, len(rows))
-	for i, row := range rows {
-		if out[i], err = toExam(row); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+	return toExams(rows)
 }
 
-func (r exams) Insert(ctx context.Context, e domain.Exam) error {
-	doc, err := questionsJSON(e.Questions)
+func (r exams) ListByCourse(ctx context.Context, courseID id.ID) ([]domain.Exam, error) {
+	rows, err := r.q.ListExamsByCourse(ctx, int64(courseID))
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return r.q.InsertExam(ctx, sqlcgen.InsertExamParams{
-		ID: int64(e.ID), CourseID: int64(e.CourseID), Title: e.Title, Description: e.Description, Position: i32(e.Position),
-		Status: string(e.Status), PassMark: i32(e.PassMark), TimeLimitSeconds: limitSeconds(e.TimeLimit),
-		RetakesAllowed: e.RetakesAllowed, OpensAt: e.OpensAt, ClosesAt: e.ClosesAt, RevealPolicy: string(e.RevealPolicy),
-		Questions: doc, CreatedAt: e.CreatedAt, UpdatedAt: e.UpdatedAt,
-	})
+	return toExams(rows)
 }
 
-func (r exams) Replace(ctx context.Context, e domain.Exam) error {
-	doc, err := questionsJSON(e.Questions)
-	if err != nil {
+func (r exams) Insert(ctx context.Context, e domain.Exam, by id.ID) error {
+	if e.Revision != 1 {
+		return fmt.Errorf("insert exam %s: revision %d, want 1", e.ID, e.Revision)
+	}
+	if err := r.q.InsertExam(ctx, sqlcgen.InsertExamParams{
+		ID: int64(e.ID), CourseID: int64(e.CourseID), CreatedAt: e.CreatedAt,
+	}); err != nil {
 		return err
 	}
-	n, err := r.q.ReplaceExam(ctx, sqlcgen.ReplaceExamParams{
-		ID: int64(e.ID), Title: e.Title, Description: e.Description, Position: i32(e.Position), Status: string(e.Status),
-		PassMark: i32(e.PassMark), TimeLimitSeconds: limitSeconds(e.TimeLimit), RetakesAllowed: e.RetakesAllowed,
-		OpensAt: e.OpensAt, ClosesAt: e.ClosesAt, RevealPolicy: string(e.RevealPolicy), Questions: doc, UpdatedAt: e.UpdatedAt,
-	})
+	return r.insertRevision(ctx, e, by)
+}
+
+func (r exams) AppendRevision(ctx context.Context, e domain.Exam, by id.ID) error {
+	n, err := r.q.MoveExamHead(ctx, sqlcgen.MoveExamHeadParams{ID: int64(e.ID), HeadRevision: int32(e.Revision), UpdatedAt: e.UpdatedAt}) //nolint:gosec // one per edit
 	if err != nil {
 		return err
 	}
 	if n == 0 {
 		return app.ErrNotFound
 	}
-	return nil
+	return r.insertRevision(ctx, e, by)
 }
 
-func (r exams) Delete(ctx context.Context, examID id.ID) error {
-	err := r.q.DeleteExam(ctx, int64(examID))
-	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == foreignKeyViolation {
-		return app.ErrExamHasAttempts
+func (r exams) insertRevision(ctx context.Context, e domain.Exam, by id.ID) error {
+	doc, err := questionsJSON(e.Questions)
+	if err != nil {
+		return err
 	}
-	return err
+	return r.q.InsertExamRevision(ctx, sqlcgen.InsertExamRevisionParams{
+		ExamID: int64(e.ID), Revision: int32(e.Revision), Title: e.Title, Description: e.Description, Position: i32(e.Position), //nolint:gosec // revisions grow one per edit
+		Status: string(e.Status), PassMark: i32(e.PassMark), TimeLimitSeconds: limitSeconds(e.TimeLimit),
+		RetakesAllowed: e.RetakesAllowed, OpensAt: e.OpensAt, ClosesAt: e.ClosesAt, RevealPolicy: string(e.RevealPolicy),
+		Questions: doc, CreatedBy: int64(by), CreatedAt: e.UpdatedAt,
+	})
+}
+
+func (r exams) Delete(ctx context.Context, examID id.ID, now time.Time) error {
+	return r.q.SoftDeleteExam(ctx, sqlcgen.SoftDeleteExamParams{ID: int64(examID), DeletedAt: &now})
+}
+
+func (r exams) Undelete(ctx context.Context, examID id.ID, now time.Time) error {
+	return r.q.UndeleteExam(ctx, sqlcgen.UndeleteExamParams{ID: int64(examID), UpdatedAt: now})
+}
+
+func (r exams) Heads(ctx context.Context, courseID id.ID) ([]app.Head, error) {
+	rows, err := r.q.ListExamHeads(ctx, int64(courseID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]app.Head, len(rows))
+	for i, row := range rows {
+		out[i] = app.Head{Ref: app.Ref{Kind: app.KindExam, ID: id.ID(row.ID)}, Revision: int(row.HeadRevision), Deleted: row.Deleted}
+	}
+	return out, nil
 }
 
 func (r exams) NextPosition(ctx context.Context, courseID id.ID) (int, error) {
 	next, err := r.q.NextExamPosition(ctx, int64(courseID))
 	return int(next), err
-}
-
-func (r exams) SetPositions(ctx context.Context, courseID id.ID, examIDs []id.ID) error {
-	raw := make([]int64, len(examIDs))
-	for i, v := range examIDs {
-		raw[i] = int64(v)
-	}
-	return r.q.SetExamPositions(ctx, sqlcgen.SetExamPositionsParams{CourseID: int64(courseID), ExamIds: raw})
-}
-
-func (r exams) Locks(ctx context.Context, examID id.ID) (domain.Locks, error) {
-	counts, err := r.q.CountExamAttempts(ctx, int64(examID))
-	if err != nil {
-		return domain.Locks{}, err
-	}
-	answered, err := r.q.ListAnsweredExamQuestions(ctx, int64(examID))
-	if err != nil {
-		return domain.Locks{}, err
-	}
-	l := domain.Locks{OpenAttempts: int(counts.OpenAttempts), SubmittedAttempts: int(counts.SubmittedAttempts),
-		AnsweredQuestionIDs: make(map[id.ID]struct{}, len(answered))}
-	for _, raw := range answered {
-		v, err := id.Parse(raw)
-		if err != nil {
-			return domain.Locks{}, err
-		}
-		l.AnsweredQuestionIDs[v] = struct{}{}
-	}
-	return l, nil
 }
 
 func (r exams) FindAttempt(ctx context.Context, attemptID id.ID, forUpdate bool) (domain.ExamAttempt, error) {
@@ -160,7 +149,7 @@ func (r exams) HasSubmitted(ctx context.Context, examID, userID id.ID) (bool, er
 
 func (r exams) InsertAttempt(ctx context.Context, a domain.ExamAttempt) error {
 	err := r.q.InsertExamAttempt(ctx, sqlcgen.InsertExamAttemptParams{
-		ID: int64(a.ID), ExamID: int64(a.ExamID), CourseID: int64(a.CourseID), UserID: int64(a.UserID), StartedAt: a.StartedAt,
+		ID: int64(a.ID), ExamID: int64(a.ExamID), Revision: int32(a.Revision), CourseID: int64(a.CourseID), UserID: int64(a.UserID), StartedAt: a.StartedAt, //nolint:gosec // bounded by stored revisions
 	})
 	if pgErr := (*pgconn.PgError)(nil); errors.As(err, &pgErr) && pgErr.Code == uniqueViolation && pgErr.ConstraintName == oneOpenAttemptIndex {
 		return app.ErrOpenAttemptExists
@@ -218,19 +207,31 @@ func (r exams) ListUserAttempts(ctx context.Context, courseID, userID id.ID) ([]
 }
 
 // toExam rebuilds the exam without re-validating: stored rows were validated on write.
-func toExam(row sqlcgen.AssessmentExam) (domain.Exam, error) {
+func toExam(row sqlcgen.AssessmentExamRevisionRow) (domain.Exam, error) {
 	qs, err := toQuestions(row.Questions)
 	if err != nil {
 		return domain.Exam{}, err
 	}
-	e := domain.Exam{ID: id.ID(row.ID), CourseID: id.ID(row.CourseID), Title: row.Title, Description: row.Description,
+	e := domain.Exam{ID: id.ID(row.ID), CourseID: id.ID(row.CourseID), Revision: int(row.Revision),
+		Title: row.Title, Description: row.Description,
 		Position: int(row.Position), Status: domain.ExamStatus(row.Status), PassMark: int(row.PassMark),
 		RetakesAllowed: row.RetakesAllowed, OpensAt: utc(row.OpensAt), ClosesAt: utc(row.ClosesAt),
 		RevealPolicy: domain.RevealPolicy(row.RevealPolicy), Questions: qs, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}
-	if row.TimeLimitSeconds != nil {
-		e.TimeLimit = time.Duration(*row.TimeLimitSeconds) * time.Second
+	if row.TimeLimitSeconds.Valid {
+		e.TimeLimit = time.Duration(row.TimeLimitSeconds.Int32) * time.Second
 	}
 	return e, nil
+}
+
+func toExams(rows []sqlcgen.AssessmentExamRevisionRow) ([]domain.Exam, error) {
+	out := make([]domain.Exam, len(rows))
+	for i, row := range rows {
+		var err error
+		if out[i], err = toExam(row); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 func toAttemptOrNotFound(row sqlcgen.AssessmentExamAttempt, err error) (domain.ExamAttempt, error) {
@@ -272,7 +273,7 @@ func toAttempt(row sqlcgen.AssessmentExamAttempt) (domain.ExamAttempt, error) {
 			PointsPossible: d.PointsPossible, PointsAwarded: d.PointsAwarded})
 	}
 	slices.SortFunc(answers, func(a, b domain.ExamAnswer) int { return cmp.Compare(a.QuestionID, b.QuestionID) })
-	a := domain.ExamAttempt{ID: id.ID(row.ID), ExamID: id.ID(row.ExamID), CourseID: id.ID(row.CourseID), UserID: id.ID(row.UserID),
+	a := domain.ExamAttempt{ID: id.ID(row.ID), ExamID: id.ID(row.ExamID), Revision: int(row.Revision), CourseID: id.ID(row.CourseID), UserID: id.ID(row.UserID),
 		StartedAt: row.StartedAt.UTC(), SubmittedAt: utc(row.SubmittedAt), Passed: row.Passed, AutoSubmitted: row.AutoSubmitted,
 		Answers: answers}
 	if row.Score != nil {
@@ -287,12 +288,11 @@ func i32(v int) int32 {
 	return int32(v) //nolint:gosec // bounded by domain validation
 }
 
-func limitSeconds(d time.Duration) *int32 {
+func limitSeconds(d time.Duration) pgtype.Int4 {
 	if d == 0 {
-		return nil
+		return pgtype.Int4{}
 	}
-	v := i32(int(d / time.Second))
-	return &v
+	return pgtype.Int4{Int32: i32(int(d / time.Second)), Valid: true}
 }
 
 func utc(t *time.Time) *time.Time {

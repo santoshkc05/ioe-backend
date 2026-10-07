@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,14 +104,18 @@ func TestSectionsAndLectures(t *testing.T) {
 
 func TestLifecycle(t *testing.T) {
 	c := newCourse(t)
-	if err := c.Publish(t0); !errors.Is(err, domain.ErrCourseHasNoLectures) {
-		t.Fatalf("publish empty err = %v", err)
+	if _, err := c.Submit(1, 100, t0); !errors.Is(err, domain.ErrCourseHasNoLectures) {
+		t.Fatalf("submit empty err = %v", err)
 	}
 	_ = c.AddLecture(20, title(t, "L"), true, false, t0)
-	if err := c.Publish(t0); err != nil || c.Status != domain.StatusPublished {
+	if err := c.Publish(false, t0); !errors.Is(err, domain.ErrApprovalRequired) {
+		t.Fatalf("publish draft err = %v", err)
+	}
+	approve(t, &c)
+	if err := c.Publish(false, t0); err != nil || c.Status != domain.StatusPublished {
 		t.Fatalf("publish = %v, %s", err, c.Status)
 	}
-	if err := c.Publish(t0); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+	if err := c.Publish(false, t0); !errors.Is(err, domain.ErrInvalidStatusTransition) {
 		t.Fatalf("republish err = %v", err)
 	}
 	if err := c.RenameLecture(20, title(t, "Edited live"), t0); err != nil {
@@ -145,5 +150,190 @@ func TestIsManagedBy(t *testing.T) {
 		if got := c.IsManagedBy(tc.p); got != tc.want {
 			t.Fatalf("%+v: %v", tc.p, got)
 		}
+	}
+}
+
+func approve(t *testing.T, c *domain.Course) {
+	t.Helper()
+	if _, err := c.Submit(1, c.OwnerID, t0); err != nil {
+		t.Fatalf("submit: %v", err)
+	}
+	if _, err := c.Approve(2, 999, "", t0); err != nil {
+		t.Fatalf("approve: %v", err)
+	}
+}
+
+func TestReviewLoop(t *testing.T) {
+	c := newCourse(t)
+	_ = c.AddLecture(20, title(t, "L"), true, false, t0)
+	t1 := t0.Add(time.Hour)
+
+	r, err := c.Submit(1, 100, t1)
+	if err != nil || c.Status != domain.StatusInReview || !c.SubmittedAt.Equal(t1) {
+		t.Fatalf("submit = %v, %s, %v", err, c.Status, c.SubmittedAt)
+	}
+	if r != (domain.Review{ID: 1, CourseID: 1, ActorID: 100, Decision: domain.DecisionSubmitted, CreatedAt: t1}) {
+		t.Fatalf("submit review = %+v", r)
+	}
+	if _, err := c.Submit(1, 100, t1); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("resubmit in review err = %v", err)
+	}
+	if err := c.RenameLecture(20, title(t, "x"), t1); !errors.Is(err, domain.ErrCourseNotEditable) {
+		t.Fatalf("edit in review err = %v", err)
+	}
+	if _, err := c.RequestChanges(2, 999, "  ", t1); !errors.Is(err, domain.ErrReviewNoteRequired) {
+		t.Fatalf("blank note err = %v", err)
+	}
+	if _, err := c.RequestChanges(2, 999, strings.Repeat("x", domain.MaxReviewNoteRunes+1), t1); !errors.Is(err, domain.ErrReviewNoteTooLong) {
+		t.Fatalf("long note err = %v", err)
+	}
+	r, err = c.RequestChanges(2, 999, " Fix lecture 1 ", t1)
+	if err != nil || c.Status != domain.StatusChangesRequested || c.ReviewNote != "Fix lecture 1" || !c.ReviewedAt.Equal(t1) {
+		t.Fatalf("request changes = %v, %+v", err, c)
+	}
+	if r.Decision != domain.DecisionChangesRequested || r.ActorID != 999 || r.Note != "Fix lecture 1" {
+		t.Fatalf("request changes review = %+v", r)
+	}
+	if err := c.RenameLecture(20, title(t, "Fixed"), t1); err != nil {
+		t.Fatalf("changes_requested must be editable: %v", err)
+	}
+	if err := c.Publish(false, t1); !errors.Is(err, domain.ErrApprovalRequired) {
+		t.Fatalf("publish changes_requested err = %v", err)
+	}
+
+	if _, err := c.Submit(3, 100, t1); err != nil || c.ReviewNote != "" {
+		t.Fatalf("resubmit = %v, note %q", err, c.ReviewNote)
+	}
+	r, err = c.Approve(4, 999, " ok ", t1)
+	if err != nil || c.Status != domain.StatusApproved || r.Note != "ok" || r.Decision != domain.DecisionApproved {
+		t.Fatalf("approve = %v, %s, %+v", err, c.Status, r)
+	}
+	if err := c.SetPrice(domain.Price{}, t1); !errors.Is(err, domain.ErrCourseNotEditable) {
+		t.Fatalf("edit approved err = %v", err)
+	}
+	if _, err := c.Unpublish(5, 999, "x", t1); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("unpublish approved err = %v", err)
+	}
+	if err := c.Publish(false, t1); err != nil {
+		t.Fatalf("publish = %v", err)
+	}
+
+	if _, err := c.Unpublish(5, 999, "", t1); !errors.Is(err, domain.ErrReviewNoteRequired) {
+		t.Fatalf("unpublish without note err = %v", err)
+	}
+	r, err = c.Unpublish(5, 999, "Outdated", t1)
+	if err != nil || c.Status != domain.StatusChangesRequested || r.Decision != domain.DecisionUnpublished {
+		t.Fatalf("unpublish = %v, %s, %+v", err, c.Status, r)
+	}
+	if _, err := c.Approve(6, 999, "", t1); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("approve changes_requested err = %v", err)
+	}
+}
+
+func TestReviewerPublishesWithoutReview(t *testing.T) {
+	c := newCourse(t)
+	if err := c.Publish(true, t0); !errors.Is(err, domain.ErrCourseHasNoLectures) {
+		t.Fatalf("empty publish err = %v", err)
+	}
+	_ = c.AddLecture(20, title(t, "L"), true, false, t0)
+	if err := c.Publish(true, t0); err != nil || c.Live.Number != 1 {
+		t.Fatalf("reviewer publish = %v, %+v", err, c.Live)
+	}
+	if err := c.Publish(true, t0); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("republish unchanged err = %v", err)
+	}
+	if _, err := c.Submit(1, 100, t0); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("submit unchanged err = %v", err)
+	}
+}
+
+func TestEditingLiveCourseOpensNextVersion(t *testing.T) {
+	c := newCourse(t)
+	_ = c.AddLecture(20, title(t, "L"), true, false, t0)
+	approve(t, &c)
+	if err := c.Publish(false, t0); err != nil {
+		t.Fatal(err)
+	}
+	if !c.IsLive() || c.HasDraftChanges() || c.Live != (domain.LiveVersion{Number: 1, PublishedAt: t0}) {
+		t.Fatalf("after publish = %s %+v", c.Status, c.Live)
+	}
+
+	t1 := t0.Add(time.Hour)
+	if err := c.RenameLecture(20, title(t, "Edited"), t1); err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != domain.StatusDraft || !c.HasDraftChanges() || c.Live.Number != 1 {
+		t.Fatalf("after edit = %s %+v", c.Status, c.Live)
+	}
+	if err := c.Publish(false, t1); !errors.Is(err, domain.ErrApprovalRequired) {
+		t.Fatalf("publish edit without review err = %v", err)
+	}
+	approve(t, &c)
+	if c.Live.Number != 1 {
+		t.Fatalf("approval must not change the live version: %+v", c.Live)
+	}
+	if err := c.Publish(false, t1); err != nil || c.Live != (domain.LiveVersion{Number: 2, PublishedAt: t1}) || c.HasDraftChanges() {
+		t.Fatalf("second publish = %v, %+v", err, c.Live)
+	}
+
+	// Unpublishing takes the live version down even while a new draft is open.
+	_ = c.RenameLecture(20, title(t, "Again"), t1)
+	if _, err := c.Unpublish(9, 999, "Outdated", t1); err != nil || c.IsLive() || c.Status != domain.StatusChangesRequested {
+		t.Fatalf("unpublish draft = %v, %s %+v", err, c.Status, c.Live)
+	}
+	if _, err := c.Unpublish(9, 999, "Again", t1); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("unpublish offline err = %v", err)
+	}
+	approveAgain := func() {
+		if _, err := c.Submit(10, 100, t1); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := c.Approve(11, 999, "", t1); err != nil {
+			t.Fatal(err)
+		}
+	}
+	approveAgain()
+	if err := c.Publish(false, t1); err != nil || c.Live.Number != 3 || c.LastVersion != 3 {
+		t.Fatalf("republish = %v, %+v", err, c)
+	}
+	if err := c.Archive(t1); err != nil || c.IsLive() {
+		t.Fatalf("archive = %v, %+v", err, c.Live)
+	}
+}
+
+func TestDiscardDraft(t *testing.T) {
+	c := newCourse(t)
+	_ = c.AddLecture(20, title(t, "L"), true, false, t0)
+	if err := c.DiscardDraft(c, t0); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("discard never published err = %v", err)
+	}
+	if err := c.Publish(true, t0); err != nil {
+		t.Fatal(err)
+	}
+	live := c
+	live.Lectures = append([]domain.Lecture(nil), c.Lectures...)
+	if err := c.DiscardDraft(live, t0); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("discard unchanged err = %v", err)
+	}
+
+	t1 := t0.Add(time.Hour)
+	_ = c.RenameLecture(20, title(t, "Edited"), t1)
+	_ = c.AddLecture(21, title(t, "New"), false, false, t1)
+	_ = c.SetPrice(domain.Price{AmountMinor: 100, Currency: "NPR"}, t1)
+	if _, err := c.Submit(1, 100, t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DiscardDraft(live, t1); !errors.Is(err, domain.ErrInvalidStatusTransition) {
+		t.Fatalf("discard in review err = %v", err)
+	}
+	if _, err := c.RequestChanges(2, 999, "No", t1); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.DiscardDraft(live, t1); err != nil {
+		t.Fatal(err)
+	}
+	if c.Status != domain.StatusPublished || c.ReviewNote != "" || len(c.Lectures) != 1 ||
+		c.Lectures[0].Title.String() != "L" || !c.Price.IsFree() || c.Live.Number != 1 || c.HasDraftChanges() {
+		t.Fatalf("after discard = %+v", c)
 	}
 }

@@ -779,12 +779,28 @@ func TestMediaEndToEnd(t *testing.T) {
 	if code, _ := putVideo(courseA, preview, video); code != http.StatusNoContent {
 		t.Fatalf("put preview video: %d", code)
 	}
+	// The edit reopened the course as a draft: readers keep the live version until it is republished.
+	if code, _ := play(courseA, preview, video, stranger); code != http.StatusNotFound {
+		t.Fatalf("draft preview video playback: %d", code)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseA+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("republish: %d", resp.StatusCode)
+	}
 	if code, body := play(courseA, preview, video, stranger); code != http.StatusOK || body["playback_url"] == nil {
 		t.Fatalf("free preview playback: %d %v", code, body)
 	}
 	if code, _ := play(courseA, locked, foreign, student); code != http.StatusNotFound {
 		t.Fatalf("foreign asset playback: %d", code)
 	}
+
+	resp, body = c.do(http.MethodDelete, "/v1/media/assets/"+video, "", admin)
+	if resp.StatusCode != http.StatusConflict || body["type"] != "asset_in_use" {
+		t.Fatalf("delete live video: %d %v", resp.StatusCode, body)
+	}
+
+	c.do(http.MethodPut, "/v1/courses/"+courseA+"/lectures/"+locked+"/content", `{"blocks":[]}`, admin)
+	c.do(http.MethodPut, "/v1/courses/"+courseA+"/lectures/"+preview+"/content", `{"blocks":[]}`, admin)
+	c.do(http.MethodPost, "/v1/courses/"+courseA+"/publish", "", admin)
 
 	if resp, _ = c.do(http.MethodDelete, "/v1/media/assets/"+video, "", admin); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete: %d", resp.StatusCode)
@@ -942,7 +958,7 @@ func TestQuizzesEndToEnd(t *testing.T) {
 	if resp, _ = c.do(http.MethodDelete, "/v1/quizzes/"+quizID, "", admin); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("delete: %d", resp.StatusCode)
 	}
-	if code, qs := list(student); code != http.StatusOK || len(qs) != 0 {
+	if code, qs := list(student); code != http.StatusOK || len(qs) != 1 {
 		t.Fatalf("after delete: %d %v", code, qs)
 	}
 }
@@ -1034,6 +1050,9 @@ func TestExamsEndToEnd(t *testing.T) {
 	if resp, _ = c.do(http.MethodPost, "/v1/exams/"+examID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("publish exam: %d", resp.StatusCode)
 	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish course: %d", resp.StatusCode)
+	}
 	if code, exams := list(examsPath, student); code != http.StatusOK || len(exams) != 1 || exams[0]["availability"] != "open" {
 		t.Fatalf("list: %d %v", code, exams)
 	}
@@ -1082,7 +1101,7 @@ func TestExamsEndToEnd(t *testing.T) {
 		t.Fatalf("retake: %d %v", resp.StatusCode, body)
 	}
 
-	// After a submission, wording edits pass and answer-key edits are refused.
+	// In the versioned model, edits succeed (producing a new revision) even after submissions.
 	save := func(prompt string, rightCorrect bool) (*http.Response, map[string]any) {
 		return c.do(http.MethodPut, "/v1/exams/"+examID, `{"title":"Final","description":"","position":0,"pass_mark":50,`+
 			`"time_limit_seconds":null,"retakes_allowed":false,"opens_at":null,"closes_at":null,"reveal_policy":"after_attempt",`+
@@ -1090,17 +1109,15 @@ func TestExamsEndToEnd(t *testing.T) {
 			`"options":[{"id":"`+right+`","label":"4","is_correct":`+strconv.FormatBool(rightCorrect)+`},`+
 			`{"id":"`+wrong+`","label":"5","is_correct":`+strconv.FormatBool(!rightCorrect)+`}]}]}`, admin)
 	}
-	if resp, body = save("What is 2+2?", true); resp.StatusCode != http.StatusOK || body["locks"].(map[string]any)["submitted_attempt_count"] != 1.0 {
+	if resp, body = save("What is 2+2?", true); resp.StatusCode != http.StatusOK || body["revision"] != float64(3) {
 		t.Fatalf("reword: %d %v", resp.StatusCode, body)
-	}
-	if resp, body = save("What is 2+2?", false); resp.StatusCode != http.StatusConflict || body["type"] != "edit_key_frozen" {
-		t.Fatalf("key change: %d %v", resp.StatusCode, body)
-	}
-	if resp, body = c.do(http.MethodDelete, "/v1/exams/"+examID, "", admin); resp.StatusCode != http.StatusConflict || body["type"] != "exam_has_attempts" {
-		t.Fatalf("delete: %d %v", resp.StatusCode, body)
 	}
 	if code, attempts := list("/v1/exams/"+examID+"/attempts", admin); code != http.StatusOK || len(attempts) != 1 || attempts[0]["still_open"] != false {
 		t.Fatalf("attempts: %d %v", code, attempts)
+	}
+	// Deleting an exam with attempts succeeds (soft-delete).
+	if resp, _ = c.do(http.MethodDelete, "/v1/exams/"+examID, "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("delete: %d", resp.StatusCode)
 	}
 
 	// A timed attempt left past its deadline reads back as auto-submitted.
@@ -1111,6 +1128,9 @@ func TestExamsEndToEnd(t *testing.T) {
 	timedID := body["id"].(string)
 	if resp, _ = c.do(http.MethodPost, "/v1/exams/"+timedID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
 		t.Fatalf("publish timed: %d", resp.StatusCode)
+	}
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish course timed: %d", resp.StatusCode)
 	}
 	resp, body = c.do(http.MethodPost, "/v1/exams/"+timedID+"/attempts", "", student)
 	if resp.StatusCode != http.StatusCreated || body["deadline"] == nil {
@@ -1323,4 +1343,173 @@ func TestPaymentsDisabledReturn503(t *testing.T) {
 	if resp.StatusCode != http.StatusServiceUnavailable || body["type"] != "payment_unavailable" {
 		t.Fatalf("disabled checkout: %d %v", resp.StatusCode, body)
 	}
+}
+
+func quizBody(prompt string) string {
+	return `{"position":0,"questions":[{"prompt":"` + prompt + `","type":"single_choice",` +
+		`"explanation":"arith","reference_lecture_id":"","options":[{"label":"4","is_correct":true},{"label":"5","is_correct":false}]}]}`
+}
+
+func examBody(title string) string {
+	return `{"title":"` + title + `","description":"","position":0,"pass_mark":50,"time_limit_seconds":null,` +
+		`"retakes_allowed":false,"opens_at":null,"closes_at":null,"reveal_policy":"after_attempt",` +
+		`"questions":[{"prompt":"2+2?","type":"single_choice","explanation":"arith","points":2,"reference_lecture_id":"",` +
+		`"options":[{"label":"4","is_correct":true},{"label":"5","is_correct":false}]}]}`
+}
+
+func mustStatus(t *testing.T, c client, method, path, reqBody string, headers map[string]string, want int) map[string]any {
+	t.Helper()
+	r, b := c.do(method, path, reqBody, headers)
+	if r.StatusCode != want {
+		t.Fatalf("%s %s = %d %v, want %d", method, path, r.StatusCode, b, want)
+	}
+	return b
+}
+
+func createQuiz(t *testing.T, c client, path, prompt string, headers map[string]string) string {
+	t.Helper()
+	b := mustStatus(t, c, http.MethodPost, path, quizBody(prompt), headers, http.StatusCreated)
+	return b["id"].(string)
+}
+
+func putQuizBlock(t *testing.T, c client, courseID, lectureID, quizID string, headers map[string]string) {
+	t.Helper()
+	mustStatus(t, c, http.MethodPut, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content",
+		`{"blocks":[{"client_block_id":"q","type":"quiz","quiz_id":"`+quizID+`"}]}`, headers, http.StatusNoContent)
+}
+
+func createPublishedExam(t *testing.T, c client, courseID string, headers map[string]string) string {
+	t.Helper()
+	b := mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/exams", examBody("Final"), headers, http.StatusCreated)
+	examID := b["id"].(string)
+	mustStatus(t, c, http.MethodPost, "/v1/exams/"+examID+"/publish", "", headers, http.StatusNoContent)
+	mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/publish", "", headers, http.StatusNoContent)
+	return examID
+}
+
+func firstPrompt(list []map[string]any) string {
+	if len(list) == 0 {
+		return ""
+	}
+	qs, ok := list[0]["questions"].([]any)
+	if !ok || len(qs) == 0 {
+		return ""
+	}
+	q, ok := qs[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	p, _ := q["prompt"].(string)
+	return p
+}
+
+func waitFor(t *testing.T, check func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if check() {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	t.Fatal("timed out waiting for condition")
+}
+
+func TestAssessmentVersioningEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	go func() { _ = a.forwarder.Run(ctx) }()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) (string, string) {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string), body["user"].(map[string]any)["id"].(string)
+	}
+	adminTok, _ := signIn("sub-admin", "admin@example.com")
+	studentTok, studentID := signIn("sub-student", "student@example.com")
+	admin, student := bearer(adminTok), bearer(studentTok)
+
+	resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create course: %d %v", resp.StatusCode, body)
+	}
+	courseID := body["id"].(string)
+	resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"L1","text_body":"<p>x</p>"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+	}
+	ls := body["lectures"].([]any)
+	lectureID := ls[len(ls)-1].(map[string]any)["id"].(string)
+	quizzesPath := "/v1/courses/" + courseID + "/lectures/" + lectureID + "/quizzes"
+
+	listQuizzes := func(who map[string]string) []map[string]any {
+		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, srv.URL+quizzesPath, nil)
+		for k, v := range who {
+			req.Header.Set(k, v)
+		}
+		r, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return nil
+		}
+		defer r.Body.Close()
+		var out []map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&out)
+		return out
+	}
+
+	// 1. Publish with a quiz; edit it in the draft: students still see the original.
+	quizID := createQuiz(t, c, quizzesPath, "2+2?", admin)
+	putQuizBlock(t, c, courseID, lectureID, quizID, admin)
+	mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin, http.StatusNoContent)
+
+	// Enroll student (requires course to be published)
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/enrollments/"+studentID, "", student); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("enroll: %d %v", resp.StatusCode, body)
+	}
+
+	mustStatus(t, c, http.MethodPut, quizzesPath+"/"+quizID, quizBody("3+3?"), admin, http.StatusOK)
+	list := listQuizzes(student)
+	if prompt := firstPrompt(list); prompt != "2+2?" {
+		t.Fatalf("student sees %q before republish", prompt)
+	}
+
+	// 2. Start an exam attempt, change the exam, republish: the attempt keeps its revision and
+	//    the student now sees the new quiz.
+	examID := createPublishedExam(t, c, courseID, admin)
+	_, started := c.do(http.MethodPost, "/v1/exams/"+examID+"/attempts", "", student)
+	startedRevision := started["revision"]
+	mustStatus(t, c, http.MethodPut, "/v1/exams/"+examID, examBody("Changed"), admin, http.StatusOK)
+	mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin, http.StatusNoContent)
+	list = listQuizzes(student)
+	if prompt := firstPrompt(list); prompt != "3+3?" {
+		t.Fatalf("student sees %q after republish", prompt)
+	}
+	attemptID := started["id"].(string)
+	_, submitted := c.do(http.MethodPost, "/v1/exam-attempts/"+attemptID+"/submit", "", student)
+	if got := submitted["revision"]; got != startedRevision {
+		t.Fatalf("graded against revision %v, want %v", got, startedRevision)
+	}
+
+	// 3. Delete the quiz, discard the draft: the quiz is back for the manager.
+	mustStatus(t, c, http.MethodDelete, "/v1/quizzes/"+quizID, "", admin, http.StatusNoContent)
+	mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/discard-draft", "", admin, http.StatusOK)
+	waitFor(t, func() bool { // the restore runs through the outbox
+		mine := listQuizzes(admin)
+		return firstPrompt(mine) == "3+3?"
+	})
 }

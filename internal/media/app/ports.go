@@ -30,4 +30,6 @@ type CourseAccess interface {
 	// ErrEnrollmentRequired) and returns ErrNotFound when the lecture's blocks do not
 	// reference assetID.
 	CanReadLectureAsset(ctx context.Context, p auth.Principal, courseID, lectureID, assetID id.ID) error
+	// AssetUsage returns the lectures whose working-copy or live-version blocks reference assetID.
+	AssetUsage(ctx context.Context, courseID, assetID id.ID) ([]id.ID, error)
 }

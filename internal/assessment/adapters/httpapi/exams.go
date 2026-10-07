@@ -13,15 +13,15 @@ import (
 
 // ExamService is the exam use-case surface the handlers call.
 type ExamService interface {
-	ListAuthoring(ctx context.Context, p auth.Principal, courseID id.ID) ([]domain.Exam, error)
-	GetAuthoring(ctx context.Context, p auth.Principal, examID id.ID) (app.ExamDetail, error)
-	Create(ctx context.Context, p auth.Principal, courseID id.ID, in app.ExamInput) (app.ExamDetail, error)
-	Save(ctx context.Context, p auth.Principal, examID id.ID, in app.ExamInput) (app.ExamDetail, error)
-	SaveSettings(ctx context.Context, p auth.Principal, examID id.ID, in app.ExamSettingsInput) (app.ExamDetail, error)
+	ListAuthoring(ctx context.Context, p auth.Principal, courseID id.ID, version int) ([]domain.Exam, error)
+	GetAuthoring(ctx context.Context, p auth.Principal, examID id.ID) (domain.Exam, error)
+	Create(ctx context.Context, p auth.Principal, courseID id.ID, in app.ExamInput) (domain.Exam, error)
+	Save(ctx context.Context, p auth.Principal, examID id.ID, in app.ExamInput) (domain.Exam, error)
+	SaveSettings(ctx context.Context, p auth.Principal, examID id.ID, in app.ExamSettingsInput) (domain.Exam, error)
 	Reorder(ctx context.Context, p auth.Principal, courseID id.ID, examIDs []id.ID) error
 	Publish(ctx context.Context, p auth.Principal, examID id.ID) error
 	Unpublish(ctx context.Context, p auth.Principal, examID id.ID) error
-	Duplicate(ctx context.Context, p auth.Principal, examID id.ID) (app.ExamDetail, error)
+	Duplicate(ctx context.Context, p auth.Principal, examID id.ID) (domain.Exam, error)
 	Delete(ctx context.Context, p auth.Principal, examID id.ID) error
 	ListAttempts(ctx context.Context, p auth.Principal, examID id.ID) ([]domain.ExamAttempt, error)
 	List(ctx context.Context, p auth.Principal, courseID id.ID) ([]app.StudentExam, error)
@@ -79,7 +79,12 @@ func (h *Handler) listExamsAuthoring(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	exams, err := h.exams.ListAuthoring(r.Context(), principal(r), ids[0])
+	ver, err := versionParam(r)
+	if err != nil {
+		h.respond(w, r, 0, nil, err)
+		return
+	}
+	exams, err := h.exams.ListAuthoring(r.Context(), principal(r), ids[0], ver)
 	h.respond(w, r, http.StatusOK, mapSlice(exams, toExamAuthoringSummaryWire), err)
 }
 

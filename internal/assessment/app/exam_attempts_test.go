@@ -17,6 +17,7 @@ func (f fixture) publishedExam(t *testing.T, in app.ExamInput) domain.Exam {
 	if err := f.exams.Publish(ctx, owner, e.ID); err != nil {
 		t.Fatal(err)
 	}
+	f.goLive(t, course)
 	return f.store.exams[e.ID]
 }
 
@@ -106,7 +107,6 @@ func ptrTime(v time.Time) *time.Time { return &v }
 func TestStart(t *testing.T) {
 	f := newFixture(t)
 	e := f.publishedExam(t, timed(30))
-	f.store.locks = nil
 	d, err := f.exams.Start(ctx, student, e.ID)
 	if err != nil {
 		t.Fatal(err)
@@ -115,9 +115,6 @@ func TestStart(t *testing.T) {
 	if a.UserID != student.UserID || a.ExamID != e.ID || a.CourseID != course || !a.StartedAt.Equal(t0) ||
 		!a.Deadline(d.Exam).Equal(t0.Add(30*time.Minute)) {
 		t.Fatalf("attempt %+v", a)
-	}
-	if f.store.locks[len(f.store.locks)-1] != app.LockShare {
-		t.Fatalf("locks = %v", f.store.locks)
 	}
 	if _, err := f.exams.Start(ctx, student, e.ID); !errors.Is(err, app.ErrOpenAttemptExists) {
 		t.Fatalf("second start: %v", err)
@@ -269,17 +266,19 @@ func TestReview(t *testing.T) {
 		t.Fatalf("missing: %v", err)
 	}
 
-	never := app.ExamSettingsInput{ExamSettings: app.ExamSettings{Title: "Final", PassMark: 50, RetakesAllowed: true, RevealPolicy: "never"}}
-	if _, err := f.exams.SaveSettings(ctx, owner, e.ID, never); err != nil {
-		t.Fatal(err)
-	}
-	if getNever, err := f.exams.GetAttempt(ctx, student, a.ID); err != nil || getNever.RevealPermitted {
+	neverIn := examInput()
+	neverIn.RetakesAllowed = true
+	neverIn.RevealPolicy = "never"
+	neverExam := f.publishedExam(t, neverIn)
+	neverAttempt := f.start(t, neverExam)
+	_, _ = f.exams.Submit(ctx, student, neverAttempt.ID)
+	if getNever, err := f.exams.GetAttempt(ctx, student, neverAttempt.ID); err != nil || getNever.RevealPermitted {
 		t.Fatalf("never on GetAttempt: err=%v, RevealPermitted=%v", err, getNever.RevealPermitted)
 	}
-	if _, err := f.exams.Review(ctx, student, a.ID); !errors.Is(err, domain.ErrRevealDisabled) {
+	if _, err := f.exams.Review(ctx, student, neverAttempt.ID); !errors.Is(err, domain.ErrRevealDisabled) {
 		t.Fatalf("never: %v", err)
 	}
-	if _, err := f.exams.Review(ctx, owner, a.ID); err != nil {
+	if _, err := f.exams.Review(ctx, owner, neverAttempt.ID); err != nil {
 		t.Fatalf("manager under never: %v", err)
 	}
 
@@ -326,28 +325,6 @@ func TestListAttempts(t *testing.T) {
 	}
 }
 
-func TestExtendingCloseExtendsOpenAttempt(t *testing.T) {
-	f := newFixture(t)
-	in := examInput()
-	in.ClosesAt = ptrTime(t0.Add(time.Hour))
-	e := f.publishedExam(t, in)
-	a := f.start(t, e)
-	extended := inputOf(f.store.exams[e.ID])
-	extended.ClosesAt = ptrTime(t0.Add(2 * time.Hour))
-	if _, err := f.exams.Save(ctx, owner, e.ID, extended); err != nil {
-		t.Fatal(err)
-	}
-	f.clock.now = t0.Add(90 * time.Minute)
-	if err := f.exams.SaveAnswer(ctx, student, a.ID, answer(e, 0, 0)); err != nil {
-		t.Fatalf("save after old close: %v", err)
-	}
-	shortened := extended
-	shortened.ClosesAt = ptrTime(t0.Add(100 * time.Minute))
-	if _, err := f.exams.Save(ctx, owner, e.ID, shortened); !errors.Is(err, domain.ErrEditWouldTruncateAttempt) {
-		t.Fatalf("shorten: %v", err)
-	}
-}
-
 func TestPointsEditKeepsRecordedScore(t *testing.T) {
 	f := newFixture(t)
 	in := examInput()
@@ -381,6 +358,7 @@ func TestUnpublishKeepsOpenAttemptUsable(t *testing.T) {
 	if err := f.exams.Unpublish(ctx, owner, e.ID); err != nil {
 		t.Fatal(err)
 	}
+	f.goLive(t, course)
 	if err := f.exams.SaveAnswer(ctx, student, a.ID, answer(e, 0, 0)); err != nil {
 		t.Fatalf("save: %v", err)
 	}

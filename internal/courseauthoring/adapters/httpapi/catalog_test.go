@@ -9,11 +9,19 @@ import (
 func publishedCourse(t *testing.T, h http.Handler) string {
 	t.Helper()
 	cid, _, _ := lectureFlow(t, h)
-	resp, body := call(h, "POST", "/v1/courses/"+cid+"/publish", instr, instrRL, "")
-	if resp.StatusCode != 204 {
-		t.Fatalf("publish = %d %v", resp.StatusCode, body)
-	}
+	publish(t, h, cid)
 	return cid
+}
+
+// publish takes a course through review and publishes it.
+func publish(t *testing.T, h http.Handler, cid string) {
+	t.Helper()
+	for _, step := range []struct{ path, user, role string }{
+		{"/submit", instr, instrRL}, {"/approve", admin, adminRL}, {"/publish", instr, instrRL},
+	} {
+		resp, body := call(h, "POST", "/v1/courses/"+cid+step.path, step.user, step.role, "")
+		must(t, resp, 204, body)
+	}
 }
 
 func TestCatalogAnonymousListShapeAndPaging(t *testing.T) {

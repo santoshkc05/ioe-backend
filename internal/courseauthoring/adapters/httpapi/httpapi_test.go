@@ -52,7 +52,7 @@ func newServer(t *testing.T, perMinute int) http.Handler {
 	clk := fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r, h := httpserver.NewRouter(httpserver.Options{Logger: logger, AllowedOrigins: []string{"https://app.test"}, ServiceName: "test"})
-	httpapi.New(app.NewCourseService(store, ids, clk, assetCatalog{}, quizCatalog{}), app.NewContentService(store, ids, enrolled{}, assetCatalog{}, quizCatalog{}), httpapi.Config{
+	httpapi.New(app.NewCourseService(store, ids, clk, assetCatalog{}, quizCatalog{}, fakeAssessments{}), app.NewContentService(store, ids, enrolled{}, assetCatalog{}, quizCatalog{}), httpapi.Config{
 		RequireAuth: fakeAuth, OptionalAuth: fakeOptionalAuth, IPs: httpserver.NewIPResolver(nil),
 		ContentLimiter: httpserver.NewRateLimiter(perMinute), CatalogLimiter: httpserver.NewRateLimiter(perMinute),
 		Logger: logger,
@@ -90,6 +90,8 @@ const (
 	other   = "101"
 	stud    = "200"
 	studRL  = "student"
+	admin   = "1"
+	adminRL = "root_admin"
 )
 
 func must(t *testing.T, resp response, want int, body map[string]any) map[string]any {
@@ -239,6 +241,8 @@ func TestErrorCodes(t *testing.T) {
 
 	empty := newCourse(t, h)
 	resp, body := call(h, "POST", "/v1/courses/"+empty+"/publish", instr, instrRL, "")
+	expectProblem(t, resp, body, 409, "approval_required")
+	resp, body = call(h, "POST", "/v1/courses/"+empty+"/submit", instr, instrRL, "")
 	expectProblem(t, resp, body, 400, "empty_course")
 
 	resp, body = call(h, "POST", "/v1/courses/"+empty+"/sections", instr, instrRL, `{"title":"S"}`)
@@ -271,10 +275,7 @@ func TestErrorCodes(t *testing.T) {
 		expectProblem(t, resp, body, 400, "unsafe_content")
 	}
 
-	resp, body = call(h, "POST", "/v1/courses/"+cid+"/publish", instr, instrRL, "")
-	if resp.StatusCode != 204 {
-		t.Fatalf("publish = %d %v", resp.StatusCode, body)
-	}
+	publish(t, h, cid)
 	resp, body = call(h, "GET", content, stud, studRL, "")
 	expectProblem(t, resp, body, 403, "enrollment_required")
 

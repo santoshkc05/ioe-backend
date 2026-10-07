@@ -56,6 +56,7 @@ const (
 type Exam struct {
 	ID             id.ID
 	CourseID       id.ID
+	Revision       int // set by storage; 0 before the first save
 	Title          string
 	Description    string
 	Position       int

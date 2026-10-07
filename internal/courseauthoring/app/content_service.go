@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -57,7 +58,17 @@ func readView(ctx context.Context, r Repos, h LectureHeader) (LectureContentView
 		FreePreview: h.FreePreview, ContentRevision: h.ContentRevision, Blocks: blocks}, nil
 }
 
+// Get returns a lecture's working content to managers and its live content to everyone else.
 func (s *ContentService) Get(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) (LectureContentView, error) {
+	return s.get(ctx, p, courseID, lectureID, false)
+}
+
+// GetLive returns a lecture's live content under Get's access rules.
+func (s *ContentService) GetLive(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) (LectureContentView, error) {
+	return s.get(ctx, p, courseID, lectureID, true)
+}
+
+func (s *ContentService) get(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, wantLive bool) (LectureContentView, error) {
 	// Ask before opening the transaction: the lookup takes its own pool connection, and
 	// asking from inside would hold two per read and can exhaust the pool under load.
 	enrolled, err := s.enrollments.IsActivelyEnrolled(ctx, courseID, p.UserID)
@@ -73,14 +84,27 @@ func (s *ContentService) Get(ctx context.Context, p auth.Principal, courseID, le
 		if !visible(p, &c) {
 			return ErrNotFound
 		}
-		h, err := r.Contents.FindLecture(ctx, courseID, lectureID)
+		if !readsLive(p, &c, wantLive) {
+			h, err := r.Contents.FindLecture(ctx, courseID, lectureID)
+			if err != nil {
+				return err
+			}
+			v, err = readView(ctx, r, h)
+			return err
+		}
+		if !c.IsLive() {
+			return ErrNotFound
+		}
+		h, err := r.Contents.FindVersionLecture(ctx, courseID, c.Live.Number, lectureID)
 		if err != nil {
 			return err
 		}
 		if !c.IsManagedBy(p) && !h.FreePreview && !enrolled {
 			return ErrEnrollmentRequired
 		}
-		v, err = readView(ctx, r, h)
+		blocks, err := r.Contents.ListVersionBlocks(ctx, courseID, c.Live.Number, lectureID)
+		v = LectureContentView{LectureID: h.LectureID, CourseID: h.CourseID, Title: h.Title,
+			FreePreview: h.FreePreview, Blocks: blocks}
 		return err
 	})
 	return v, err
@@ -88,12 +112,18 @@ func (s *ContentService) Get(ctx context.Context, p auth.Principal, courseID, le
 
 // CheckAssetRead applies Get's access rules and returns ErrNotFound unless the lecture's blocks
 // reference assetID. For internal callers.
+// Managers may read assets of the working copy or the live version.
 func (s *ContentService) CheckAssetRead(ctx context.Context, p auth.Principal, courseID, lectureID, assetID id.ID) error {
 	v, err := s.Get(ctx, p, courseID, lectureID)
-	if err != nil {
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
-	if !blocksReference(v.Blocks, assetID) {
+	if err == nil && blocksReference(v.Blocks, assetID) {
+		return nil
+	}
+	// Get serves non-managers the live version already; a manager may be previewing it.
+	live, liveErr := s.GetLive(ctx, p, courseID, lectureID)
+	if liveErr != nil || !blocksReference(live.Blocks, assetID) {
 		return ErrNotFound
 	}
 	return nil
@@ -107,15 +137,29 @@ func (s *ContentService) CheckLectureRead(ctx context.Context, p auth.Principal,
 }
 
 // lockEditable checks the caller manages an editable course and locks the lecture row.
+// The course stays locked so it cannot be submitted or archived until the write commits.
+// A write to a published course reopens its working copy as a draft.
 func lockEditable(ctx context.Context, r Repos, p auth.Principal, courseID, lectureID id.ID) (LectureHeader, error) {
-	c, err := loadManaged(ctx, r, p, courseID)
+	if err := r.Courses.LockForUpdate(ctx, courseID); err != nil {
+		return LectureHeader{}, err
+	}
+	c, err := loadEditable(ctx, r, p, courseID)
 	if err != nil {
 		return LectureHeader{}, err
 	}
-	if c.Status == domain.StatusArchived {
-		return LectureHeader{}, domain.ErrCourseNotEditable
+	h, err := r.Contents.FindLectureForUpdate(ctx, courseID, lectureID)
+	if err != nil {
+		return LectureHeader{}, err
 	}
-	return r.Contents.FindLectureForUpdate(ctx, courseID, lectureID)
+	if c.Status == domain.StatusPublished {
+		if err := c.BeginEdit(); err != nil {
+			return LectureHeader{}, err
+		}
+		if err := r.Courses.Update(ctx, &c); err != nil {
+			return LectureHeader{}, err
+		}
+	}
+	return h, nil
 }
 
 func (s *ContentService) Replace(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, blocks []BlockInput, legacy LegacyContent) error {

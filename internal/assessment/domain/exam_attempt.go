@@ -19,6 +19,7 @@ type ExamAnswer struct {
 type ExamAttempt struct {
 	ID            id.ID
 	ExamID        id.ID
+	Revision      int // the exam revision the attempt is taken, graded and revealed against
 	CourseID      id.ID
 	UserID        id.ID
 	StartedAt     time.Time
@@ -30,14 +31,14 @@ type ExamAttempt struct {
 }
 
 func NewExamAttempt(attemptID id.ID, e Exam, userID id.ID, startedAt time.Time) ExamAttempt {
-	return ExamAttempt{ID: attemptID, ExamID: e.ID, CourseID: e.CourseID, UserID: userID,
+	return ExamAttempt{ID: attemptID, ExamID: e.ID, Revision: e.Revision, CourseID: e.CourseID, UserID: userID,
 		StartedAt: startedAt.UTC(), Answers: []ExamAnswer{}}
 }
 
 func (a ExamAttempt) Open() bool { return a.SubmittedAt == nil }
 
 // Deadline is the earlier of StartedAt plus the exam's time limit and the exam's close time, or
-// nil when neither applies. It follows the current exam, so extending either extends the attempt.
+// nil when neither applies. It reads e, the attempt's own revision, so later edits never move it.
 func (a ExamAttempt) Deadline(e Exam) *time.Time {
 	var d *time.Time
 	if e.TimeLimit > 0 {

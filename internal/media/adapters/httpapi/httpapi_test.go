@@ -201,3 +201,16 @@ func TestMalformedIDsAreNotFound(t *testing.T) {
 		}
 	}
 }
+
+func TestDeleteRefusesAssetInUse(t *testing.T) {
+	s := &stub{err: &app.InUseError{LectureIDs: []id.ID{50}}}
+	h := newServer(s, 30)
+	w, body := call(h, http.MethodDelete, "/v1/media/assets/900", "")
+	if w.Code != http.StatusConflict || body["type"] != "asset_in_use" {
+		t.Fatalf("code=%d type=%v", w.Code, body["type"])
+	}
+	lectures, ok := body["lecture_ids"].([]any)
+	if !ok || len(lectures) != 1 || lectures[0] != "50" {
+		t.Fatalf("lecture_ids = %v", body["lecture_ids"])
+	}
+}

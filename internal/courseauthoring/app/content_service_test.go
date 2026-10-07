@@ -40,7 +40,7 @@ func TestGetContentAccess(t *testing.T) {
 	if _, err := f.contents.Get(ctx, student, f.course.ID, f.free); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("draft read err = %v", err)
 	}
-	if err := f.courses.Publish(ctx, owner, f.course.ID); err != nil {
+	if err := publish(f.courses, f.course.ID); err != nil {
 		t.Fatal(err)
 	}
 	if v, err := f.contents.Get(ctx, student, f.course.ID, f.free); err != nil || len(v.Blocks) != 1 {
@@ -57,7 +57,7 @@ func TestGetContentAccess(t *testing.T) {
 	}
 
 	g := newContentFixture(t, enrolled{})
-	_ = g.courses.Publish(ctx, owner, g.course.ID)
+	_ = publish(g.courses, g.course.ID)
 	g.contents = app.NewContentService(g.store, testIDs(t), enrolled{{g.course.ID, student.UserID}: true}, assetCatalog{}, quizCatalog{})
 	if _, err := g.contents.Get(ctx, student, g.course.ID, g.locked); err != nil {
 		t.Fatalf("enrolled err = %v", err)
@@ -81,7 +81,7 @@ func (q txProbe) IsActivelyEnrolled(context.Context, id.ID, id.ID) (bool, error)
 
 func TestGetContentChecksEnrollmentOutsideTx(t *testing.T) {
 	f := newContentFixture(t, enrolled{})
-	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	_ = publish(f.courses, f.course.ID)
 	f.contents = app.NewContentService(f.store, testIDs(t), txProbe{t: t, store: f.store}, assetCatalog{}, quizCatalog{})
 	if _, err := f.contents.Get(ctx, student, f.course.ID, f.locked); !errors.Is(err, app.ErrEnrollmentRequired) {
 		t.Fatalf("locked err = %v", err)
@@ -149,5 +149,21 @@ func TestContentWritesRejectArchived(t *testing.T) {
 	_ = f.courses.Archive(ctx, owner, f.course.ID)
 	if err := f.contents.Replace(ctx, owner, f.course.ID, f.locked, nil, app.LegacyContent{TextBody: "<p>x</p>"}); !errors.Is(err, domain.ErrCourseNotEditable) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestContentWritesRejectCourseInReview(t *testing.T) {
+	f := newContentFixture(t, enrolled{})
+	if err := f.courses.Submit(ctx, owner, f.course.ID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.contents.Replace(ctx, owner, f.course.ID, f.locked, nil, app.LegacyContent{TextBody: "<p>x</p>"}); !errors.Is(err, domain.ErrCourseNotEditable) {
+		t.Fatalf("replace err = %v", err)
+	}
+	if _, err := f.contents.Patch(ctx, owner, f.course.ID, f.locked, app.PatchInput{BaseRevision: ptr(int64(1))}); !errors.Is(err, domain.ErrCourseNotEditable) {
+		t.Fatalf("patch err = %v", err)
+	}
+	if err := f.courses.CheckLectureManage(ctx, owner, f.course.ID, f.locked); !errors.Is(err, domain.ErrCourseNotEditable) {
+		t.Fatalf("lecture manage err = %v", err)
 	}
 }

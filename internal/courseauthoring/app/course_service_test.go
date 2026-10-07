@@ -24,7 +24,7 @@ var (
 func newCourseService(t *testing.T) (*app.CourseService, *memStore) {
 	t.Helper()
 	store := newMemStore()
-	return app.NewCourseService(store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, assetCatalog{}, quizCatalog{}), store
+	return app.NewCourseService(store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, assetCatalog{}, quizCatalog{}, &fakeAssessments{heads: map[id.ID][]domain.AssessmentPin{}}), store
 }
 
 func TestCreateAuthorization(t *testing.T) {
@@ -66,7 +66,7 @@ func TestGetVisibility(t *testing.T) {
 	if _, err := svc.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "L1"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Publish(ctx, owner, c.ID); err != nil {
+	if err := publish(svc, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := svc.Get(ctx, student, c.ID); err != nil {
@@ -84,7 +84,7 @@ func TestWritesRequireManager(t *testing.T) {
 	svc, _ := newCourseService(t)
 	c, _ := svc.Create(ctx, owner, app.CreateCourseInput{Title: "Go"})
 	_, _ = svc.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "L1"})
-	_ = svc.Publish(ctx, owner, c.ID)
+	_ = publish(svc, c.ID)
 
 	// A published course is visible, so a non-manager gets Forbidden.
 	if err := svc.UpdateDetails(ctx, otherInstr, c.ID, app.DetailsInput{Title: "x"}); !errors.Is(err, app.ErrForbidden) {
@@ -123,13 +123,13 @@ func TestPublishEmitsEventAndPrice(t *testing.T) {
 	if _, err := svc.SetPrice(ctx, owner, c.ID, 150000, "NPR"); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Publish(ctx, owner, c.ID); !errors.Is(err, domain.ErrCourseHasNoLectures) {
+	if err := publish(svc, c.ID); !errors.Is(err, domain.ErrCourseHasNoLectures) {
 		t.Fatalf("empty publish err = %v", err)
 	}
 	if _, err := svc.AddLecture(ctx, owner, c.ID, app.AddLectureInput{Title: "L1", Legacy: app.LegacyContent{TextBody: "<p>x</p>"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Publish(ctx, owner, c.ID); err != nil {
+	if err := publish(svc, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	if len(store.published) != 1 {
@@ -178,7 +178,7 @@ func TestFacts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := svc.Publish(ctx, owner, c.ID); err != nil {
+	if err := publish(svc, c.ID); err != nil {
 		t.Fatal(err)
 	}
 	f, err = svc.Facts(ctx, c.ID)

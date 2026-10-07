@@ -43,8 +43,16 @@ type courseWire struct {
 	Lectures     []lectureWire `json:"lectures"`
 	ThumbnailURL string        `json:"thumbnail_url"`
 	Level        string        `json:"level"`
-	CreatedAt    time.Time     `json:"created_at"`
-	UpdatedAt    time.Time     `json:"updated_at"`
+	ReviewNote   string        `json:"latest_review_note,omitempty"`
+	SubmittedAt  *time.Time    `json:"submitted_at,omitempty"`
+	ReviewedAt   *time.Time    `json:"reviewed_at,omitempty"`
+	// LiveVersionNumber and LivePublishedAt (unix milliseconds) are omitted when the
+	// course is not live.
+	LiveVersionNumber int       `json:"live_version_number,omitempty"`
+	LivePublishedAt   int64     `json:"live_published_at,omitempty"`
+	HasDraftChanges   bool      `json:"has_draft_changes"`
+	CreatedAt         time.Time `json:"created_at"`
+	UpdatedAt         time.Time `json:"updated_at"`
 }
 
 type coursePageWire struct {
@@ -56,7 +64,13 @@ func toCourseWire(c domain.Course) courseWire {
 	w := courseWire{ID: c.ID, OwnerID: c.OwnerID, Title: c.Title.String(), Description: c.Description,
 		Status: string(c.Status), Price: priceWire{c.Price.AmountMinor, c.Price.Currency}, IsFree: c.Price.IsFree(),
 		Sections: make([]sectionWire, 0, len(c.Sections)), Lectures: make([]lectureWire, 0, len(c.Lectures)),
-		ThumbnailURL: c.ThumbnailURL, Level: c.Level, CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}
+		ThumbnailURL: c.ThumbnailURL, Level: c.Level, ReviewNote: c.ReviewNote,
+		SubmittedAt: optionalTime(c.SubmittedAt), ReviewedAt: optionalTime(c.ReviewedAt),
+		LiveVersionNumber: c.Live.Number, HasDraftChanges: c.HasDraftChanges(),
+		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}
+	if c.IsLive() {
+		w.LivePublishedAt = c.Live.PublishedAt.UnixMilli()
+	}
 	for _, s := range c.Sections {
 		w.Sections = append(w.Sections, sectionWire{ID: s.ID, Title: s.Title.String(), Order: s.Order})
 	}
@@ -69,6 +83,35 @@ func toCourseWire(c domain.Course) courseWire {
 		w.Lectures = append(w.Lectures, lw)
 	}
 	return w
+}
+
+func optionalTime(t time.Time) *time.Time {
+	if t.IsZero() {
+		return nil
+	}
+	return &t
+}
+
+type reviewWire struct {
+	ID         id.ID     `json:"id"`
+	ReviewerID id.ID     `json:"reviewer_id"`
+	Decision   string    `json:"decision"`
+	Note       string    `json:"note"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+type versionWire struct {
+	VersionNumber int   `json:"version_number"`
+	PublishedBy   id.ID `json:"published_by"`
+	PublishedAt   int64 `json:"published_at"` // unix milliseconds
+}
+
+type reviewNoteRequest struct {
+	Note string `json:"note"`
+}
+
+type publishingSettingsWire struct {
+	PublishingPolicy string `json:"publishing_policy"`
 }
 
 type createCourseRequest struct {

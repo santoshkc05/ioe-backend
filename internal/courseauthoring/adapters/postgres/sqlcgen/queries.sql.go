@@ -53,6 +53,54 @@ func (q *Queries) BumpLectureContentRevision(ctx context.Context, arg BumpLectur
 	return result.RowsAffected(), nil
 }
 
+const copyVersionBlocks = `-- name: CopyVersionBlocks :exec
+INSERT INTO courseauthoring.course_version_blocks (course_id, number, lecture_id, id, kind, position, client_block_id, payload)
+SELECT course_id, $1::integer, lecture_id, id, kind, position, client_block_id, payload
+FROM courseauthoring.lecture_blocks WHERE course_id = $2::bigint
+`
+
+type CopyVersionBlocksParams struct {
+	Number   int32
+	CourseID int64
+}
+
+func (q *Queries) CopyVersionBlocks(ctx context.Context, arg CopyVersionBlocksParams) error {
+	_, err := q.db.Exec(ctx, copyVersionBlocks, arg.Number, arg.CourseID)
+	return err
+}
+
+const copyVersionLectures = `-- name: CopyVersionLectures :exec
+INSERT INTO courseauthoring.course_version_lectures (course_id, number, id, section_id, title, free_preview, sort_order)
+SELECT course_id, $1::integer, id, section_id, title, free_preview, sort_order
+FROM courseauthoring.lectures WHERE course_id = $2::bigint
+`
+
+type CopyVersionLecturesParams struct {
+	Number   int32
+	CourseID int64
+}
+
+func (q *Queries) CopyVersionLectures(ctx context.Context, arg CopyVersionLecturesParams) error {
+	_, err := q.db.Exec(ctx, copyVersionLectures, arg.Number, arg.CourseID)
+	return err
+}
+
+const copyVersionSections = `-- name: CopyVersionSections :exec
+INSERT INTO courseauthoring.course_version_sections (course_id, number, id, title, sort_order)
+SELECT course_id, $1::integer, id, title, sort_order
+FROM courseauthoring.sections WHERE course_id = $2::bigint
+`
+
+type CopyVersionSectionsParams struct {
+	Number   int32
+	CourseID int64
+}
+
+func (q *Queries) CopyVersionSections(ctx context.Context, arg CopyVersionSectionsParams) error {
+	_, err := q.db.Exec(ctx, copyVersionSections, arg.Number, arg.CourseID)
+	return err
+}
+
 const deleteLectureBlocks = `-- name: DeleteLectureBlocks :exec
 DELETE FROM courseauthoring.lecture_blocks WHERE lecture_id = $1
 `
@@ -107,6 +155,15 @@ func (q *Queries) DeleteSectionsNotIn(ctx context.Context, arg DeleteSectionsNot
 	return err
 }
 
+const deleteSubmittedAssessments = `-- name: DeleteSubmittedAssessments :exec
+DELETE FROM courseauthoring.course_submitted_assessments WHERE course_id = $1
+`
+
+func (q *Queries) DeleteSubmittedAssessments(ctx context.Context, courseID int64) error {
+	_, err := q.db.Exec(ctx, deleteSubmittedAssessments, courseID)
+	return err
+}
+
 const forceBumpLectureContentRevision = `-- name: ForceBumpLectureContentRevision :one
 UPDATE courseauthoring.lectures
 SET content_revision = content_revision + 1, updated_at = $2
@@ -124,6 +181,33 @@ func (q *Queries) ForceBumpLectureContentRevision(ctx context.Context, arg Force
 	var content_revision int64
 	err := row.Scan(&content_revision)
 	return content_revision, err
+}
+
+const getCourseVersion = `-- name: GetCourseVersion :one
+SELECT course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at FROM courseauthoring.course_versions WHERE course_id = $1 AND number = $2
+`
+
+type GetCourseVersionParams struct {
+	CourseID int64
+	Number   int32
+}
+
+func (q *Queries) GetCourseVersion(ctx context.Context, arg GetCourseVersionParams) (CourseauthoringCourseVersion, error) {
+	row := q.db.QueryRow(ctx, getCourseVersion, arg.CourseID, arg.Number)
+	var i CourseauthoringCourseVersion
+	err := row.Scan(
+		&i.CourseID,
+		&i.Number,
+		&i.Title,
+		&i.Description,
+		&i.Level,
+		&i.ThumbnailUrl,
+		&i.PriceAmountMinor,
+		&i.PriceCurrency,
+		&i.PublishedBy,
+		&i.PublishedAt,
+	)
+	return i, err
 }
 
 const getLectureHeader = `-- name: GetLectureHeader :one
@@ -189,6 +273,30 @@ func (q *Queries) GetLectureHeaderForUpdate(ctx context.Context, arg GetLectureH
 	return i, err
 }
 
+const getVersionLecture = `-- name: GetVersionLecture :one
+SELECT id, title, free_preview FROM courseauthoring.course_version_lectures
+WHERE course_id = $1 AND number = $2 AND id = $3
+`
+
+type GetVersionLectureParams struct {
+	CourseID int64
+	Number   int32
+	ID       int64
+}
+
+type GetVersionLectureRow struct {
+	ID          int64
+	Title       string
+	FreePreview bool
+}
+
+func (q *Queries) GetVersionLecture(ctx context.Context, arg GetVersionLectureParams) (GetVersionLectureRow, error) {
+	row := q.db.QueryRow(ctx, getVersionLecture, arg.CourseID, arg.Number, arg.ID)
+	var i GetVersionLectureRow
+	err := row.Scan(&i.ID, &i.Title, &i.FreePreview)
+	return i, err
+}
+
 const insertCourse = `-- name: InsertCourse :exec
 INSERT INTO courseauthoring.courses
   (id, owner_id, title, description, level, thumbnail_url, status, price_amount_minor, price_currency, version, created_at, updated_at)
@@ -226,6 +334,115 @@ func (q *Queries) InsertCourse(ctx context.Context, arg InsertCourseParams) erro
 	return err
 }
 
+const insertCourseReview = `-- name: InsertCourseReview :exec
+INSERT INTO courseauthoring.course_reviews (id, course_id, actor_id, decision, note, created_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+`
+
+type InsertCourseReviewParams struct {
+	ID        int64
+	CourseID  int64
+	ActorID   int64
+	Decision  string
+	Note      string
+	CreatedAt time.Time
+}
+
+func (q *Queries) InsertCourseReview(ctx context.Context, arg InsertCourseReviewParams) error {
+	_, err := q.db.Exec(ctx, insertCourseReview,
+		arg.ID,
+		arg.CourseID,
+		arg.ActorID,
+		arg.Decision,
+		arg.Note,
+		arg.CreatedAt,
+	)
+	return err
+}
+
+const insertCourseVersion = `-- name: InsertCourseVersion :exec
+INSERT INTO courseauthoring.course_versions
+  (course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+`
+
+type InsertCourseVersionParams struct {
+	CourseID         int64
+	Number           int32
+	Title            string
+	Description      string
+	Level            string
+	ThumbnailUrl     string
+	PriceAmountMinor int64
+	PriceCurrency    string
+	PublishedBy      int64
+	PublishedAt      time.Time
+}
+
+func (q *Queries) InsertCourseVersion(ctx context.Context, arg InsertCourseVersionParams) error {
+	_, err := q.db.Exec(ctx, insertCourseVersion,
+		arg.CourseID,
+		arg.Number,
+		arg.Title,
+		arg.Description,
+		arg.Level,
+		arg.ThumbnailUrl,
+		arg.PriceAmountMinor,
+		arg.PriceCurrency,
+		arg.PublishedBy,
+		arg.PublishedAt,
+	)
+	return err
+}
+
+const insertSubmittedAssessments = `-- name: InsertSubmittedAssessments :exec
+INSERT INTO courseauthoring.course_submitted_assessments (course_id, kind, assessment_id, revision)
+SELECT $1, k, a, r
+FROM ROWS FROM (unnest($2::text[]), unnest($3::bigint[]), unnest($4::integer[])) AS p(k, a, r)
+`
+
+type InsertSubmittedAssessmentsParams struct {
+	CourseID      int64
+	Kinds         []string
+	AssessmentIds []int64
+	Revisions     []int32
+}
+
+func (q *Queries) InsertSubmittedAssessments(ctx context.Context, arg InsertSubmittedAssessmentsParams) error {
+	_, err := q.db.Exec(ctx, insertSubmittedAssessments,
+		arg.CourseID,
+		arg.Kinds,
+		arg.AssessmentIds,
+		arg.Revisions,
+	)
+	return err
+}
+
+const insertVersionAssessments = `-- name: InsertVersionAssessments :exec
+INSERT INTO courseauthoring.course_version_assessments (course_id, number, kind, assessment_id, revision)
+SELECT $1, $2, k, a, r
+FROM ROWS FROM (unnest($3::text[]), unnest($4::bigint[]), unnest($5::integer[])) AS p(k, a, r)
+`
+
+type InsertVersionAssessmentsParams struct {
+	CourseID      int64
+	Number        int32
+	Kinds         []string
+	AssessmentIds []int64
+	Revisions     []int32
+}
+
+func (q *Queries) InsertVersionAssessments(ctx context.Context, arg InsertVersionAssessmentsParams) error {
+	_, err := q.db.Exec(ctx, insertVersionAssessments,
+		arg.CourseID,
+		arg.Number,
+		arg.Kinds,
+		arg.AssessmentIds,
+		arg.Revisions,
+	)
+	return err
+}
+
 const listCourseIDsByOwner = `-- name: ListCourseIDsByOwner :many
 SELECT id FROM courseauthoring.courses WHERE owner_id = $1 ORDER BY created_at DESC, id DESC
 `
@@ -250,19 +467,106 @@ func (q *Queries) ListCourseIDsByOwner(ctx context.Context, ownerID int64) ([]in
 	return items, nil
 }
 
-const listCoursesByIDs = `-- name: ListCoursesByIDs :many
-SELECT id, owner_id, title, description, level, thumbnail_url, status, price_amount_minor, price_currency, version, created_at, updated_at FROM courseauthoring.courses WHERE id = ANY($1::bigint[])
+const listCourseReviews = `-- name: ListCourseReviews :many
+SELECT id, course_id, actor_id, decision, note, created_at
+FROM courseauthoring.course_reviews WHERE course_id = $1 ORDER BY created_at, id
 `
 
-func (q *Queries) ListCoursesByIDs(ctx context.Context, ids []int64) ([]CourseauthoringCourse, error) {
+func (q *Queries) ListCourseReviews(ctx context.Context, courseID int64) ([]CourseauthoringCourseReview, error) {
+	rows, err := q.db.Query(ctx, listCourseReviews, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CourseauthoringCourseReview
+	for rows.Next() {
+		var i CourseauthoringCourseReview
+		if err := rows.Scan(
+			&i.ID,
+			&i.CourseID,
+			&i.ActorID,
+			&i.Decision,
+			&i.Note,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCourseVersions = `-- name: ListCourseVersions :many
+SELECT number, published_by, published_at FROM courseauthoring.course_versions
+WHERE course_id = $1 ORDER BY number DESC
+`
+
+type ListCourseVersionsRow struct {
+	Number      int32
+	PublishedBy int64
+	PublishedAt time.Time
+}
+
+func (q *Queries) ListCourseVersions(ctx context.Context, courseID int64) ([]ListCourseVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listCourseVersions, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCourseVersionsRow
+	for rows.Next() {
+		var i ListCourseVersionsRow
+		if err := rows.Scan(&i.Number, &i.PublishedBy, &i.PublishedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCoursesByIDs = `-- name: ListCoursesByIDs :many
+SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url, c.status, c.price_amount_minor, c.price_currency, c.version, c.created_at, c.updated_at, c.submitted_at, c.reviewed_at, c.review_note, c.last_version, c.live_version, v.published_at AS live_published_at
+FROM courseauthoring.courses c
+LEFT JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
+WHERE c.id = ANY($1::bigint[])
+`
+
+type ListCoursesByIDsRow struct {
+	ID               int64
+	OwnerID          int64
+	Title            string
+	Description      string
+	Level            string
+	ThumbnailUrl     string
+	Status           string
+	PriceAmountMinor int64
+	PriceCurrency    string
+	Version          int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+	SubmittedAt      *time.Time
+	ReviewedAt       *time.Time
+	ReviewNote       string
+	LastVersion      int32
+	LiveVersion      *int32
+	LivePublishedAt  *time.Time
+}
+
+func (q *Queries) ListCoursesByIDs(ctx context.Context, ids []int64) ([]ListCoursesByIDsRow, error) {
 	rows, err := q.db.Query(ctx, listCoursesByIDs, ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []CourseauthoringCourse
+	var items []ListCoursesByIDsRow
 	for rows.Next() {
-		var i CourseauthoringCourse
+		var i ListCoursesByIDsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.OwnerID,
@@ -276,10 +580,40 @@ func (q *Queries) ListCoursesByIDs(ctx context.Context, ids []int64) ([]Courseau
 			&i.Version,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.SubmittedAt,
+			&i.ReviewedAt,
+			&i.ReviewNote,
+			&i.LastVersion,
+			&i.LiveVersion,
+			&i.LivePublishedAt,
 		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listInReviewCourseIDs = `-- name: ListInReviewCourseIDs :many
+SELECT id FROM courseauthoring.courses WHERE status = 'in_review' ORDER BY submitted_at, id
+`
+
+func (q *Queries) ListInReviewCourseIDs(ctx context.Context) ([]int64, error) {
+	rows, err := q.db.Query(ctx, listInReviewCourseIDs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -376,17 +710,19 @@ func (q *Queries) ListLecturesByCourseIDs(ctx context.Context, courseIds []int64
 }
 
 const listPublishedCourses = `-- name: ListPublishedCourses :many
-SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url,
-       c.price_amount_minor, c.price_currency, c.created_at, c.updated_at,
-       (SELECT count(*) FROM courseauthoring.lectures l WHERE l.course_id = c.id) AS lecture_count,
-       (SELECT count(*) FROM courseauthoring.sections s WHERE s.course_id = c.id) AS section_count
+SELECT c.id, c.owner_id, v.title, v.description, v.level, v.thumbnail_url,
+       v.price_amount_minor, v.price_currency, c.created_at, v.published_at AS updated_at,
+       (SELECT count(*) FROM courseauthoring.course_version_lectures l
+        WHERE l.course_id = v.course_id AND l.number = v.number) AS lecture_count,
+       (SELECT count(*) FROM courseauthoring.course_version_sections s
+        WHERE s.course_id = v.course_id AND s.number = v.number) AS section_count
 FROM courseauthoring.courses c
-WHERE c.status = 'published'
-  AND ($1::bigint = 0 OR c.id < $1::bigint)
-  AND ($2::text = '' OR c.level = $2::text)
+JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
+WHERE ($1::bigint = 0 OR c.id < $1::bigint)
+  AND ($2::text = '' OR v.level = $2::text)
   AND ($3::text = ''
-       OR ($3::text = 'free' AND c.price_amount_minor = 0)
-       OR ($3::text = 'paid' AND c.price_amount_minor > 0))
+       OR ($3::text = 'free' AND v.price_amount_minor = 0)
+       OR ($3::text = 'paid' AND v.price_amount_minor > 0))
 ORDER BY c.id DESC
 LIMIT $4::integer
 `
@@ -413,6 +749,7 @@ type ListPublishedCoursesRow struct {
 	SectionCount     int64
 }
 
+// Lists live versions. updated_at is when the live version was published.
 func (q *Queries) ListPublishedCourses(ctx context.Context, arg ListPublishedCoursesParams) ([]ListPublishedCoursesRow, error) {
 	rows, err := q.db.Query(ctx, listPublishedCourses,
 		arg.After,
@@ -482,10 +819,225 @@ func (q *Queries) ListSectionsByCourseIDs(ctx context.Context, courseIds []int64
 	return items, nil
 }
 
+const listSubmittedAssessments = `-- name: ListSubmittedAssessments :many
+SELECT kind, assessment_id, revision FROM courseauthoring.course_submitted_assessments
+WHERE course_id = $1 ORDER BY kind, assessment_id
+`
+
+type ListSubmittedAssessmentsRow struct {
+	Kind         string
+	AssessmentID int64
+	Revision     int32
+}
+
+func (q *Queries) ListSubmittedAssessments(ctx context.Context, courseID int64) ([]ListSubmittedAssessmentsRow, error) {
+	rows, err := q.db.Query(ctx, listSubmittedAssessments, courseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSubmittedAssessmentsRow
+	for rows.Next() {
+		var i ListSubmittedAssessmentsRow
+		if err := rows.Scan(&i.Kind, &i.AssessmentID, &i.Revision); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionAssessments = `-- name: ListVersionAssessments :many
+SELECT kind, assessment_id, revision FROM courseauthoring.course_version_assessments
+WHERE course_id = $1 AND number = $2 ORDER BY kind, assessment_id
+`
+
+type ListVersionAssessmentsParams struct {
+	CourseID int64
+	Number   int32
+}
+
+type ListVersionAssessmentsRow struct {
+	Kind         string
+	AssessmentID int64
+	Revision     int32
+}
+
+func (q *Queries) ListVersionAssessments(ctx context.Context, arg ListVersionAssessmentsParams) ([]ListVersionAssessmentsRow, error) {
+	rows, err := q.db.Query(ctx, listVersionAssessments, arg.CourseID, arg.Number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVersionAssessmentsRow
+	for rows.Next() {
+		var i ListVersionAssessmentsRow
+		if err := rows.Scan(&i.Kind, &i.AssessmentID, &i.Revision); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionBlocks = `-- name: ListVersionBlocks :many
+SELECT id, client_block_id, kind, position, payload FROM courseauthoring.course_version_blocks
+WHERE course_id = $1 AND number = $2 AND lecture_id = $3 ORDER BY position
+`
+
+type ListVersionBlocksParams struct {
+	CourseID  int64
+	Number    int32
+	LectureID int64
+}
+
+type ListVersionBlocksRow struct {
+	ID            int64
+	ClientBlockID string
+	Kind          string
+	Position      int32
+	Payload       json.RawMessage
+}
+
+func (q *Queries) ListVersionBlocks(ctx context.Context, arg ListVersionBlocksParams) ([]ListVersionBlocksRow, error) {
+	rows, err := q.db.Query(ctx, listVersionBlocks, arg.CourseID, arg.Number, arg.LectureID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVersionBlocksRow
+	for rows.Next() {
+		var i ListVersionBlocksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ClientBlockID,
+			&i.Kind,
+			&i.Position,
+			&i.Payload,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionLectures = `-- name: ListVersionLectures :many
+SELECT l.id, l.section_id, l.title, l.free_preview, l.sort_order,
+       EXISTS (SELECT 1 FROM courseauthoring.course_version_blocks b
+               WHERE b.course_id = l.course_id AND b.number = l.number AND b.lecture_id = l.id AND b.kind = 'text')::bool AS has_text,
+       EXISTS (SELECT 1 FROM courseauthoring.course_version_blocks b
+               WHERE b.course_id = l.course_id AND b.number = l.number AND b.lecture_id = l.id AND b.kind = 'video')::bool AS has_video
+FROM courseauthoring.course_version_lectures l
+WHERE l.course_id = $1 AND l.number = $2
+ORDER BY l.sort_order
+`
+
+type ListVersionLecturesParams struct {
+	CourseID int64
+	Number   int32
+}
+
+type ListVersionLecturesRow struct {
+	ID          int64
+	SectionID   *int64
+	Title       string
+	FreePreview bool
+	SortOrder   int32
+	HasText     bool
+	HasVideo    bool
+}
+
+func (q *Queries) ListVersionLectures(ctx context.Context, arg ListVersionLecturesParams) ([]ListVersionLecturesRow, error) {
+	rows, err := q.db.Query(ctx, listVersionLectures, arg.CourseID, arg.Number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVersionLecturesRow
+	for rows.Next() {
+		var i ListVersionLecturesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SectionID,
+			&i.Title,
+			&i.FreePreview,
+			&i.SortOrder,
+			&i.HasText,
+			&i.HasVideo,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVersionSections = `-- name: ListVersionSections :many
+SELECT id, title, sort_order FROM courseauthoring.course_version_sections
+WHERE course_id = $1 AND number = $2 ORDER BY sort_order
+`
+
+type ListVersionSectionsParams struct {
+	CourseID int64
+	Number   int32
+}
+
+type ListVersionSectionsRow struct {
+	ID        int64
+	Title     string
+	SortOrder int32
+}
+
+func (q *Queries) ListVersionSections(ctx context.Context, arg ListVersionSectionsParams) ([]ListVersionSectionsRow, error) {
+	rows, err := q.db.Query(ctx, listVersionSections, arg.CourseID, arg.Number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVersionSectionsRow
+	for rows.Next() {
+		var i ListVersionSectionsRow
+		if err := rows.Scan(&i.ID, &i.Title, &i.SortOrder); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const lockCourseForUpdate = `-- name: LockCourseForUpdate :one
+SELECT id FROM courseauthoring.courses WHERE id = $1 FOR UPDATE
+`
+
+func (q *Queries) LockCourseForUpdate(ctx context.Context, id int64) (int64, error) {
+	row := q.db.QueryRow(ctx, lockCourseForUpdate, id)
+	var id_2 int64
+	err := row.Scan(&id_2)
+	return id_2, err
+}
+
 const updateCourse = `-- name: UpdateCourse :execrows
 UPDATE courseauthoring.courses
 SET title = $3, description = $4, level = $5, thumbnail_url = $6, status = $7,
-    price_amount_minor = $8, price_currency = $9, updated_at = $10, version = version + 1
+    price_amount_minor = $8, price_currency = $9, updated_at = $10,
+    submitted_at = $11, reviewed_at = $12, review_note = $13, last_version = $14, live_version = $15,
+    version = version + 1
 WHERE id = $1 AND version = $2
 `
 
@@ -500,6 +1052,11 @@ type UpdateCourseParams struct {
 	PriceAmountMinor int64
 	PriceCurrency    string
 	UpdatedAt        time.Time
+	SubmittedAt      *time.Time
+	ReviewedAt       *time.Time
+	ReviewNote       string
+	LastVersion      int32
+	LiveVersion      *int32
 }
 
 func (q *Queries) UpdateCourse(ctx context.Context, arg UpdateCourseParams) (int64, error) {
@@ -514,6 +1071,11 @@ func (q *Queries) UpdateCourse(ctx context.Context, arg UpdateCourseParams) (int
 		arg.PriceAmountMinor,
 		arg.PriceCurrency,
 		arg.UpdatedAt,
+		arg.SubmittedAt,
+		arg.ReviewedAt,
+		arg.ReviewNote,
+		arg.LastVersion,
+		arg.LiveVersion,
 	)
 	if err != nil {
 		return 0, err

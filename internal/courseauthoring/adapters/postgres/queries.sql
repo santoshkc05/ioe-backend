@@ -6,11 +6,79 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11);
 -- name: UpdateCourse :execrows
 UPDATE courseauthoring.courses
 SET title = $3, description = $4, level = $5, thumbnail_url = $6, status = $7,
-    price_amount_minor = $8, price_currency = $9, updated_at = $10, version = version + 1
+    price_amount_minor = $8, price_currency = $9, updated_at = $10,
+    submitted_at = $11, reviewed_at = $12, review_note = $13, last_version = $14, live_version = $15,
+    version = version + 1
 WHERE id = $1 AND version = $2;
 
+-- name: LockCourseForUpdate :one
+SELECT id FROM courseauthoring.courses WHERE id = $1 FOR UPDATE;
+
+-- name: InsertCourseVersion :exec
+INSERT INTO courseauthoring.course_versions
+  (course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+
+-- name: CopyVersionSections :exec
+INSERT INTO courseauthoring.course_version_sections (course_id, number, id, title, sort_order)
+SELECT course_id, sqlc.arg(number)::integer, id, title, sort_order
+FROM courseauthoring.sections WHERE course_id = sqlc.arg(course_id)::bigint;
+
+-- name: CopyVersionLectures :exec
+INSERT INTO courseauthoring.course_version_lectures (course_id, number, id, section_id, title, free_preview, sort_order)
+SELECT course_id, sqlc.arg(number)::integer, id, section_id, title, free_preview, sort_order
+FROM courseauthoring.lectures WHERE course_id = sqlc.arg(course_id)::bigint;
+
+-- name: CopyVersionBlocks :exec
+INSERT INTO courseauthoring.course_version_blocks (course_id, number, lecture_id, id, kind, position, client_block_id, payload)
+SELECT course_id, sqlc.arg(number)::integer, lecture_id, id, kind, position, client_block_id, payload
+FROM courseauthoring.lecture_blocks WHERE course_id = sqlc.arg(course_id)::bigint;
+
+-- name: ListCourseVersions :many
+SELECT number, published_by, published_at FROM courseauthoring.course_versions
+WHERE course_id = $1 ORDER BY number DESC;
+
+-- name: GetCourseVersion :one
+SELECT * FROM courseauthoring.course_versions WHERE course_id = $1 AND number = $2;
+
+-- name: ListVersionSections :many
+SELECT id, title, sort_order FROM courseauthoring.course_version_sections
+WHERE course_id = $1 AND number = $2 ORDER BY sort_order;
+
+-- name: ListVersionLectures :many
+SELECT l.id, l.section_id, l.title, l.free_preview, l.sort_order,
+       EXISTS (SELECT 1 FROM courseauthoring.course_version_blocks b
+               WHERE b.course_id = l.course_id AND b.number = l.number AND b.lecture_id = l.id AND b.kind = 'text')::bool AS has_text,
+       EXISTS (SELECT 1 FROM courseauthoring.course_version_blocks b
+               WHERE b.course_id = l.course_id AND b.number = l.number AND b.lecture_id = l.id AND b.kind = 'video')::bool AS has_video
+FROM courseauthoring.course_version_lectures l
+WHERE l.course_id = $1 AND l.number = $2
+ORDER BY l.sort_order;
+
+-- name: GetVersionLecture :one
+SELECT id, title, free_preview FROM courseauthoring.course_version_lectures
+WHERE course_id = $1 AND number = $2 AND id = $3;
+
+-- name: ListVersionBlocks :many
+SELECT id, client_block_id, kind, position, payload FROM courseauthoring.course_version_blocks
+WHERE course_id = $1 AND number = $2 AND lecture_id = $3 ORDER BY position;
+
+-- name: ListInReviewCourseIDs :many
+SELECT id FROM courseauthoring.courses WHERE status = 'in_review' ORDER BY submitted_at, id;
+
+-- name: InsertCourseReview :exec
+INSERT INTO courseauthoring.course_reviews (id, course_id, actor_id, decision, note, created_at)
+VALUES ($1, $2, $3, $4, $5, $6);
+
+-- name: ListCourseReviews :many
+SELECT id, course_id, actor_id, decision, note, created_at
+FROM courseauthoring.course_reviews WHERE course_id = $1 ORDER BY created_at, id;
+
 -- name: ListCoursesByIDs :many
-SELECT * FROM courseauthoring.courses WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+SELECT c.*, v.published_at AS live_published_at
+FROM courseauthoring.courses c
+LEFT JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
+WHERE c.id = ANY(sqlc.arg(ids)::bigint[]);
 
 -- name: ListCourseIDsByOwner :many
 SELECT id FROM courseauthoring.courses WHERE owner_id = $1 ORDER BY created_at DESC, id DESC;
@@ -101,16 +169,40 @@ WHERE b.lecture_id = sqlc.arg(lecture_id)::bigint
   AND b.position IS DISTINCT FROM (o.position - 1);
 
 -- name: ListPublishedCourses :many
-SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url,
-       c.price_amount_minor, c.price_currency, c.created_at, c.updated_at,
-       (SELECT count(*) FROM courseauthoring.lectures l WHERE l.course_id = c.id) AS lecture_count,
-       (SELECT count(*) FROM courseauthoring.sections s WHERE s.course_id = c.id) AS section_count
+-- Lists live versions. updated_at is when the live version was published.
+SELECT c.id, c.owner_id, v.title, v.description, v.level, v.thumbnail_url,
+       v.price_amount_minor, v.price_currency, c.created_at, v.published_at AS updated_at,
+       (SELECT count(*) FROM courseauthoring.course_version_lectures l
+        WHERE l.course_id = v.course_id AND l.number = v.number) AS lecture_count,
+       (SELECT count(*) FROM courseauthoring.course_version_sections s
+        WHERE s.course_id = v.course_id AND s.number = v.number) AS section_count
 FROM courseauthoring.courses c
-WHERE c.status = 'published'
-  AND (sqlc.arg(after)::bigint = 0 OR c.id < sqlc.arg(after)::bigint)
-  AND (sqlc.arg(level)::text = '' OR c.level = sqlc.arg(level)::text)
+JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
+WHERE (sqlc.arg(after)::bigint = 0 OR c.id < sqlc.arg(after)::bigint)
+  AND (sqlc.arg(level)::text = '' OR v.level = sqlc.arg(level)::text)
   AND (sqlc.arg(price)::text = ''
-       OR (sqlc.arg(price)::text = 'free' AND c.price_amount_minor = 0)
-       OR (sqlc.arg(price)::text = 'paid' AND c.price_amount_minor > 0))
+       OR (sqlc.arg(price)::text = 'free' AND v.price_amount_minor = 0)
+       OR (sqlc.arg(price)::text = 'paid' AND v.price_amount_minor > 0))
 ORDER BY c.id DESC
 LIMIT sqlc.arg(row_limit)::integer;
+
+-- name: DeleteSubmittedAssessments :exec
+DELETE FROM courseauthoring.course_submitted_assessments WHERE course_id = $1;
+
+-- name: InsertSubmittedAssessments :exec
+INSERT INTO courseauthoring.course_submitted_assessments (course_id, kind, assessment_id, revision)
+SELECT @course_id, k, a, r
+FROM ROWS FROM (unnest(@kinds::text[]), unnest(@assessment_ids::bigint[]), unnest(@revisions::integer[])) AS p(k, a, r);
+
+-- name: ListSubmittedAssessments :many
+SELECT kind, assessment_id, revision FROM courseauthoring.course_submitted_assessments
+WHERE course_id = $1 ORDER BY kind, assessment_id;
+
+-- name: InsertVersionAssessments :exec
+INSERT INTO courseauthoring.course_version_assessments (course_id, number, kind, assessment_id, revision)
+SELECT @course_id, @number, k, a, r
+FROM ROWS FROM (unnest(@kinds::text[]), unnest(@assessment_ids::bigint[]), unnest(@revisions::integer[])) AS p(k, a, r);
+
+-- name: ListVersionAssessments :many
+SELECT kind, assessment_id, revision FROM courseauthoring.course_version_assessments
+WHERE course_id = $1 AND number = $2 ORDER BY kind, assessment_id;

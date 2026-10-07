@@ -69,7 +69,7 @@
 - Produces: `domain.Quiz.Revision int`, `domain.Exam.Revision int`, `domain.QuizAttempt.Revision int`, `domain.ExamAttempt.Revision int`; `NewExamAttempt` copies `e.Revision`.
 - Produces (SQL): tables `assessment.quiz_revisions`, `assessment.exam_revisions`, views `assessment.quiz_revision_rows`, `assessment.exam_revision_rows`, tables `courseauthoring.course_version_assessments`, `courseauthoring.course_submitted_assessments`.
 
-- [ ] **Step 1: Write the failing domain test**
+- [x] **Step 1: Write the failing domain test**
 
 Append to `internal/assessment/domain/exam_test.go`:
 
@@ -86,12 +86,12 @@ func TestNewExamAttemptCopiesRevision(t *testing.T) {
 
 If `exam_test.go` has no `validExam(t)` helper, use the helper the file already uses to build a valid exam (grep `func .*Exam(t` in the file) and set `.Revision` on its result.
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `go test ./internal/assessment/domain/ -run TestNewExamAttemptCopiesRevision`
 Expected: FAIL to compile, `e.Revision undefined`.
 
-- [ ] **Step 3: Add the fields**
+- [x] **Step 3: Add the fields**
 
 In `internal/assessment/domain/quiz.go`, struct `Quiz`, after `LectureID`:
 
@@ -128,12 +128,12 @@ func NewExamAttempt(attemptID id.ID, e Exam, userID id.ID, startedAt time.Time) 
 
 Update the `Deadline` doc comment: replace "It follows the current exam, so extending either extends the attempt." with "It reads e, the attempt's own revision, so later edits never move it."
 
-- [ ] **Step 4: Run the domain tests**
+- [x] **Step 4: Run the domain tests**
 
 Run: `go test ./internal/assessment/domain/`
 Expected: PASS.
 
-- [ ] **Step 5: Write the migration**
+- [x] **Step 5: Write the migration**
 
 Create `migrations/00011_assessment_versioning.sql`:
 
@@ -324,7 +324,7 @@ ALTER TABLE assessment.quizzes
 CREATE INDEX quizzes_lecture_idx ON assessment.quizzes (course_id, lecture_id, position, id);
 ```
 
-- [ ] **Step 6: Verify the migration up, down, up**
+- [x] **Step 6: Verify the migration up, down, up**
 
 Run:
 ```bash
@@ -333,7 +333,7 @@ make migrate-up && make migrate-down && make migrate-up && make migrate-status
 ```
 Expected: all three succeed; status shows `00011_assessment_versioning.sql` applied. (If `make migrate-*` needs `DATABASE_URL`, export it from `.env.example`.)
 
-- [ ] **Step 7: Commit (domain fields and migration only; adapters are rebuilt in Task 2)**
+- [x] **Step 7: Commit (domain fields and migration only; adapters are rebuilt in Task 2)**
 
 The assessment postgres adapter no longer compiles against the new schema after `make sqlc`, so do NOT run `make sqlc` yet.
 
@@ -458,7 +458,7 @@ type ExamRepository interface {
 
 - Produces in `internal/assessment/app/query.go`: `type AssessmentQuery`, `NewAssessmentQuery(tx TxRunner) *AssessmentQuery`, methods `Lectures(ctx, courseID id.ID, quizIDs []id.ID) (map[id.ID]id.ID, error)` (unchanged behaviour) and `Heads(ctx, courseID id.ID) ([]Head, error)` returning only heads that are not deleted, quizzes then exams, each sorted by ID.
 
-- [ ] **Step 1: Write failing integration tests**
+- [x] **Step 1: Write failing integration tests**
 
 In `internal/assessment/adapters/postgres/postgres_integration_test.go`, replace the `run` helper callers' `Insert(ctx, q)` with `Insert(ctx, q, 100)` and `Replace` usages with `AppendRevision` (setting `q.Revision = 2` first); delete `TestReplaceMissingQuiz`. Add:
 
@@ -582,7 +582,7 @@ func runExams(t *testing.T, tx *postgres.TxRunner, fn func(app.ExamRepository) e
 }
 ```
 
-- [ ] **Step 2: Replace the queries**
+- [x] **Step 2: Replace the queries**
 
 Replace `internal/assessment/adapters/postgres/queries.sql` quiz and exam definition queries (keep the attempt queries, changed as shown) with:
 
@@ -694,12 +694,12 @@ VALUES ($1, $2, $3, $4, $5, $6);
 
 Delete the queries `ReplaceQuiz`, `GetQuiz`, `DeleteQuiz`, `ReplaceExam`, `GetExam`, `GetExamForShare`, `GetExamForUpdate`, `DeleteExam`, `SetExamPositions`, `CountExamAttempts`, `ListAnsweredExamQuestions`. Keep the remaining exam attempt queries unchanged.
 
-- [ ] **Step 3: Regenerate sqlc and check generated names**
+- [x] **Step 3: Regenerate sqlc and check generated names**
 
 Run: `make sqlc && grep -n "type AssessmentQuizRevisionRow\|type AssessmentExamRevisionRow" internal/assessment/adapters/postgres/sqlcgen/models.go`
 Expected: both types exist. If sqlc named them differently, use the generated names in Step 4.
 
-- [ ] **Step 4: Rewrite the quiz adapter**
+- [x] **Step 4: Rewrite the quiz adapter**
 
 In `internal/assessment/adapters/postgres/quizzes.go`, keep the doc types and `questionsJSON`/`toQuestions`; replace the repository methods with:
 
@@ -833,7 +833,7 @@ func revisionArgs(revs map[id.ID]int) ([]int64, []int32) {
 
 The `SoftDeleteQuizParams` field holding `$2` may be generated as `DeletedAt *time.Time` or `time.Time` depending on inference; match the generated type (pass `now` directly if it is `time.Time`). Add `"fmt"` and `"time"` imports.
 
-- [ ] **Step 5: Rewrite the exam adapter**
+- [x] **Step 5: Rewrite the exam adapter**
 
 In `internal/assessment/adapters/postgres/exams.go`, apply the same pattern:
 - `Find(ctx, examID, lock)`: when `lock == app.LockUpdate`, call `r.q.LockExam` first (map `pgx.ErrNoRows` to `app.ErrNotFound`), then `r.q.GetExamHead`.
@@ -843,7 +843,7 @@ In `internal/assessment/adapters/postgres/exams.go`, apply the same pattern:
 - `InsertAttempt` passes `Revision: int32(a.Revision)`; the attempt row converter sets `Revision: int(row.Revision)`.
 - Delete `Replace`, `SetPositions`, `Locks`, and the `ErrExamHasAttempts` foreign-key mapping in `Delete`.
 
-- [ ] **Step 6: Rename QuizQuery and add Heads**
+- [x] **Step 6: Rename QuizQuery and add Heads**
 
 `git mv internal/assessment/app/quiz_query.go internal/assessment/app/query.go`, then replace its contents with:
 
@@ -903,12 +903,12 @@ func (q *AssessmentQuery) Heads(ctx context.Context, courseID id.ID) ([]Head, er
 
 In `cmd/api/app.go`, replace `assessmentapp.NewQuizQuery(assessmentTx)` with `assessmentapp.NewAssessmentQuery(assessmentTx)`. Replace `fixture.query *app.QuizQuery` / `app.NewQuizQuery` in `internal/assessment/app/*_test.go` likewise.
 
-- [ ] **Step 7: Run the integration tests**
+- [x] **Step 7: Run the integration tests**
 
 Run: `go test -tags integration ./internal/assessment/adapters/postgres/...`
 Expected: PASS. (The `app` package and its tests do not compile yet; they are rebuilt in Tasks 4 and 5. `go build ./internal/assessment/adapters/postgres/` must succeed.)
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/assessment/app/ports.go internal/assessment/app/query.go internal/assessment/adapters/postgres sqlc.yaml cmd/api/app.go
@@ -982,7 +982,7 @@ func (DraftDiscarded) EventName() string { return "courseauthoring.course.draft_
 
 - Changes: `NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock, assets AssetCatalog, quizzes QuizCatalog, assessments AssessmentCatalog) *CourseService`.
 
-- [ ] **Step 1: Write failing app tests**
+- [x] **Step 1: Write failing app tests**
 
 In `internal/courseauthoring/app/fakes_test.go`, add a fake catalog and pin storage to the fake course repository:
 
@@ -1072,12 +1072,12 @@ func TestDiscardDraftPublishesLivePins(t *testing.T) {
 
 Adapt `newFixture`, `reviewer`, `putQuizBlock`, `editDetails`, `lastEvent` and the quiz catalog field to what `fakes_test.go` and the existing `versions_test.go` / `review_test.go` already provide; add the missing ones with these names. `f.assessments` is the `*fakeAssessments` passed to `NewCourseService`, initialised with `heads: map[id.ID][]domain.AssessmentPin{}`.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `go test ./internal/courseauthoring/app/ -run 'Pins|DirectPublish|Dangling|DiscardDraftPublishes'`
 Expected: FAIL to compile (`LivePins`, `AssessmentPin`, `DraftDiscarded` undefined).
 
-- [ ] **Step 3: Implement domain types, port and storage**
+- [x] **Step 3: Implement domain types, port and storage**
 
 Create `internal/courseauthoring/domain/pins.go` and add `DraftDiscarded` to `events.go` as listed under Interfaces. Add the four methods to `CourseRepository` in `app/ports.go` with the doc comments listed.
 
@@ -1159,7 +1159,7 @@ func (r courses) ListVersionPins(ctx context.Context, courseID id.ID, number int
 
 Match the generated param field names (e.g. `CourseID` vs `CourseID_2`) to what `make sqlc` produced.
 
-- [ ] **Step 4: Implement submit, publish, discard and reads**
+- [x] **Step 4: Implement submit, publish, discard and reads**
 
 Add the `assessments AssessmentCatalog` field and constructor parameter to `CourseService`. In `cmd/api/app.go`, `registerCourseAuthoring` gains a parameter `assessments courseauthoringapp.AssessmentCatalog`, passed through to `NewCourseService`; pass `assessmentHeads{query: assessmentapp.NewAssessmentQuery(assessmentTx)}` from `newApplication`, with this adapter in `cmd/api/assessment.go`:
 
@@ -1389,19 +1389,19 @@ Heads are read before authorization here; that leaks nothing because they are di
 
 Add `"cmp"` and `contentblocks` imports to `course_service.go` as needed.
 
-- [ ] **Step 5: Run the app tests**
+- [x] **Step 5: Run the app tests**
 
 Run: `go test ./internal/courseauthoring/...`
 Expected: PASS.
 
-- [ ] **Step 6: Integration test for pin storage**
+- [x] **Step 6: Integration test for pin storage**
 
 Append to `internal/courseauthoring/adapters/postgres/postgres_integration_test.go` a test that inserts a course, publishes version 1 via `InsertVersion`, calls `InsertVersionPins(ctx, courseID, 1, pins)` with one quiz and one exam pin, then asserts `ListVersionPins(ctx, courseID, 1)` returns them ordered exam then quiz, that `ListVersionPins(ctx, courseID, 2)` is empty, and that `ReplaceSubmittedPins` twice leaves only the second set in `ListSubmittedPins`. Use the file's existing course builder and transaction helper.
 
 Run: `go test -tags integration ./internal/courseauthoring/adapters/postgres/...`
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add internal/courseauthoring cmd/api/app.go cmd/api/assessment.go
@@ -1452,7 +1452,7 @@ type CourseAccess interface {
   - `Create`, `Update` unchanged signatures; `Delete(ctx, p, quizID)` soft-deletes.
   - `RecordAttempt` unchanged signature; checks against and records the live pin.
 
-- [ ] **Step 1: Update the fakes**
+- [x] **Step 1: Update the fakes**
 
 In `internal/assessment/app/fakes_test.go`:
 - `memStore` stores quizzes as `quizRevs map[id.ID][]domain.Quiz` (index `revision-1`) and `quizDeleted map[id.ID]bool`; the same for exams (`examRevs`, `examDeleted`). Clone them in `RunInTx` like the existing maps (clone the slices too) and restore on error.
@@ -1510,7 +1510,7 @@ func (f *fixture) goLive(t *testing.T, courseID id.ID) {
 }
 ```
 
-- [ ] **Step 2: Write failing tests**
+- [x] **Step 2: Write failing tests**
 
 In `internal/assessment/app/quiz_service_test.go`, change existing calls to `List(ctx, p, course, lecture)` → `List(ctx, p, course, lecture, 0)`, and call `f.goLive(t, course)` after creating quizzes in tests where a student lists or attempts. Replace the test asserting that Delete removes attempts with one asserting attempts survive. Add:
 
@@ -1609,12 +1609,12 @@ func TestManagerReadsVersion(t *testing.T) {
 
 If the test file has no `quizInput(position, prompt)` helper, add one returning an `app.QuizInput` with one single-choice question whose prompt is `prompt` and options `a` (correct) and `b`.
 
-- [ ] **Step 3: Run them to verify they fail**
+- [x] **Step 3: Run them to verify they fail**
 
 Run: `go test ./internal/assessment/app/ -run 'Quiz|Live|Unpublished|Version'`
 Expected: FAIL to compile.
 
-- [ ] **Step 4: Implement**
+- [x] **Step 4: Implement**
 
 Replace `CourseAccess` in `ports.go` as listed. Rewrite the `QuizService` methods:
 
@@ -1808,7 +1808,7 @@ func readPins(ctx context.Context, courses CourseAccess, p auth.Principal, cours
 
 Remove the now-unused `find`'s callers except `Delete`; keep `find` (it reads the head).
 
-- [ ] **Step 6: Wire the new CourseAccess methods in courseauthoring and cmd/api**
+- [x] **Step 6: Wire the new CourseAccess methods in courseauthoring and cmd/api**
 
 In `cmd/api/assessment.go`, replace `CanManageLecture` and `CanManageCourse` with:
 
@@ -1859,12 +1859,12 @@ with a courseauthoring app test: on a published course, `BeginAssessmentEdit` mo
 
 Pass `toAssessmentError` the new courseauthoring error for an unknown version (`ErrNotFound`, already mapped).
 
-- [ ] **Step 7: Run the quiz and courseauthoring tests**
+- [x] **Step 7: Run the quiz and courseauthoring tests**
 
 Run: `go test ./internal/assessment/app/ -run 'Quiz|Live|Unpublished|Version' && go test ./internal/courseauthoring/...`
 Expected: PASS. (Exam tests may still fail; Task 5 fixes them.)
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add internal/assessment/app internal/courseauthoring/app cmd/api/assessment.go
@@ -1890,7 +1890,7 @@ git commit -m "feat(assessment): serve quizzes from pinned revisions"
   - Attempts read their own revision everywhere (`ownAttempt`, `Review`, `ListAttempts`, settling).
   - `ExamDetail` type and `ErrExamHasAttempts` are deleted.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 In `exam_service_test.go` and `exam_attempts_test.go`: replace `ExamDetail` uses with `domain.Exam`; remove tests of edit locks (`EditViolation`, `CheckExamEdit`, `Locks`, `ErrExamHasAttempts`, `LockShare`); after `Publish` of an exam add `f.goLive(t, course)` wherever a student then lists, gets or starts. Add:
 
@@ -1974,12 +1974,12 @@ func TestDeleteExamWithAttemptsKeepsThem(t *testing.T) {
 
 Use the test file's existing exam input and question input builders under the names `examInput` / `newQuestionInput`, adding them if absent.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `go test ./internal/assessment/...`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Delete `internal/assessment/domain/exam_edit.go` and `exam_edit_test.go`; remove `ErrExamHasAttempts` from `errors.go` and the `ErrEdit*` errors from `domain/errors.go` if only `exam_edit.go` used them (grep first).
 
@@ -2091,12 +2091,12 @@ func attemptExam(ctx context.Context, r Repos, a domain.ExamAttempt) (domain.Exa
 - `ListAttempts`: authorize via the exam's course as today; settle each attempt against `attemptExam`, caching by revision in a `map[int]domain.Exam`.
 - Delete `settleExamAttempts` if no longer called.
 
-- [ ] **Step 4: Run all assessment tests**
+- [x] **Step 4: Run all assessment tests**
 
 Run: `go test ./internal/assessment/...`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add -A internal/assessment
@@ -2116,7 +2116,7 @@ git commit -m "feat(assessment): pin exams and attempts to revisions"
 - Produces: `app.NewRestoreService(tx TxRunner, clk clock.Clock) *RestoreService`; `(*RestoreService).RestorePins(ctx context.Context, courseID, actorID id.ID, pins Pins) error`.
 - Produces: `events.New(svc *app.RestoreService) *Handlers`; `(*Handlers).DraftDiscarded(msg *message.Message) error`; `events.DraftDiscardedTopic = "courseauthoring.course.draft_discarded"`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Create `internal/assessment/app/restore_test.go`:
 
@@ -2188,12 +2188,12 @@ func TestDecodeDraftDiscarded(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `go test ./internal/assessment/...`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement the service**
+- [x] **Step 3: Implement the service**
 
 Create `internal/assessment/app/restore.go`:
 
@@ -2338,7 +2338,7 @@ func (s *RestoreService) restore(ctx context.Context, r Repos, h Head, pins Pins
 
 The test above expects revision 3 for `kept` (1 original, 2 edit, 3 restored copy) and no revision 4 after redelivery.
 
-- [ ] **Step 4: Implement the outbox handler and wiring**
+- [x] **Step 4: Implement the outbox handler and wiring**
 
 Create `internal/assessment/adapters/events/events.go`:
 
@@ -2420,12 +2420,12 @@ In `cmd/api/app.go`, after `registerNotifications(...)`:
 
 with import `assessmentevents "github.com/santoshkc2200/ioe-backend/internal/assessment/adapters/events"`. Check that `fw.Handle` is callable before `NewForwarder`'s run starts (it is used the same way for notifications).
 
-- [ ] **Step 5: Run tests and lint**
+- [x] **Step 5: Run tests and lint**
 
 Run: `go test ./internal/assessment/... ./cmd/api/ && make lint`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/assessment cmd/api/app.go
@@ -2446,7 +2446,7 @@ git commit -m "feat(assessment): restore quizzes and exams when a draft is disca
 - Produces: `(*courseauthoringapp.ContentService).AssetUsage(ctx context.Context, courseID, assetID id.ID) ([]id.ID, error)` — lecture IDs, sorted, whose working-copy or live-version blocks reference the asset; no authorization.
 - Produces in media: `CourseAccess.AssetUsage(ctx, courseID, assetID id.ID) ([]id.ID, error)`; `ErrAssetInUse`; `type InUseError struct{ LectureIDs []id.ID }` with `Error()` and `Unwrap() error { return ErrAssetInUse }`.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 Append to `internal/courseauthoring/app/assets_test.go`:
 
@@ -2494,12 +2494,12 @@ func TestDeleteRefusesAssetInUse(t *testing.T) {
 
 Use the repository seeding helper `service_test.go` already uses in its Delete tests in place of `repo.put` if named differently.
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `go test ./internal/courseauthoring/app/ ./internal/media/app/ -run 'AssetUsage|InUse'`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `internal/courseauthoring/app/assets.go`:
 
@@ -2606,7 +2606,7 @@ func (a mediaCourseAccess) AssetUsage(ctx context.Context, courseID, assetID id.
 }
 ```
 
-- [ ] **Step 4: Map the error over HTTP**
+- [x] **Step 4: Map the error over HTTP**
 
 In `internal/media/adapters/httpapi/httpapi.go`, at the top of `writeError`, before the table loop:
 
@@ -2624,12 +2624,12 @@ In `internal/media/adapters/httpapi/httpapi.go`, at the top of `writeError`, bef
 
 Check `problem.WriteWithExtensions`' exact signature in `internal/platform/problem` (it is used in `internal/courseauthoring/adapters/httpapi/httpapi.go:195`) and match it. Add a handler test in the media httpapi test file asserting a 409 with `type` `asset_in_use` and `lecture_ids` `["50"]`, following the file's existing Delete test.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `go test ./internal/courseauthoring/... ./internal/media/... ./cmd/api/`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/courseauthoring/app internal/media cmd/api/media.go
@@ -2648,7 +2648,7 @@ git commit -m "feat(media): refuse deleting assets the course uses"
 - Consumes: Tasks 3–7.
 - Produces HTTP: `?version=<n>` (integer ≥ 1) on `GET /v1/courses/{courseID}/lectures/{lectureID}/quizzes` and `GET /v1/courses/{courseID}/exams/authoring`; `revision` (integer) on quiz responses, exam authoring and student exam responses, and exam attempt responses; `locks` removed from exam authoring responses; `exam_has_attempts` and edit-violation problem types removed.
 
-- [ ] **Step 1: Update the HTTP handlers**
+- [x] **Step 1: Update the HTTP handlers**
 
 In `internal/assessment/adapters/httpapi`:
 - Quiz list handler: parse `version` with a helper and pass it to `List`:
@@ -2673,7 +2673,7 @@ func versionParam(r *http.Request) (int, error) {
 - Handlers that returned `app.ExamDetail` now receive `domain.Exam`.
 - Update handler tests to the new shapes; add one test that `?version=0` and `?version=x` return 400 `invalid_input`.
 
-- [ ] **Step 2: Update OpenAPI**
+- [x] **Step 2: Update OpenAPI**
 
 In `api/openapi.yaml`:
 - Add a `version` query parameter (integer, minimum 1, description "Published version to read; managers only. Omit for the working copy (managers) or the live version (everyone else).") to `GET /v1/courses/{courseID}/lectures/{lectureID}/quizzes` and `GET /v1/courses/{courseID}/exams/authoring`.
@@ -2685,12 +2685,12 @@ In `api/openapi.yaml`:
 
 Run the repository's OpenAPI lint if one exists (`grep -n openapi Makefile .github -r`); otherwise `docker run --rm -v "$PWD":/w redocly/cli lint /w/api/openapi.yaml` is optional.
 
-- [ ] **Step 3: Run all gates**
+- [x] **Step 3: Run all gates**
 
 Run: `make check`
 Expected: PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/assessment/adapters/httpapi api/openapi.yaml
@@ -2704,14 +2704,14 @@ git commit -m "feat(api): expose pinned revisions and new conflicts"
 **Files:**
 - Modify: `cmd/api/e2e_integration_test.go`
 
-- [ ] **Step 1: Fix existing end-to-end tests for the new rules**
+- [x] **Step 1: Fix existing end-to-end tests for the new rules**
 
 Run: `make test-integration`. Expected failures and fixes:
 - `TestExamsEndToEnd`: publishing an exam on a published course now moves the course to draft and does not show the exam. After `POST /v1/exams/{id}/publish`, add `POST /v1/courses/{courseID}/publish` as admin (reviewer bypass) and expect 204 before students list or start.
 - `TestQuizzesEndToEnd`: deleting a quiz on a published course now succeeds (204) and reopens the course as draft; students still see the quiz. Update assertions after the delete accordingly.
 - Any assertion on `locks` or `exam_has_attempts` is removed.
 
-- [ ] **Step 2: Add the versioning scenario**
+- [x] **Step 2: Add the versioning scenario**
 
 Add `TestAssessmentVersioningEndToEnd` to `cmd/api/e2e_integration_test.go`, built from the same setup steps `TestQuizzesEndToEnd` and `TestExamsEndToEnd` use (sign in admin, instructor and student; create course with a lecture; enroll the student). Then:
 
@@ -2765,7 +2765,7 @@ Add the media case to `TestMediaEndToEnd` after its video block is published:
 
 Confirm the test's outbox forwarder is running (the e2e harness starts `application`; if the forwarder is not started in tests, start it the way `main.go` does).
 
-- [ ] **Step 3: Run the gates**
+- [x] **Step 3: Run the gates**
 
 Run: `make check && make test-integration && docker compose config >/dev/null && make docker-build && git diff --check`
 Expected: all PASS.

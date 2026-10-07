@@ -22,16 +22,12 @@ type assessmentCourseAccess struct {
 	contents *courseauthoringapp.ContentService
 }
 
-func (a assessmentCourseAccess) CanManageLecture(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error {
-	return toAssessmentError(a.courses.CheckLectureManage(ctx, p, courseID, lectureID))
+func (a assessmentCourseAccess) BeginEdit(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error {
+	return toAssessmentError(a.courses.BeginAssessmentEdit(ctx, p, courseID, lectureID))
 }
 
 func (a assessmentCourseAccess) CanReadLecture(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) error {
 	return toAssessmentError(a.contents.CheckLectureRead(ctx, p, courseID, lectureID))
-}
-
-func (a assessmentCourseAccess) CanManageCourse(ctx context.Context, p auth.Principal, courseID id.ID) error {
-	return toAssessmentError(a.courses.CheckManage(ctx, p, courseID))
 }
 
 func (a assessmentCourseAccess) CanReadAsManager(ctx context.Context, p auth.Principal, courseID id.ID) error {
@@ -41,6 +37,24 @@ func (a assessmentCourseAccess) CanReadAsManager(ctx context.Context, p auth.Pri
 func (a assessmentCourseAccess) CanReadCourse(ctx context.Context, p auth.Principal, courseID id.ID) error {
 	_, err := a.courses.Get(ctx, p, courseID)
 	return toAssessmentError(err)
+}
+
+func (a assessmentCourseAccess) LivePins(ctx context.Context, courseID id.ID) (assessmentapp.Pins, bool, error) {
+	pins, live, err := a.courses.LivePins(ctx, courseID)
+	return toAssessmentPins(pins), live, toAssessmentError(err)
+}
+
+func (a assessmentCourseAccess) VersionPins(ctx context.Context, p auth.Principal, courseID id.ID, number int) (assessmentapp.Pins, error) {
+	pins, err := a.courses.VersionPins(ctx, p, courseID, number)
+	return toAssessmentPins(pins), toAssessmentError(err)
+}
+
+func toAssessmentPins(pins []courseauthoringdomain.AssessmentPin) assessmentapp.Pins {
+	out := make(assessmentapp.Pins, len(pins))
+	for _, p := range pins {
+		out[assessmentapp.Ref{Kind: assessmentapp.Kind(p.Kind), ID: p.ID}] = p.Revision
+	}
+	return out
 }
 
 func toAssessmentError(err error) error {
@@ -64,4 +78,21 @@ func registerAssessment(r *httpserver.Router, tx *assessmentpg.TxRunner, courses
 	quizzes := assessmentapp.NewQuizService(tx, access, enrollments, ids, clk)
 	exams := assessmentapp.NewExamService(tx, access, enrollments, ids, clk)
 	assessmenthttp.New(quizzes, exams, assessmenthttp.Config{RequireAuth: requireAuth, Logger: logger}).Register(r)
+}
+
+// assessmentHeads lets course authoring pin the current quiz and exam revisions.
+type assessmentHeads struct {
+	query *assessmentapp.AssessmentQuery
+}
+
+func (a assessmentHeads) Heads(ctx context.Context, courseID id.ID) ([]courseauthoringdomain.AssessmentPin, error) {
+	heads, err := a.query.Heads(ctx, courseID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]courseauthoringdomain.AssessmentPin, len(heads))
+	for i, h := range heads {
+		out[i] = courseauthoringdomain.AssessmentPin{Kind: courseauthoringdomain.AssessmentKind(h.Ref.Kind), ID: h.Ref.ID, Revision: h.Revision}
+	}
+	return out, nil
 }

@@ -26,7 +26,15 @@ func (h *Handler) getContent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	v, err := h.contents.Get(r.Context(), principal(r), ids[0], ids[1])
+	live, ok := wantsLive(w, r)
+	if !ok {
+		return
+	}
+	get := h.contents.Get
+	if live {
+		get = h.contents.GetLive
+	}
+	v, err := get(r.Context(), principal(r), ids[0], ids[1])
 	if err != nil {
 		h.writeError(w, r, err)
 		return

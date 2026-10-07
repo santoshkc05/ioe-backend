@@ -129,10 +129,20 @@ func (s *AssetService) Status(ctx context.Context, p auth.Principal, assetID id.
 	return AssetView{Asset: a, Remote: r}, nil
 }
 
-// Delete removes the remote asset, then the row. Existing block references then resolve to 404.
+// Delete removes an asset no lecture of the working copy or live version uses: the remote asset
+// first, then the row. A block added concurrently can slip past the check; course submit
+// re-checks references, so the live version never points at a deleted asset.
 func (s *AssetService) Delete(ctx context.Context, p auth.Principal, assetID id.ID) error {
-	if _, err := s.managed(ctx, p, assetID); err != nil {
+	a, err := s.managed(ctx, p, assetID)
+	if err != nil {
 		return err
+	}
+	lectures, err := s.courses.AssetUsage(ctx, a.CourseID, assetID)
+	if err != nil {
+		return err
+	}
+	if len(lectures) > 0 {
+		return &InUseError{LectureIDs: lectures}
 	}
 	if err := s.remote.Delete(ctx, assetID); err != nil && !errors.Is(err, ErrRemoteNotFound) {
 		return err

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 
@@ -39,7 +41,7 @@ type answerDoc struct {
 type quizzes struct{ q *sqlcgen.Queries }
 
 func (r quizzes) Find(ctx context.Context, quizID id.ID) (domain.Quiz, error) {
-	row, err := r.q.GetQuiz(ctx, int64(quizID))
+	row, err := r.q.GetQuizHead(ctx, int64(quizID))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.Quiz{}, app.ErrNotFound
 	}
@@ -49,50 +51,84 @@ func (r quizzes) Find(ctx context.Context, quizID id.ID) (domain.Quiz, error) {
 	return toQuiz(row)
 }
 
+func (r quizzes) FindForUpdate(ctx context.Context, quizID id.ID) (domain.Quiz, error) {
+	if _, err := r.q.LockQuiz(ctx, int64(quizID)); errors.Is(err, pgx.ErrNoRows) {
+		return domain.Quiz{}, app.ErrNotFound
+	} else if err != nil {
+		return domain.Quiz{}, err
+	}
+	return r.Find(ctx, quizID)
+}
+
+func (r quizzes) FindRevisions(ctx context.Context, revs map[id.ID]int) ([]domain.Quiz, error) {
+	ids, numbers := revisionArgs(revs)
+	rows, err := r.q.ListQuizRevisions(ctx, sqlcgen.ListQuizRevisionsParams{QuizIds: ids, Revisions: numbers})
+	if err != nil {
+		return nil, err
+	}
+	return toQuizzes(rows)
+}
+
 func (r quizzes) ListByLecture(ctx context.Context, courseID, lectureID id.ID) ([]domain.Quiz, error) {
 	rows, err := r.q.ListQuizzesByLecture(ctx, sqlcgen.ListQuizzesByLectureParams{CourseID: int64(courseID), LectureID: int64(lectureID)})
 	if err != nil {
 		return nil, err
 	}
-	out := make([]domain.Quiz, len(rows))
-	for i, row := range rows {
-		if out[i], err = toQuiz(row); err != nil {
-			return nil, err
-		}
-	}
-	return out, nil
+	return toQuizzes(rows)
 }
 
-func (r quizzes) Insert(ctx context.Context, q domain.Quiz) error {
-	doc, err := questionsJSON(q.Questions)
-	if err != nil {
+func (r quizzes) Insert(ctx context.Context, q domain.Quiz, by id.ID) error {
+	if q.Revision != 1 {
+		return fmt.Errorf("insert quiz %s: revision %d, want 1", q.ID, q.Revision)
+	}
+	if err := r.q.InsertQuiz(ctx, sqlcgen.InsertQuizParams{
+		ID: int64(q.ID), CourseID: int64(q.CourseID), LectureID: int64(q.LectureID), CreatedAt: q.CreatedAt,
+	}); err != nil {
 		return err
 	}
-	return r.q.InsertQuiz(ctx, sqlcgen.InsertQuizParams{
-		ID: int64(q.ID), CourseID: int64(q.CourseID), LectureID: int64(q.LectureID), Position: int32(q.Position), //nolint:gosec // domain.NewQuiz bounds position to MaxPosition
-		Questions: doc, CreatedAt: q.CreatedAt, UpdatedAt: q.UpdatedAt,
-	})
+	return r.insertRevision(ctx, q, by)
 }
 
-func (r quizzes) Replace(ctx context.Context, q domain.Quiz) error {
-	doc, err := questionsJSON(q.Questions)
-	if err != nil {
-		return err
-	}
-	n, err := r.q.ReplaceQuiz(ctx, sqlcgen.ReplaceQuizParams{
-		ID: int64(q.ID), Position: int32(q.Position), Questions: doc, UpdatedAt: q.UpdatedAt, //nolint:gosec // see Insert
-	})
+func (r quizzes) AppendRevision(ctx context.Context, q domain.Quiz, by id.ID) error {
+	n, err := r.q.MoveQuizHead(ctx, sqlcgen.MoveQuizHeadParams{ID: int64(q.ID), HeadRevision: int32(q.Revision), UpdatedAt: q.UpdatedAt}) //nolint:gosec // one per edit
 	if err != nil {
 		return err
 	}
 	if n == 0 {
 		return app.ErrNotFound
 	}
-	return nil
+	return r.insertRevision(ctx, q, by)
 }
 
-func (r quizzes) Delete(ctx context.Context, quizID id.ID) error {
-	return r.q.DeleteQuiz(ctx, int64(quizID))
+func (r quizzes) insertRevision(ctx context.Context, q domain.Quiz, by id.ID) error {
+	doc, err := questionsJSON(q.Questions)
+	if err != nil {
+		return err
+	}
+	return r.q.InsertQuizRevision(ctx, sqlcgen.InsertQuizRevisionParams{
+		QuizID: int64(q.ID), Revision: int32(q.Revision), Position: int32(q.Position), //nolint:gosec // domain.NewQuiz bounds position; revisions grow one per edit
+		Questions: doc, CreatedBy: int64(by), CreatedAt: q.UpdatedAt,
+	})
+}
+
+func (r quizzes) Delete(ctx context.Context, quizID id.ID, now time.Time) error {
+	return r.q.SoftDeleteQuiz(ctx, sqlcgen.SoftDeleteQuizParams{ID: int64(quizID), DeletedAt: &now})
+}
+
+func (r quizzes) Undelete(ctx context.Context, quizID id.ID, now time.Time) error {
+	return r.q.UndeleteQuiz(ctx, sqlcgen.UndeleteQuizParams{ID: int64(quizID), UpdatedAt: now})
+}
+
+func (r quizzes) Heads(ctx context.Context, courseID id.ID) ([]app.Head, error) {
+	rows, err := r.q.ListQuizHeads(ctx, int64(courseID))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]app.Head, len(rows))
+	for i, row := range rows {
+		out[i] = app.Head{Ref: app.Ref{Kind: app.KindQuiz, ID: id.ID(row.ID)}, Revision: int(row.HeadRevision), Deleted: row.Deleted}
+	}
+	return out, nil
 }
 
 func (r quizzes) LecturesOf(ctx context.Context, courseID id.ID, quizIDs []id.ID) (map[id.ID]id.ID, error) {
@@ -129,7 +165,8 @@ func (r quizzes) RecordAttempt(ctx context.Context, a domain.QuizAttempt) (id.ID
 		key = &a.IdempotencyKey
 	}
 	got, err := r.q.InsertQuizAttempt(ctx, sqlcgen.InsertQuizAttemptParams{
-		ID: int64(a.ID), QuizID: int64(a.QuizID), UserID: int64(a.UserID), Answers: answers,
+		ID: int64(a.ID), QuizID: int64(a.QuizID), Revision: int32(a.Revision), //nolint:gosec // bounded by stored revisions
+		UserID: int64(a.UserID), Answers: answers,
 		IdempotencyKey: key, SubmittedAt: a.SubmittedAt,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -161,13 +198,34 @@ func questionsJSON(qs []domain.Question) (json.RawMessage, error) {
 }
 
 // toQuiz rebuilds the quiz without re-validating: stored rows were validated on write.
-func toQuiz(row sqlcgen.AssessmentQuiz) (domain.Quiz, error) {
+func toQuiz(row sqlcgen.AssessmentQuizRevisionRow) (domain.Quiz, error) {
 	qs, err := toQuestions(row.Questions)
 	if err != nil {
 		return domain.Quiz{}, err
 	}
-	return domain.Quiz{ID: id.ID(row.ID), CourseID: id.ID(row.CourseID), LectureID: id.ID(row.LectureID), Position: int(row.Position),
-		Questions: qs, CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, nil
+	return domain.Quiz{ID: id.ID(row.ID), CourseID: id.ID(row.CourseID), LectureID: id.ID(row.LectureID),
+		Revision: int(row.Revision), Position: int(row.Position), Questions: qs,
+		CreatedAt: row.CreatedAt.UTC(), UpdatedAt: row.UpdatedAt.UTC()}, nil
+}
+
+func toQuizzes(rows []sqlcgen.AssessmentQuizRevisionRow) ([]domain.Quiz, error) {
+	out := make([]domain.Quiz, len(rows))
+	for i, row := range rows {
+		var err error
+		if out[i], err = toQuiz(row); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// revisionArgs flattens revs into the parallel arrays the revision queries unnest.
+func revisionArgs(revs map[id.ID]int) ([]int64, []int32) {
+	ids, numbers := make([]int64, 0, len(revs)), make([]int32, 0, len(revs))
+	for k, v := range revs {
+		ids, numbers = append(ids, int64(k)), append(numbers, int32(v)) //nolint:gosec // revisions grow one per edit
+	}
+	return ids, numbers
 }
 
 func toQuestions(raw json.RawMessage) ([]domain.Question, error) {

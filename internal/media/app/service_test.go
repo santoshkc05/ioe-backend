@@ -241,3 +241,16 @@ func TestAssetQueryKinds(t *testing.T) {
 		t.Fatalf("kinds = %v, %v", kinds, err)
 	}
 }
+
+func TestDeleteRefusesAssetInUse(t *testing.T) {
+	repo, remote := newRepo(videoA), &fakeRemote{}
+	svc := newService(t, repo, remote, fakeAccess{usage: map[id.ID][]id.ID{videoA.ID: {50, 51}}})
+	err := svc.Delete(ctx, owner, videoA.ID)
+	var inUse *app.InUseError
+	if !errors.As(err, &inUse) || !errors.Is(err, app.ErrAssetInUse) || !slices.Equal(inUse.LectureIDs, []id.ID{50, 51}) {
+		t.Fatalf("delete = %v", err)
+	}
+	if len(remote.calls) != 0 {
+		t.Fatalf("remote touched: %v", remote.calls)
+	}
+}

@@ -4,8 +4,10 @@ package httpapi
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/santoshkc2200/ioe-backend/internal/assessment/app"
 	"github.com/santoshkc2200/ioe-backend/internal/assessment/domain"
@@ -17,7 +19,7 @@ import (
 
 // QuizService is the quiz use-case surface the handlers call.
 type QuizService interface {
-	List(ctx context.Context, p auth.Principal, courseID, lectureID id.ID) ([]domain.Quiz, error)
+	List(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, version int) ([]domain.Quiz, error)
 	Create(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, in app.QuizInput) (domain.Quiz, error)
 	Update(ctx context.Context, p auth.Principal, courseID, lectureID, quizID id.ID, in app.QuizInput) (domain.Quiz, error)
 	Delete(ctx context.Context, p auth.Principal, quizID id.ID) error
@@ -50,12 +52,30 @@ func (h *Handler) Register(r *httpserver.Router) {
 	h.registerExams(r, a)
 }
 
+// versionParam reads ?version=; 0 when absent. A malformed or non-positive value is invalid input.
+func versionParam(r *http.Request) (int, error) {
+	raw := r.URL.Query().Get("version")
+	if raw == "" {
+		return 0, nil
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return 0, fmt.Errorf("%w: version must be a positive integer", app.ErrInvalidInput)
+	}
+	return n, nil
+}
+
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	ids, ok := pathIDs(w, r, "courseID", "lectureID")
 	if !ok {
 		return
 	}
-	qs, err := h.quizzes.List(r.Context(), principal(r), ids[0], ids[1])
+	ver, err := versionParam(r)
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	qs, err := h.quizzes.List(r.Context(), principal(r), ids[0], ids[1], ver)
 	if err != nil {
 		h.writeError(w, r, err)
 		return
@@ -173,16 +193,11 @@ var errorMappings = []errorMapping{
 	{app.ErrExamClosed, http.StatusConflict, "exam_closed", "Exam Closed"},
 	{app.ErrOpenAttemptExists, http.StatusConflict, "open_attempt_exists", "Open Attempt Exists"},
 	{app.ErrRetakesNotAllowed, http.StatusConflict, "retakes_not_allowed", "Retakes Not Allowed"},
-	{app.ErrExamHasAttempts, http.StatusConflict, "exam_has_attempts", "Exam Has Attempts"},
 	{domain.ErrAttemptSubmitted, http.StatusConflict, "attempt_submitted", "Attempt Submitted"},
 	{domain.ErrAttemptExpired, http.StatusConflict, "attempt_expired", "Attempt Expired"},
 	{domain.ErrRevealAttemptOpen, http.StatusConflict, "reveal_attempt_open", "Attempt Still Open"},
 	{domain.ErrRevealDisabled, http.StatusForbidden, "reveal_disabled", "Reveal Disabled"},
 	{domain.ErrRevealNotYet, http.StatusForbidden, "reveal_not_yet", "Reveal Not Yet"},
-	{domain.ErrEditWouldTruncateAttempt, http.StatusConflict, "edit_would_truncate_attempt", "Edit Would Truncate Attempt"},
-	{domain.ErrEditAddDuringAttempt, http.StatusConflict, "edit_add_during_attempt", "Edit During Attempt"},
-	{domain.ErrEditQuestionAnswered, http.StatusConflict, "edit_question_answered", "Question Answered"},
-	{domain.ErrEditKeyFrozen, http.StatusConflict, "edit_key_frozen", "Answer Key Frozen"},
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {
@@ -205,7 +220,7 @@ func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) 
 }
 
 // errorDetails returns the data a client needs to explain err: when an exam window opens or
-// closed, when answers are revealed, or which question and option an edit would break.
+// closed, or when answers are revealed.
 func errorDetails(err error) map[string]any {
 	if w := (*app.WindowError)(nil); errors.As(err, &w) {
 		if errors.Is(w.Err, app.ErrExamClosed) {
@@ -215,18 +230,6 @@ func errorDetails(err error) map[string]any {
 	}
 	if r := (*domain.RevealNotYetError)(nil); errors.As(err, &r) {
 		return map[string]any{"reveal_at": r.At}
-	}
-	if v := (*domain.EditViolation)(nil); errors.As(err, &v) {
-		d := map[string]any{}
-		if !v.QuestionID.IsZero() {
-			d["question_id"] = v.QuestionID
-		}
-		if !v.OptionID.IsZero() {
-			d["option_id"] = v.OptionID
-		}
-		if len(d) > 0 {
-			return d
-		}
 	}
 	return nil
 }

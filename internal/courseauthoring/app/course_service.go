@@ -1,6 +1,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 
@@ -13,15 +14,16 @@ import (
 
 // CourseService implements course structure, lifecycle and read use cases.
 type CourseService struct {
-	tx      TxRunner
-	ids     *id.Generator
-	clock   clock.Clock
-	assets  AssetCatalog
-	quizzes QuizCatalog
+	tx          TxRunner
+	ids         *id.Generator
+	clock       clock.Clock
+	assets      AssetCatalog
+	quizzes     QuizCatalog
+	assessments AssessmentCatalog
 }
 
-func NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock, assets AssetCatalog, quizzes QuizCatalog) *CourseService {
-	return &CourseService{tx: tx, ids: ids, clock: c, assets: assets, quizzes: quizzes}
+func NewCourseService(tx TxRunner, ids *id.Generator, c clock.Clock, assets AssetCatalog, quizzes QuizCatalog, assessments AssessmentCatalog) *CourseService {
+	return &CourseService{tx: tx, ids: ids, clock: c, assets: assets, quizzes: quizzes, assessments: assessments}
 }
 
 type CreateCourseInput struct {
@@ -48,9 +50,16 @@ func newTitle(raw string) (contentblocks.Title, error) {
 	return t, nil
 }
 
-// visible reports whether p may read c at all.
+// visible reports whether p may read c at all. Managers read the working copy; everyone
+// else reads the live version.
 func visible(p auth.Principal, c *domain.Course) bool {
-	return c.IsManagedBy(p) || c.Status == domain.StatusPublished
+	return c.IsManagedBy(p) || c.IsLive()
+}
+
+// readsLive reports whether p reads c's live version: always for non-managers, and for
+// managers when they ask for it.
+func readsLive(p auth.Principal, c *domain.Course, wantLive bool) bool {
+	return wantLive || !c.IsManagedBy(p)
 }
 
 // loadManaged returns the course for a write: ErrNotFound when the caller cannot see it,
@@ -105,7 +114,17 @@ func (s *CourseService) Create(ctx context.Context, p auth.Principal, in CreateC
 	return c, err
 }
 
+// Get returns the working copy to managers and the live version to everyone else.
 func (s *CourseService) Get(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error) {
+	return s.get(ctx, p, courseID, false)
+}
+
+// GetLive returns the live version to anyone who may see the course.
+func (s *CourseService) GetLive(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error) {
+	return s.get(ctx, p, courseID, true)
+}
+
+func (s *CourseService) get(ctx context.Context, p auth.Principal, courseID id.ID, wantLive bool) (domain.Course, error) {
 	var c domain.Course
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
 		var err error
@@ -116,7 +135,13 @@ func (s *CourseService) Get(ctx context.Context, p auth.Principal, courseID id.I
 		if !visible(p, &c) {
 			return ErrNotFound
 		}
-		return nil
+		if readsLive(p, &c, wantLive) {
+			if !c.IsLive() {
+				return ErrNotFound
+			}
+			c, err = r.Courses.FindVersion(ctx, courseID, c.Live.Number)
+		}
+		return err
 	})
 	return c, err
 }
@@ -131,7 +156,8 @@ type CourseFacts struct {
 }
 
 // Facts returns a course's publication, price, ownership and lecture facts for internal
-// callers. It applies no authorization and must not be exposed over HTTP.
+// callers, from the live version when the course is live and from the working copy
+// otherwise. It applies no authorization and must not be exposed over HTTP.
 func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts, error) {
 	var f CourseFacts
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
@@ -139,19 +165,25 @@ func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts,
 		if err != nil {
 			return err
 		}
+		live := c.IsLive()
+		if live {
+			if c, err = r.Courses.FindVersion(ctx, courseID, c.Live.Number); err != nil {
+				return err
+			}
+		}
 		lectureIDs := make([]id.ID, len(c.Lectures))
 		for i, l := range c.Lectures {
 			lectureIDs[i] = l.ID
 		}
-		f = CourseFacts{Published: c.Status == domain.StatusPublished, Free: c.Price.IsFree(), Price: c.Price, OwnerID: c.OwnerID, LectureIDs: lectureIDs}
+		f = CourseFacts{Published: live, Free: c.Price.IsFree(), Price: c.Price, OwnerID: c.OwnerID, LectureIDs: lectureIDs}
 		return nil
 	})
 	return f, err
 }
 
-// CheckManage returns nil when p manages the course and it is not archived: ErrNotFound when
+// CheckManage returns nil when p manages the course and it is editable: ErrNotFound when
 // p cannot see it, ErrForbidden when p does not manage it, domain.ErrCourseNotEditable when
-// archived. For internal callers.
+// archived or awaiting a review decision. For internal callers.
 func (s *CourseService) CheckManage(ctx context.Context, p auth.Principal, courseID id.ID) error {
 	return s.tx.RunInTx(ctx, func(r Repos) error {
 		_, err := loadEditable(ctx, r, p, courseID)
@@ -183,14 +215,14 @@ func (s *CourseService) CheckLectureManage(ctx context.Context, p auth.Principal
 	})
 }
 
-// loadEditable is loadManaged that also rejects archived courses.
+// loadEditable is loadManaged that also rejects courses that are not editable.
 func loadEditable(ctx context.Context, r Repos, p auth.Principal, courseID id.ID) (domain.Course, error) {
 	c, err := loadManaged(ctx, r, p, courseID)
 	if err != nil {
 		return domain.Course{}, err
 	}
-	if c.Status == domain.StatusArchived {
-		return domain.Course{}, domain.ErrCourseNotEditable
+	if err := c.Editable(); err != nil {
+		return domain.Course{}, err
 	}
 	return c, nil
 }
@@ -227,16 +259,214 @@ func (s *CourseService) SetPrice(ctx context.Context, p auth.Principal, courseID
 	return s.mutate(ctx, p, courseID, func(_ Repos, c *domain.Course) error { return c.SetPrice(price, s.clock.Now()) })
 }
 
+// Publish snapshots the working copy as the next live version. A reviewed course pins the
+// revisions captured at submit; a reviewer's direct publish pins the current heads.
 func (s *CourseService) Publish(ctx context.Context, p auth.Principal, courseID id.ID) error {
-	_, err := s.mutate(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+	heads, err := s.assessments.Heads(ctx, courseID)
+	if err != nil {
+		return err
+	}
+	_, err = s.mutate(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		reviewed := c.Status == domain.StatusInReview || c.Status == domain.StatusApproved
 		now := s.clock.Now()
-		if err := c.Publish(now); err != nil {
+		if err := c.Publish(p.Role == auth.RoleRootAdmin, now); err != nil {
+			return err
+		}
+		if err := r.Courses.InsertVersion(ctx, c, p.UserID); err != nil {
+			return err
+		}
+		pins := heads
+		if reviewed {
+			if pins, err = r.Courses.ListSubmittedPins(ctx, c.ID); err != nil {
+				return err
+			}
+		}
+		if err := r.Courses.InsertVersionPins(ctx, c.ID, c.Live.Number, pins); err != nil {
 			return err
 		}
 		return r.Events.Publish(ctx, domain.CoursePublished{CourseID: c.ID, OwnerID: c.OwnerID,
 			PriceAmountMinor: c.Price.AmountMinor, PriceCurrency: c.Price.Currency, OccurredAt: now})
 	})
 	return err
+}
+
+// ListVersions returns the course's published versions, newest first, to its managers.
+func (s *CourseService) ListVersions(ctx context.Context, p auth.Principal, courseID id.ID) ([]VersionSummary, error) {
+	var out []VersionSummary
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		if _, err := loadManaged(ctx, r, p, courseID); err != nil {
+			return err
+		}
+		var err error
+		out, err = r.Courses.ListVersions(ctx, courseID)
+		return err
+	})
+	return out, err
+}
+
+// GetVersion returns one published version to the course's managers.
+func (s *CourseService) GetVersion(ctx context.Context, p auth.Principal, courseID id.ID, number int) (domain.Course, error) {
+	var c domain.Course
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		if _, err := loadManaged(ctx, r, p, courseID); err != nil {
+			return err
+		}
+		var err error
+		c, err = r.Courses.FindVersion(ctx, courseID, number)
+		return err
+	})
+	return c, err
+}
+
+// DiscardDraft throws away the working copy's changes and restores it, lecture content
+// included, from the live version. Every restored lecture's content revision moves on, so
+// an editor still holding the discarded content gets a revision conflict.
+func (s *CourseService) DiscardDraft(ctx context.Context, p auth.Principal, courseID id.ID) (domain.Course, error) {
+	var out domain.Course
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		c, err := loadManaged(ctx, r, p, courseID)
+		if err != nil {
+			return err
+		}
+		if !c.IsLive() {
+			return domain.ErrInvalidStatusTransition
+		}
+		live, err := r.Courses.FindVersion(ctx, courseID, c.Live.Number)
+		if err != nil {
+			return err
+		}
+		if err := c.DiscardDraft(live, s.clock.Now()); err != nil {
+			return err
+		}
+		// Save the outline first so restored lectures exist before their blocks are written.
+		if err := r.Courses.Update(ctx, &c); err != nil {
+			return err
+		}
+		for _, l := range c.Lectures {
+			blocks, err := r.Contents.ListVersionBlocks(ctx, courseID, c.Live.Number, l.ID)
+			if err != nil {
+				return err
+			}
+			if _, err := r.Contents.ReplaceBlocks(ctx, courseID, l.ID, blocks); err != nil {
+				return err
+			}
+		}
+		pins, err := r.Courses.ListVersionPins(ctx, courseID, c.Live.Number)
+		if err != nil {
+			return err
+		}
+		if err := r.Events.Publish(ctx, domain.DraftDiscarded{CourseID: courseID, ActorID: p.UserID,
+			Pins: pins, OccurredAt: s.clock.Now()}); err != nil {
+			return err
+		}
+		out = c
+		return nil
+	})
+	return out, err
+}
+
+// Submit sends the course to review after re-checking every block reference, and captures the
+// current quiz and exam revisions as what review approves. Any manager may submit.
+func (s *CourseService) Submit(ctx context.Context, p auth.Principal, courseID id.ID) error {
+	var blocks map[id.ID][]contentblocks.Block
+	if err := s.tx.RunInTx(ctx, func(r Repos) error {
+		var err error
+		blocks, err = workingBlocks(ctx, r, p, courseID)
+		return err
+	}); err != nil {
+		return err
+	}
+	if refErr, err := s.checkStoredRefs(ctx, courseID, blocks); refErr != nil || err != nil {
+		return cmp.Or(err, refErr)
+	}
+	heads, err := s.assessments.Heads(ctx, courseID)
+	if err != nil {
+		return err
+	}
+	_, err = s.mutate(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		rev, err := c.Submit(s.ids.New(), p.UserID, s.clock.Now())
+		if err != nil {
+			return err
+		}
+		if err := r.Courses.ReplaceSubmittedPins(ctx, courseID, heads); err != nil {
+			return err
+		}
+		return r.Courses.InsertReview(ctx, rev)
+	})
+	return err
+}
+
+func (s *CourseService) Approve(ctx context.Context, p auth.Principal, courseID id.ID, note string) error {
+	return s.review(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		rev, err := c.Approve(s.ids.New(), p.UserID, note, s.clock.Now())
+		if err != nil {
+			return err
+		}
+		return r.Courses.InsertReview(ctx, rev)
+	})
+}
+
+func (s *CourseService) RequestChanges(ctx context.Context, p auth.Principal, courseID id.ID, note string) error {
+	return s.review(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		rev, err := c.RequestChanges(s.ids.New(), p.UserID, note, s.clock.Now())
+		if err != nil {
+			return err
+		}
+		return r.Courses.InsertReview(ctx, rev)
+	})
+}
+
+func (s *CourseService) Unpublish(ctx context.Context, p auth.Principal, courseID id.ID, note string) error {
+	return s.review(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		now := s.clock.Now()
+		rev, err := c.Unpublish(s.ids.New(), p.UserID, note, now)
+		if err != nil {
+			return err
+		}
+		if err := r.Courses.InsertReview(ctx, rev); err != nil {
+			return err
+		}
+		return r.Events.Publish(ctx, domain.CourseUnpublished{CourseID: c.ID, OwnerID: c.OwnerID, OccurredAt: now})
+	})
+}
+
+// review is mutate restricted to reviewers. Only root admins review courses.
+func (s *CourseService) review(ctx context.Context, p auth.Principal, courseID id.ID, fn func(r Repos, c *domain.Course) error) error {
+	_, err := s.mutate(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		if p.Role != auth.RoleRootAdmin {
+			return ErrForbidden
+		}
+		return fn(r, c)
+	})
+	return err
+}
+
+// ListReviews returns the course's review trail, oldest first, to its managers.
+func (s *CourseService) ListReviews(ctx context.Context, p auth.Principal, courseID id.ID) ([]domain.Review, error) {
+	var out []domain.Review
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		if _, err := loadManaged(ctx, r, p, courseID); err != nil {
+			return err
+		}
+		var err error
+		out, err = r.Courses.ListReviews(ctx, courseID)
+		return err
+	})
+	return out, err
+}
+
+// ListInReview returns the review queue, longest waiting first. Root admins only.
+func (s *CourseService) ListInReview(ctx context.Context, p auth.Principal) ([]domain.Course, error) {
+	if p.Role != auth.RoleRootAdmin {
+		return nil, ErrForbidden
+	}
+	var cs []domain.Course
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		var err error
+		cs, err = r.Courses.ListInReview(ctx)
+		return err
+	})
+	return cs, err
 }
 
 func (s *CourseService) Archive(ctx context.Context, p auth.Principal, courseID id.ID) error {

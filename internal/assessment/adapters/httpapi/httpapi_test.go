@@ -34,11 +34,12 @@ type stub struct {
 	in                          app.QuizInput
 	answers                     []app.AnswerInput
 	key                         string
+	version                     int
 	called                      string
 }
 
-func (s *stub) List(_ context.Context, p auth.Principal, courseID, lectureID id.ID) ([]domain.Quiz, error) {
-	s.called, s.principal, s.courseID, s.lectureID = "list", p, courseID, lectureID
+func (s *stub) List(_ context.Context, p auth.Principal, courseID, lectureID id.ID, version int) ([]domain.Quiz, error) {
+	s.called, s.principal, s.courseID, s.lectureID, s.version = "list", p, courseID, lectureID, version
 	return s.quizzes, s.err
 }
 
@@ -100,13 +101,13 @@ func problemType(t *testing.T, b []byte) string {
 }
 
 func sampleQuiz() domain.Quiz {
-	return domain.Quiz{ID: 7, CourseID: 10, LectureID: 50, Position: 1, CreatedAt: t0, UpdatedAt: t0, Questions: []domain.Question{{
+	return domain.Quiz{ID: 7, CourseID: 10, LectureID: 50, Position: 1, Revision: 1, CreatedAt: t0, UpdatedAt: t0, Questions: []domain.Question{{
 		ID: 71, Prompt: "2+2?", Type: domain.QuestionSingleChoice, Explanation: "arith", Points: 3, ReferenceLectureID: 51,
 		Options: []domain.Option{{ID: 72, Label: "4", IsCorrect: true}, {ID: 73, Label: "5"}},
 	}}}
 }
 
-const quizJSON = `{"id":"7","lecture_id":"50","position":1,"questions":[{"id":"71","prompt":"2+2?","type":"single_choice",` +
+const quizJSON = `{"id":"7","lecture_id":"50","position":1,"revision":1,"questions":[{"id":"71","prompt":"2+2?","type":"single_choice",` +
 	`"options":[{"id":"72","label":"4"},{"id":"73","label":"5"}],"correct_option_ids":["72"],"explanation":"arith"}]}`
 
 func TestListWire(t *testing.T) {
@@ -115,12 +116,26 @@ func TestListWire(t *testing.T) {
 	if code != http.StatusOK || strings.TrimSpace(string(body)) != "["+quizJSON+"]" {
 		t.Fatalf("code=%d body=%s", code, body)
 	}
-	if s.courseID != 10 || s.lectureID != 50 || s.principal.UserID != 200 {
+	if s.courseID != 10 || s.lectureID != 50 || s.principal.UserID != 200 || s.version != 0 {
 		t.Fatalf("stub=%+v", s)
 	}
 	code, body = call(newServer(&stub{}), "GET", "/v1/courses/10/lectures/50/quizzes", "")
 	if code != http.StatusOK || strings.TrimSpace(string(body)) != "[]" {
 		t.Fatalf("empty: code=%d body=%s", code, body)
+	}
+}
+
+func TestListVersionParam(t *testing.T) {
+	s := &stub{}
+	for _, bad := range []string{"?version=0", "?version=-1", "?version=abc"} {
+		code, _ := call(newServer(s), "GET", "/v1/courses/10/lectures/50/quizzes"+bad, "")
+		if code != http.StatusBadRequest {
+			t.Errorf("%s: code=%d, want 400", bad, code)
+		}
+	}
+	code, _ := call(newServer(s), "GET", "/v1/courses/10/lectures/50/quizzes?version=2", "")
+	if code != http.StatusOK || s.version != 2 {
+		t.Fatalf("version 2: code=%d, version=%d", code, s.version)
 	}
 }
 

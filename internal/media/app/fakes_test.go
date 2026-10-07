@@ -121,6 +121,7 @@ func (f *fakeRemote) Delivery(context.Context, id.ID) (app.Delivery, error) {
 type fakeAccess struct {
 	archived bool
 	read     map[[2]id.ID]error
+	usage    map[id.ID][]id.ID
 }
 
 func (f fakeAccess) CanManage(_ context.Context, p auth.Principal, courseID id.ID) error {
@@ -141,6 +142,10 @@ func (f fakeAccess) CanReadLectureAsset(_ context.Context, _ auth.Principal, _, 
 		return err
 	}
 	return app.ErrNotFound
+}
+
+func (f fakeAccess) AssetUsage(_ context.Context, _, assetID id.ID) ([]id.ID, error) {
+	return f.usage[assetID], nil
 }
 
 func testIDs(t *testing.T) *id.Generator {

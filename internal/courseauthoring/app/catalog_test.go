@@ -28,6 +28,10 @@ func putCourse(t *testing.T, store *memStore, cid id.ID, status domain.Status, l
 		t.Fatal(err)
 	}
 	c.Status = status
+	if status == domain.StatusPublished {
+		c.LastVersion, c.Live = 1, domain.LiveVersion{Number: 1, PublishedAt: now}
+		store.versions[versionKey{cid, 1}] = snapshot{course: c}
+	}
 	store.courses[cid] = c
 }
 

@@ -26,7 +26,7 @@ func newQuizFixture(t *testing.T) contentFixture {
 		{777, foreignQuiz}:        4242,
 	}
 	f.contents = app.NewContentService(f.store, testIDs(t), enrolled{}, assetCatalog{}, cat)
-	f.courses = app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, assetCatalog{}, cat)
+	f.courses = app.NewCourseService(f.store, testIDs(t), fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}, assetCatalog{}, cat, &fakeAssessments{heads: map[id.ID][]domain.AssessmentPin{}})
 	return f
 }
 
@@ -89,7 +89,7 @@ func TestQuizReferenceDoesNotPreemptAuthorization(t *testing.T) {
 	if err := f.contents.Replace(ctx, otherInstr, f.course.ID, f.locked, foreign, app.LegacyContent{}); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("draft: %v", err)
 	}
-	if err := f.courses.Publish(ctx, owner, f.course.ID); err != nil {
+	if err := publish(f.courses, f.course.ID); err != nil {
 		t.Fatal(err)
 	}
 	if err := f.contents.Replace(ctx, student, f.course.ID, f.locked, foreign, app.LegacyContent{}); !errors.Is(err, app.ErrForbidden) {
@@ -111,7 +111,7 @@ func TestCheckLectureManage(t *testing.T) {
 	if err := f.courses.CheckLectureManage(ctx, otherInstr, f.course.ID, f.locked); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("other on draft: %v", err)
 	}
-	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	_ = publish(f.courses, f.course.ID)
 	if err := f.courses.CheckLectureManage(ctx, otherInstr, f.course.ID, f.locked); !errors.Is(err, app.ErrForbidden) {
 		t.Fatalf("other on published: %v", err)
 	}
@@ -126,7 +126,7 @@ func TestCheckLectureRead(t *testing.T) {
 	if err := f.contents.CheckLectureRead(ctx, student, f.course.ID, f.free); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("draft: %v", err)
 	}
-	_ = f.courses.Publish(ctx, owner, f.course.ID)
+	_ = publish(f.courses, f.course.ID)
 	if err := f.contents.CheckLectureRead(ctx, student, f.course.ID, f.free); err != nil {
 		t.Fatalf("free preview: %v", err)
 	}

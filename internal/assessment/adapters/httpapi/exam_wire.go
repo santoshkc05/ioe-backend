@@ -1,8 +1,6 @@
 package httpapi
 
 import (
-	"maps"
-	"slices"
 	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/assessment/app"
@@ -81,15 +79,8 @@ type examWire struct {
 	CourseID id.ID `json:"course_id"`
 	examSettingsWire
 	Position  int                `json:"position"`
+	Revision  int                `json:"revision"`
 	Questions []examQuestionWire `json:"questions"`
-}
-
-type locksWire struct {
-	HasOpenAttempts       bool    `json:"has_open_attempts"`
-	HasSubmittedAttempts  bool    `json:"has_submitted_attempts"`
-	AnsweredQuestionIDs   []id.ID `json:"answered_question_ids"`
-	OpenAttemptCount      int     `json:"open_attempt_count"`
-	SubmittedAttemptCount int     `json:"submitted_attempt_count"`
 }
 
 type examAuthoringWire struct {
@@ -97,8 +88,8 @@ type examAuthoringWire struct {
 	CourseID id.ID `json:"course_id"`
 	examSettingsWire
 	Position  int                         `json:"position"`
+	Revision  int                         `json:"revision"`
 	Status    string                      `json:"status"`
-	Locks     locksWire                   `json:"locks"`
 	Questions []examAuthoringQuestionWire `json:"questions"`
 }
 
@@ -106,6 +97,7 @@ type examAuthoringSummaryWire struct {
 	ID id.ID `json:"id"`
 	examSettingsWire
 	Position      int    `json:"position"`
+	Revision      int    `json:"revision"`
 	Status        string `json:"status"`
 	QuestionCount int    `json:"question_count"`
 	TotalPoints   int    `json:"total_points"`
@@ -115,6 +107,7 @@ type examSummaryWire struct {
 	ID id.ID `json:"id"`
 	examSettingsWire
 	Position      int    `json:"position"`
+	Revision      int    `json:"revision"`
 	QuestionCount int    `json:"question_count"`
 	TotalPoints   int    `json:"total_points"`
 	Availability  string `json:"availability"`
@@ -137,6 +130,7 @@ type examAttemptWire struct {
 	ID            id.ID            `json:"id"`
 	CourseID      id.ID            `json:"course_id"`
 	ExamID        id.ID            `json:"exam_id"`
+	Revision      int              `json:"revision"`
 	UserID        id.ID            `json:"user_id"`
 	StartedAt     time.Time        `json:"started_at"`
 	Deadline      *time.Time       `json:"deadline,omitempty"`
@@ -175,6 +169,7 @@ type reviewQuestionWire struct {
 type reviewWire struct {
 	AttemptID     id.ID                `json:"attempt_id"`
 	ExamID        id.ID                `json:"exam_id"`
+	Revision      int                  `json:"revision"`
 	Title         string               `json:"title"`
 	Score         int                  `json:"score"`
 	Passed        bool                 `json:"passed"`
@@ -216,19 +211,12 @@ func toExamQuestionWire(q domain.Question) examQuestionWire {
 
 func toExamWire(e domain.Exam) examWire {
 	return examWire{ID: e.ID, CourseID: e.CourseID, examSettingsWire: toSettingsWire(e), Position: e.Position,
-		Questions: mapSlice(e.Questions, toExamQuestionWire)}
+		Revision: e.Revision, Questions: mapSlice(e.Questions, toExamQuestionWire)}
 }
 
-func toExamAuthoringWire(d app.ExamDetail) examAuthoringWire {
-	e, l := d.Exam, d.Locks
-	answered := slices.Sorted(maps.Keys(l.AnsweredQuestionIDs))
-	if answered == nil {
-		answered = []id.ID{}
-	}
+func toExamAuthoringWire(e domain.Exam) examAuthoringWire {
 	return examAuthoringWire{ID: e.ID, CourseID: e.CourseID, examSettingsWire: toSettingsWire(e), Position: e.Position,
-		Status: string(e.Status),
-		Locks: locksWire{HasOpenAttempts: l.OpenAttempts > 0, HasSubmittedAttempts: l.SubmittedAttempts > 0,
-			AnsweredQuestionIDs: answered, OpenAttemptCount: l.OpenAttempts, SubmittedAttemptCount: l.SubmittedAttempts},
+		Revision: e.Revision, Status: string(e.Status),
 		Questions: mapSlice(e.Questions, func(q domain.Question) examAuthoringQuestionWire {
 			return examAuthoringQuestionWire{examQuestionWire: toExamQuestionWire(q), CorrectOptionIDs: q.CorrectOptionIDs(),
 				Explanation: q.Explanation}
@@ -236,13 +224,15 @@ func toExamAuthoringWire(d app.ExamDetail) examAuthoringWire {
 }
 
 func toExamAuthoringSummaryWire(e domain.Exam) examAuthoringSummaryWire {
-	return examAuthoringSummaryWire{ID: e.ID, examSettingsWire: toSettingsWire(e), Position: e.Position, Status: string(e.Status),
+	return examAuthoringSummaryWire{ID: e.ID, examSettingsWire: toSettingsWire(e), Position: e.Position,
+		Revision: e.Revision, Status: string(e.Status),
 		QuestionCount: len(e.Questions), TotalPoints: e.TotalPoints()}
 }
 
 func toExamSummaryWire(s app.StudentExam) examSummaryWire {
 	e := s.Exam
-	return examSummaryWire{ID: e.ID, examSettingsWire: toSettingsWire(e), Position: e.Position, QuestionCount: len(e.Questions),
+	return examSummaryWire{ID: e.ID, examSettingsWire: toSettingsWire(e), Position: e.Position,
+		Revision: e.Revision, QuestionCount: len(e.Questions),
 		TotalPoints: e.TotalPoints(), Availability: string(s.Availability), OpenAttemptID: refPtr(s.OpenAttemptID),
 		BestScore: s.BestScore, BestPassed: s.BestPassed, AttemptCount: s.AttemptCount}
 }
@@ -267,7 +257,7 @@ func nonNilIDs(ids []id.ID) []id.ID {
 // the attempt is graded.
 func toExamAttemptWire(d app.AttemptDetail) examAttemptWire {
 	a, e := d.Attempt, d.Exam
-	w := examAttemptWire{ID: a.ID, CourseID: a.CourseID, ExamID: a.ExamID, UserID: a.UserID, StartedAt: a.StartedAt,
+	w := examAttemptWire{ID: a.ID, CourseID: a.CourseID, ExamID: a.ExamID, Revision: a.Revision, UserID: a.UserID, StartedAt: a.StartedAt,
 		Deadline: a.Deadline(e), SubmittedAt: a.SubmittedAt, Score: a.Score, Passed: a.Passed, AutoSubmitted: a.AutoSubmitted,
 		Answers: []examAnswerWire{}}
 	byQuestion := answersByQuestion(a)
@@ -296,7 +286,7 @@ func toExamAttemptSummaryWire(a domain.ExamAttempt) examAttemptSummaryWire {
 // added after the attempt was graded have no graded answer and are left out.
 func toReviewWire(d app.AttemptDetail) reviewWire {
 	a, e := d.Attempt, d.Exam
-	w := reviewWire{AttemptID: a.ID, ExamID: e.ID, Title: e.Title, Score: *a.Score, Passed: *a.Passed, PassMark: e.PassMark,
+	w := reviewWire{AttemptID: a.ID, ExamID: e.ID, Revision: e.Revision, Title: e.Title, Score: *a.Score, Passed: *a.Passed, PassMark: e.PassMark,
 		SubmittedAt: *a.SubmittedAt, AutoSubmitted: a.AutoSubmitted, Questions: []reviewQuestionWire{}}
 	byQuestion := answersByQuestion(a)
 	for i, q := range e.Questions {

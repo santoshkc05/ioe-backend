@@ -270,3 +270,12 @@ func TestCheckReveal(t *testing.T) {
 		t.Fatalf("at close: %v", err)
 	}
 }
+
+func TestNewExamAttemptCopiesRevision(t *testing.T) {
+	e := examDraft(t)
+	e.Revision = 3
+	a := domain.NewExamAttempt(9, e, 200, time.Date(2026, 10, 7, 9, 0, 0, 0, time.UTC))
+	if a.Revision != 3 {
+		t.Fatalf("revision = %d, want 3", a.Revision)
+	}
+}
