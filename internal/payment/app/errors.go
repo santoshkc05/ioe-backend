@@ -10,4 +10,5 @@ var (
 	ErrGatewayUnavailable     = errors.New("payment gateway unavailable")
 	ErrConcurrentModification = errors.New("concurrent modification")
 	ErrInvalidInput           = errors.New("invalid input")
+	ErrForbidden              = errors.New("forbidden")
 )

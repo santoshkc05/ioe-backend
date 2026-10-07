@@ -84,7 +84,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	courses, contents := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess,
 		mediaAssetCatalog{query: mediaapp.NewAssetQuery(mediaAssets)}, assessmentQ, assessmentHeads{query: assessmentQ}, identityHandler, ips, logger)
 	enrollments := registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
-	payments := registerPayment(router, pool, courses, enrollmentAccess, enrollments, ids, clk, cfg, identityHandler.RequireAuth, logger)
+	payments := registerPayment(router, pool, courses, identityUsers{svc: identity}, enrollmentAccess, enrollments, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
 	registerMedia(router, mediaAssets, courses, contents, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerAssessment(router, assessmentTx, courses, contents, enrollmentAccess, ids, clk, identityHandler.RequireAuth, logger)

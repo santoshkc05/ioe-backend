@@ -58,7 +58,8 @@ func newFixture(t *testing.T) fixture {
 		paidCourse:  {Published: true, Title: "Go", Price: price},
 		draftCourse: {Published: false, Title: "Draft", Price: price},
 	}
-	f.svc = app.NewService(f.store, courses, f.enroll, map[string]app.Gateway{"esewa": f.gw}, ids, f.clock,
+	f.svc = app.NewService(f.store, courses, fakeUsers{admin.UserID: true, student.UserID: true, other.UserID: true, third.UserID: true},
+		f.enroll, map[string]app.Gateway{"esewa": f.gw}, ids, f.clock,
 		slog.New(slog.NewTextHandler(f.logs, nil)))
 	return f
 }
@@ -369,5 +370,135 @@ func TestReconcileContinuesPastGatewayErrors(t *testing.T) {
 	}
 	if f.gw.statusCalls != 2 {
 		t.Fatalf("status calls = %d", f.gw.statusCalls)
+	}
+}
+
+var cashInput = app.ManualInput{UserID: 200, CourseID: paidCourse, AmountMinor: 100000, Currency: "NPR",
+	Method: domain.MethodCash, Reference: "R-1", Note: "desk"}
+
+func TestRecordManualCreatesPaidPurchaseAndGrants(t *testing.T) {
+	f := newFixture(t)
+	p, err := f.svc.RecordManual(ctx, admin, cashInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != domain.StatusPaid || p.Gateway != domain.GatewayManual || p.GrantedAt.IsZero() ||
+		p.Price != (domain.Money{AmountMinor: 100000, Currency: "NPR"}) || p.CourseTitle != "Go" ||
+		p.RecordedBy != admin.UserID || p.GatewayTxn != "R-1" || p.ManualMethod != "cash" {
+		t.Fatalf("purchase = %+v", p)
+	}
+	if !f.enroll.enrolled[[2]id.ID{paidCourse, student.UserID}] {
+		t.Fatal("not enrolled")
+	}
+	if got := eventNames(f.store.published); len(got) != 1 || got[0] != "payment.purchase.paid" {
+		t.Fatalf("events = %v", got)
+	}
+}
+
+func TestRecordManualAllowsAlreadyEnrolled(t *testing.T) {
+	f := newFixture(t)
+	f.enroll.enrolled[[2]id.ID{paidCourse, student.UserID}] = true
+	if _, err := f.svc.RecordManual(ctx, admin, cashInput); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRecordManualRejects(t *testing.T) {
+	with := func(f func(*app.ManualInput)) app.ManualInput { in := cashInput; f(&in); return in }
+	cases := []struct {
+		name  string
+		p     auth.Principal
+		in    app.ManualInput
+		setup func(f fixture)
+		want  error
+	}{
+		{"not admin", student, cashInput, nil, app.ErrForbidden},
+		{"missing course", admin, with(func(in *app.ManualInput) { in.CourseID = 999 }), nil, app.ErrNotFound},
+		{"unpublished", admin, with(func(in *app.ManualInput) { in.CourseID = draftCourse }), nil, app.ErrNotFound},
+		{"free course", admin, with(func(in *app.ManualInput) { in.CourseID = freeCourse }), nil, app.ErrCourseFree},
+		{"currency mismatch", admin, with(func(in *app.ManualInput) { in.Currency = "USD" }), nil, app.ErrInvalidInput},
+		{"unknown user", admin, with(func(in *app.ManualInput) { in.UserID = 999 }), nil, app.ErrNotFound},
+		{"zero amount", admin, with(func(in *app.ManualInput) { in.AmountMinor = 0 }), nil, app.ErrInvalidInput},
+		{"bad method", admin, with(func(in *app.ManualInput) { in.Method = "cheque" }), nil, app.ErrInvalidInput},
+		{"blank reference", admin, with(func(in *app.ManualInput) { in.Reference = "  " }), nil, app.ErrInvalidInput},
+		{"already purchased", admin, cashInput, func(f fixture) {
+			f.store.rows[5] = domain.Purchase{ID: 5, UserID: student.UserID, CourseID: paidCourse, Price: price,
+				Gateway: "esewa", GatewayRef: "5", GatewayTxn: "T", Status: domain.StatusPaid, CreatedAt: t0, SettledAt: t0, Version: 1}
+		}, app.ErrAlreadyPurchased},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			f := newFixture(t)
+			if c.setup != nil {
+				c.setup(f)
+			}
+			before := len(f.store.rows)
+			if _, err := f.svc.RecordManual(ctx, c.p, c.in); !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+			if len(f.store.rows) != before || len(f.store.published) != 0 || f.enroll.grants != 0 {
+				t.Fatalf("rows=%d events=%v grants=%d", len(f.store.rows), f.store.published, f.enroll.grants)
+			}
+		})
+	}
+}
+
+func TestRecordManualGrantFailureIsReconciled(t *testing.T) {
+	f := newFixture(t)
+	f.enroll.grantErr = errors.New("enrollment down")
+	p, err := f.svc.RecordManual(ctx, admin, cashInput)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !p.GrantedAt.IsZero() {
+		t.Fatal("granted despite failure")
+	}
+	f.enroll.grantErr = nil
+	// Confirm on a manual purchase never reaches a gateway; "manual" is not registered.
+	if got, err := f.svc.Confirm(ctx, student, p.ID); err != nil || got.GrantedAt.IsZero() {
+		t.Fatalf("confirm = %+v, %v", got, err)
+	}
+	f.store.rows[p.ID] = func() domain.Purchase { q := f.store.get(p.ID); q.GrantedAt = time.Time{}; return q }()
+	if err := f.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.store.get(p.ID).GrantedAt.IsZero() || f.gw.statusCalls != 0 {
+		t.Fatalf("reconcile: %+v statusCalls=%d", f.store.get(p.ID), f.gw.statusCalls)
+	}
+}
+
+func TestListByUserPagesNewestFirst(t *testing.T) {
+	f := newFixture(t)
+	var ids []id.ID
+	for range 3 {
+		ids = append(ids, f.checkout(t, student).ID)
+	}
+	f.checkout(t, other)
+	page, next, err := f.svc.ListByUser(ctx, student, student.UserID, 0, 2)
+	if err != nil || len(page) != 2 || page[0].ID != ids[2] || page[1].ID != ids[1] || next != ids[1] {
+		t.Fatalf("page=%v next=%v err=%v", page, next, err)
+	}
+	page, next, err = f.svc.ListByUser(ctx, student, student.UserID, next, 2)
+	if err != nil || len(page) != 1 || page[0].ID != ids[0] || next != 0 {
+		t.Fatalf("last page=%v next=%v err=%v", page, next, err)
+	}
+	if page, next, err = f.svc.ListByUser(ctx, admin, 999, 0, 20); err != nil || len(page) != 0 || next != 0 {
+		t.Fatalf("unknown user page=%v next=%v err=%v", page, next, err)
+	}
+}
+
+func TestListByUserAccess(t *testing.T) {
+	f := newFixture(t)
+	f.checkout(t, student)
+	if _, _, err := f.svc.ListByUser(ctx, other, student.UserID, 0, 20); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("other err = %v", err)
+	}
+	if page, _, err := f.svc.ListByUser(ctx, admin, student.UserID, 0, 20); err != nil || len(page) != 1 {
+		t.Fatalf("admin page=%v err=%v", page, err)
+	}
+	for _, limit := range []int{0, 51} {
+		if _, _, err := f.svc.ListByUser(ctx, student, student.UserID, 0, limit); !errors.Is(err, app.ErrInvalidInput) {
+			t.Fatalf("limit %d err = %v", limit, err)
+		}
 	}
 }

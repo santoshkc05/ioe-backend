@@ -60,7 +60,7 @@ func (e paymentEnrollments) GrantPurchased(ctx context.Context, courseID, userID
 
 // registerPayment mounts payment routes and returns the service the reconciler runs. Without
 // eSewa settings the routes still exist and checkout answers 503 payment_unavailable.
-func registerPayment(r *httpserver.Router, pool *pgxpool.Pool, courses *courseauthoringapp.CourseService, access *enrollmentapp.AccessQuery, enrollments *enrollmentapp.Service, ids *id.Generator, clk clock.Clock, cfg config.Config, requireAuth httpserver.Middleware, logger *slog.Logger) *paymentapp.Service {
+func registerPayment(r *httpserver.Router, pool *pgxpool.Pool, courses *courseauthoringapp.CourseService, users paymentapp.UserDirectory, access *enrollmentapp.AccessQuery, enrollments *enrollmentapp.Service, ids *id.Generator, clk clock.Clock, cfg config.Config, requireAuth httpserver.Middleware, logger *slog.Logger) *paymentapp.Service {
 	gateways := map[string]paymentapp.Gateway{}
 	if cfg.EsewaEnabled() {
 		gateways[esewa.Name] = esewa.New(esewa.Config{
@@ -73,7 +73,7 @@ func registerPayment(r *httpserver.Router, pool *pgxpool.Pool, courses *courseau
 	} else {
 		logger.Warn("payments disabled: ESEWA_PRODUCT_CODE, ESEWA_SECRET_KEY, ESEWA_FORM_URL, ESEWA_STATUS_URL and PAYMENT_RETURN_URL are not set")
 	}
-	svc := paymentapp.NewService(paymentpg.NewTxRunner(pool), paymentCourseCatalog{courses: courses},
+	svc := paymentapp.NewService(paymentpg.NewTxRunner(pool), paymentCourseCatalog{courses: courses}, users,
 		paymentEnrollments{access: access, svc: enrollments}, gateways, ids, clk, logger)
 	paymenthttp.New(svc, paymenthttp.Config{RequireAuth: requireAuth, Logger: logger}).Register(r)
 	return svc

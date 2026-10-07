@@ -20,12 +20,15 @@ const (
 	stalePending = 24 * time.Hour
 	// reconcilePage bounds one ListUnsettled read.
 	reconcilePage = 50
+	// maxPage bounds one ListByUser page.
+	maxPage = 50
 )
 
 // Service implements the payment use cases.
 type Service struct {
 	tx       TxRunner
 	courses  CourseCatalog
+	users    UserDirectory
 	enroll   EnrollmentGranter
 	gateways map[string]Gateway
 	ids      *id.Generator
@@ -34,8 +37,8 @@ type Service struct {
 }
 
 // NewService keys gateways by name; an unconfigured gateway is simply absent.
-func NewService(tx TxRunner, courses CourseCatalog, enroll EnrollmentGranter, gateways map[string]Gateway, ids *id.Generator, c clock.Clock, logger *slog.Logger) *Service {
-	return &Service{tx: tx, courses: courses, enroll: enroll, gateways: gateways, ids: ids, clock: c, logger: logger}
+func NewService(tx TxRunner, courses CourseCatalog, users UserDirectory, enroll EnrollmentGranter, gateways map[string]Gateway, ids *id.Generator, c clock.Clock, logger *slog.Logger) *Service {
+	return &Service{tx: tx, courses: courses, users: users, enroll: enroll, gateways: gateways, ids: ids, clock: c, logger: logger}
 }
 
 // Checkout starts a new purchase of a published paid course and returns how to reach the
@@ -264,4 +267,98 @@ func (s *Service) warnIfDuplicate(ctx context.Context, p domain.Purchase) {
 		s.logger.WarnContext(ctx, "duplicate paid purchase needs a manual refund",
 			"purchase_id", p.ID, "user_id", p.UserID, "course_id", p.CourseID, "paid_count", n)
 	}
+}
+
+// ListByUser returns userID's purchases, newest first, below the before cursor. The caller must
+// be that user or a root admin; anyone else gets ErrNotFound. next is zero on the last page.
+func (s *Service) ListByUser(ctx context.Context, p auth.Principal, userID, before id.ID, limit int) ([]domain.Purchase, id.ID, error) {
+	if p.UserID != userID && p.Role != auth.RoleRootAdmin {
+		return nil, 0, ErrNotFound
+	}
+	if limit < 1 || limit > maxPage {
+		return nil, 0, fmt.Errorf("%w: limit must be between 1 and %d", ErrInvalidInput, maxPage)
+	}
+	var page []domain.Purchase
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		var err error
+		page, err = r.Purchases.ListByUser(ctx, userID, before, limit+1)
+		return err
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	if len(page) <= limit {
+		return page, 0, nil
+	}
+	page = page[:limit]
+	return page, page[limit-1].ID, nil
+}
+
+// ManualInput is an offline payment a root admin records for a user.
+type ManualInput struct {
+	UserID      id.ID
+	CourseID    id.ID
+	AmountMinor int64
+	Currency    string
+	Method      string
+	Reference   string
+	Note        string
+}
+
+// RecordManual records a payment made outside any gateway as a paid purchase and enrolls the
+// buyer. Only a root admin may record one. An existing enrollment does not block it.
+func (s *Service) RecordManual(ctx context.Context, p auth.Principal, in ManualInput) (domain.Purchase, error) {
+	if p.Role != auth.RoleRootAdmin {
+		return domain.Purchase{}, ErrForbidden
+	}
+	c, err := s.courses.CourseFacts(ctx, in.CourseID)
+	if err != nil {
+		return domain.Purchase{}, err
+	}
+	if !c.Published {
+		return domain.Purchase{}, ErrNotFound
+	}
+	if c.Price.AmountMinor == 0 {
+		return domain.Purchase{}, ErrCourseFree
+	}
+	if in.Currency != c.Price.Currency {
+		return domain.Purchase{}, fmt.Errorf("%w: currency must be %s", ErrInvalidInput, c.Price.Currency)
+	}
+	exists, err := s.users.UserExists(ctx, in.UserID)
+	if err != nil {
+		return domain.Purchase{}, err
+	}
+	if !exists {
+		return domain.Purchase{}, ErrNotFound
+	}
+	var purchase domain.Purchase
+	err = s.tx.RunInTx(ctx, func(r Repos) error {
+		paid, err := r.Purchases.CountPaid(ctx, in.UserID, in.CourseID)
+		if err != nil {
+			return err
+		}
+		if paid > 0 {
+			return ErrAlreadyPurchased
+		}
+		var ev domain.Event
+		purchase, ev, err = domain.RecordManualPurchase(s.ids.New(), in.UserID, in.CourseID, c.Title,
+			domain.Money{AmountMinor: in.AmountMinor, Currency: in.Currency},
+			domain.ManualPayment{Method: in.Method, Reference: in.Reference, Note: in.Note, RecordedBy: p.UserID},
+			s.clock.Now())
+		if errors.Is(err, domain.ErrFreePrice) || errors.Is(err, domain.ErrInvalidPurchase) {
+			return fmt.Errorf("%w: %w", ErrInvalidInput, err)
+		}
+		if err != nil {
+			return err
+		}
+		if err := r.Purchases.Insert(ctx, &purchase); err != nil {
+			return err
+		}
+		return r.Events.Publish(ctx, ev)
+	})
+	if err != nil {
+		return domain.Purchase{}, err
+	}
+	// The purchase is paid, so settle skips the gateway and only grants.
+	return s.settle(ctx, purchase)
 }

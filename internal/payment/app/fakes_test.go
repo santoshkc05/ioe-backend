@@ -173,3 +173,7 @@ func (t *memTx) ListByUser(_ context.Context, userID, before id.ID, limit int) (
 	}
 	return out, nil
 }
+
+type fakeUsers map[id.ID]bool
+
+func (u fakeUsers) UserExists(_ context.Context, userID id.ID) (bool, error) { return u[userID], nil }

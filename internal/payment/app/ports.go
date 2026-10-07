@@ -40,6 +40,11 @@ type TxRunner interface {
 	RunInTx(ctx context.Context, fn func(Repos) error) error
 }
 
+// UserDirectory is backed by identity.
+type UserDirectory interface {
+	UserExists(ctx context.Context, userID id.ID) (bool, error)
+}
+
 // CourseFacts is what payment knows about a course. A zero Price.AmountMinor means free.
 type CourseFacts struct {
 	Published bool
