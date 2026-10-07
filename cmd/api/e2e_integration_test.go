@@ -1513,3 +1513,111 @@ func TestAssessmentVersioningEndToEnd(t *testing.T) {
 		return firstPrompt(mine) == "3+3?"
 	})
 }
+
+func TestManualPaymentEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+
+	type sentEmail struct{ key, recipient, subject string }
+	sent := make(chan sentEmail, 8)
+	notify := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Recipient string `json:"recipient"`
+			Subject   string `json:"subject"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		sent <- sentEmail{key: r.Header.Get("Idempotency-Key"), recipient: body.Recipient, subject: body.Subject}
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer notify.Close()
+	cfg := baseConfig(t, google)
+	cfg.NotificationServiceBaseURL = notify.URL
+	cfg.NotificationServiceSendAPIKey = notifyKey
+	a, err := buildApp(ctx, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	go func() { _ = a.forwarder.Run(ctx) }()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	signIn := func(sub, email string) map[string]string {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return map[string]string{"Authorization": "Bearer " + body["access_token"].(string)}
+	}
+	admin := signIn("sub-admin", "admin@example.com")
+	student := signIn("sub-student", "student@example.com")
+	_, me := c.do(http.MethodGet, "/v1/me", "", student)
+	studentID := me["id"].(string)
+
+	resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("create: %d %v", resp.StatusCode, body)
+	}
+	courseID := body["id"].(string)
+	if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/price", `{"amount_minor":150000,"currency":"NPR"}`, admin); resp.StatusCode != http.StatusOK {
+		t.Fatalf("price: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"L1","text_body":"<p>x</p>"}`, admin)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+	}
+	lectures := body["lectures"].([]any)
+	lectureID := lectures[len(lectures)-1].(map[string]any)["id"].(string)
+	if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("publish: %d", resp.StatusCode)
+	}
+
+	record := `{"course_id":"` + courseID + `","amount_minor":120000,"currency":"NPR","method":"cash","reference":"R-77","note":"desk"}`
+	if resp, body = c.do(http.MethodPost, "/v1/users/"+studentID+"/purchases", record, student); resp.StatusCode != http.StatusForbidden || body["type"] != "forbidden" {
+		t.Fatalf("student record: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/users/"+studentID+"/purchases", record, admin)
+	if p := body["purchase"].(map[string]any); resp.StatusCode != http.StatusCreated || p["status"] != "paid" || p["granted"] != true ||
+		p["manual_method"] != "cash" || p["reference"] != "R-77" || p["course_title"] != "Go" {
+		t.Fatalf("record: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/users/"+studentID+"/purchases", record, admin); resp.StatusCode != http.StatusConflict || body["type"] != "already_purchased" {
+		t.Fatalf("second record: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content", "", student); resp.StatusCode != http.StatusOK {
+		t.Fatalf("read after manual payment: %d", resp.StatusCode)
+	}
+
+	resp, body = c.do(http.MethodGet, "/v1/me/purchases", "", student)
+	items, _ := body["items"].([]any)
+	if resp.StatusCode != http.StatusOK || len(items) != 1 || items[0].(map[string]any)["amount_minor"] != float64(120000) {
+		t.Fatalf("my purchases: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodGet, "/v1/users/"+studentID+"/purchases", "", admin); resp.StatusCode != http.StatusOK || len(body["items"].([]any)) != 1 {
+		t.Fatalf("admin list: %d %v", resp.StatusCode, body)
+	}
+	_, adminMe := c.do(http.MethodGet, "/v1/me", "", admin)
+	if resp, _ = c.do(http.MethodGet, "/v1/users/"+adminMe["id"].(string)+"/purchases", "", student); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("student reads admin list: %d", resp.StatusCode)
+	}
+
+	deadline := time.After(30 * time.Second)
+	for {
+		select {
+		case got := <-sent:
+			if !strings.HasPrefix(got.key, "ioe:payment.purchase.paid:") {
+				continue // welcome emails
+			}
+			if got.recipient != "student@example.com" || got.subject != "Payment received: Go" || !strings.HasSuffix(got.key, ":paid-v1") {
+				t.Fatalf("paid email %+v", got)
+			}
+			return
+		case <-deadline:
+			t.Fatal("paid email not enqueued")
+		}
+	}
+}
