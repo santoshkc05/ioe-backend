@@ -199,14 +199,19 @@ student visibility directly; it appends a revision with the new `status`.
 Courseauthoring calls `AssessmentHeads`, then, in the submit transaction:
 
 - re-checks every block's media and quiz references with `checkAssetRefs` and `checkQuizRefs`,
-  failing with 422 `invalid_media_reference` / `invalid_quiz_reference`;
+  failing with 400 `invalid_media_reference` / `invalid_quiz_reference`;
 - replaces `course_submitted_assessments` with the heads.
 
 ### Publish
 
-Inside the existing publish transaction, after `InsertVersion`, courseauthoring copies
-`course_submitted_assessments` into `course_version_assessments` for the new version number.
-Assessment is not called.
+Inside the existing publish transaction, after `InsertVersion`, courseauthoring writes the new
+version's pins to `course_version_assessments`:
+
+- A course that was `in_review` or `approved` publishes `course_submitted_assessments`, so what
+  goes live is what was reviewed.
+- A reviewer publishing a `draft` or `changes_requested` course directly (the existing reviewer
+  bypass) has no submission; courseauthoring calls `AssessmentHeads` before the transaction and
+  pins those.
 
 ### Reading
 
@@ -254,8 +259,8 @@ version never references a missing asset.
 |---|---|---|
 | 409 | `course_not_editable` | Quiz or exam edit while the course is `in_review`, `approved` or `archived`. |
 | 409 | `asset_in_use` | Deleting an asset referenced by the working copy or the live version. |
-| 422 | `invalid_quiz_reference` | Submit with a block referencing a deleted, missing or foreign quiz. |
-| 422 | `invalid_media_reference` | Submit with a block referencing a missing or wrongly-kinded asset. |
+| 400 | `invalid_quiz_reference` | Submit with a block referencing a deleted, missing or foreign quiz. |
+| 400 | `invalid_media_reference` | Submit with a block referencing a missing or wrongly-kinded asset. |
 | 404 | `not_found` | Student reads a quiz or exam not pinned by the live version. |
 
 Outbox handler failures retry; the handler is idempotent.
