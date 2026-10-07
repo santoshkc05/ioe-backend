@@ -28,6 +28,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/notifysvc"
 	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/templates"
 	notificationapp "github.com/santoshkc2200/ioe-backend/internal/notification/app"
+	paymentapp "github.com/santoshkc2200/ioe-backend/internal/payment/app"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/config"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/httpserver"
@@ -40,6 +41,7 @@ const serviceName = "ioe-backend"
 type application struct {
 	handler   http.Handler
 	forwarder *outbox.Forwarder
+	payments  *paymentapp.Service
 }
 
 // buildApp wires every bounded context. ctx bounds background work such as JWKS refresh.
@@ -79,7 +81,8 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	assessmentTx := assessmentpg.NewTxRunner(pool)
 	courses, contents := registerCourseAuthoring(router, pool, ids, clk, enrollmentAccess,
 		mediaAssetCatalog{query: mediaapp.NewAssetQuery(mediaAssets)}, assessmentapp.NewQuizQuery(assessmentTx), identityHandler, ips, logger)
-	registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
+	enrollments := registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
+	payments := registerPayment(router, pool, courses, enrollmentAccess, enrollments, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
 	registerMedia(router, mediaAssets, courses, contents, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerAssessment(router, assessmentTx, courses, contents, enrollmentAccess, ids, clk, identityHandler.RequireAuth, logger)
@@ -91,7 +94,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err := registerNotifications(fw, cfg, logger); err != nil {
 		return nil, errors.Join(err, fw.Close())
 	}
-	return &application{handler: handler, forwarder: fw}, nil
+	return &application{handler: handler, forwarder: fw, payments: payments}, nil
 }
 
 // registerNotifications subscribes the notification context to the events it consumes.

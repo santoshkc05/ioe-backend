@@ -43,6 +43,24 @@ in a published course, free or paid, and list a course's roster with
 `GET /v1/courses/{courseID}/enrollments`. Enrolled students read every lecture of a published
 course. A student, the owner, or a root admin cancels with `DELETE` on the same path.
 
+## Payments
+
+Students buy paid courses through eSewa ePay (sandbox only for now).
+`POST /v1/courses/{courseID}/purchases` with `{"gateway":"esewa"}` creates a pending purchase
+and returns `checkout: {method, url, fields}`; the frontend builds a form from it and submits
+it. eSewa sends the buyer back to `{PAYMENT_RETURN_URL}/payments/{purchaseID}/return`, and that
+page calls `POST /v1/purchases/{purchaseID}/confirm`. The backend never trusts the redirect: it
+asks eSewa's status API and enrolls the buyer once the payment is `COMPLETE`. A background
+reconciler settles purchases older than 15 minutes every 5 minutes, so a buyer who closes the
+tab after paying is still enrolled. Refunds are made by hand in the eSewa merchant portal; a
+manager then cancels the enrollment.
+
+Configure `ESEWA_PRODUCT_CODE`, `ESEWA_SECRET_KEY`, `ESEWA_FORM_URL`, `ESEWA_STATUS_URL` and
+`PAYMENT_RETURN_URL`, or none of them to disable payments. `.env.example` carries eSewa's
+published sandbox values. To try the sandbox by hand, run the backend and frontend, buy a paid
+course, and pay with one of the eSewa test accounts listed at
+https://developer.esewa.com.np/pages/Epay (password and OTP are on that page).
+
 ## Progress
 
 Enrolled students record per-lecture progress with

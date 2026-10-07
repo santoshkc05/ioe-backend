@@ -112,6 +112,10 @@ func serve(parent context.Context) error {
 		}
 		return nil
 	})
+	g.Go(func() error {
+		runReconciler(gctx, a.payments, logger)
+		return nil
+	})
 	err = g.Wait()
 	logger.InfoContext(context.WithoutCancel(ctx), "server stopped")
 	return err

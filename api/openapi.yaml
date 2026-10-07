@@ -1514,6 +1514,83 @@ paths:
         "409": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/purchases:
+    post:
+      summary: Start buying a course
+      description: >
+        Creates a pending purchase of a published paid course at its current price and returns
+        the form the browser posts to the payment gateway. Every call creates a new purchase.
+        409 `course_free` for a free course, `already_enrolled` when the caller is actively
+        enrolled, `already_purchased` when the caller already paid for it. 503
+        `payment_unavailable` when the gateway is not configured or cannot be reached.
+        Non-published courses are 404.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CheckoutRequest" }
+      responses:
+        "201":
+          description: The pending purchase and the gateway form
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CheckoutResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/purchases/{purchaseID}/confirm:
+    post:
+      summary: Settle a purchase with its gateway
+      description: >
+        The buyer or a root admin. Asks the gateway for the purchase's status, records it, and
+        enrolls the buyer once paid. The frontend calls this from
+        `/payments/{purchaseID}/return` after the gateway redirects back, on success or failure.
+        Safe to repeat. 503 `payment_unavailable` when the gateway cannot be reached; the
+        purchase is then settled later by the server.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/PurchaseID"
+      responses:
+        "200":
+          description: The purchase after settlement
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseResponse" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "503": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/purchases/{purchaseID}:
+    get:
+      summary: Read a purchase
+      description: The buyer or a root admin; anyone else gets 404.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/PurchaseID"
+      responses:
+        "200":
+          description: The purchase
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseResponse" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -1573,6 +1650,11 @@ components:
       schema: { $ref: "#/components/schemas/ID" }
     AttemptID:
       name: attemptID
+      in: path
+      required: true
+      schema: { $ref: "#/components/schemas/ID" }
+    PurchaseID:
+      name: purchaseID
       in: path
       required: true
       schema: { $ref: "#/components/schemas/ID" }
@@ -1744,6 +1826,46 @@ components:
       type: object
       properties:
         reason: { type: string, maxLength: 500 }
+    CheckoutRequest:
+      type: object
+      required: [gateway]
+      properties:
+        gateway: { type: string, enum: [esewa] }
+    Purchase:
+      type: object
+      required: [id, course_id, user_id, amount_minor, currency, gateway, status, created_at, settled_at, granted]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        course_id: { $ref: "#/components/schemas/ID" }
+        user_id: { $ref: "#/components/schemas/ID" }
+        amount_minor: { type: integer, format: int64, minimum: 1, description: Price snapshot in the currency's minor unit }
+        currency: { type: string, description: ISO 4217 code }
+        gateway: { type: string, enum: [esewa] }
+        status: { type: string, enum: [pending, paid, failed] }
+        created_at: { type: string, format: date-time }
+        settled_at: { type: [string, "null"], format: date-time, description: Null while pending }
+        granted: { type: boolean, description: True once the buyer is enrolled }
+    Checkout:
+      type: object
+      required: [method, url, fields]
+      properties:
+        method: { type: string, enum: [POST] }
+        url: { type: string, format: uri, description: Gateway form action }
+        fields:
+          type: object
+          additionalProperties: { type: string }
+          description: Form fields to post unchanged, including the signature
+    CheckoutResponse:
+      type: object
+      required: [purchase, checkout]
+      properties:
+        purchase: { $ref: "#/components/schemas/Purchase" }
+        checkout: { $ref: "#/components/schemas/Checkout" }
+    PurchaseResponse:
+      type: object
+      required: [purchase]
+      properties:
+        purchase: { $ref: "#/components/schemas/Purchase" }
     RecordLectureProgressRequest:
       type: object
       required: [state]
@@ -2081,6 +2203,11 @@ components:
             - edit_add_during_attempt
             - edit_question_answered
             - edit_key_frozen
+            - payment_required
+            - course_free
+            - already_enrolled
+            - already_purchased
+            - payment_unavailable
         title: { type: string }
         status: { type: integer }
         detail: { type: string }

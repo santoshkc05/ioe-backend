@@ -30,9 +30,9 @@ func (c courseCatalog) CourseFacts(ctx context.Context, courseID id.ID) (enrollm
 	return enrollmentdomain.CourseFacts{Published: f.Published, Free: f.Free, OwnerID: f.OwnerID}, nil
 }
 
-func registerEnrollment(r *httpserver.Router, tx enrollmentapp.TxRunner, courses *courseauthoringapp.CourseService, ids *id.Generator, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) {
-	enrollmenthttp.New(
-		enrollmentapp.NewService(tx, courseCatalog{courses: courses}, ids, clk),
-		enrollmenthttp.Config{RequireAuth: requireAuth, Logger: logger},
-	).Register(r)
+// registerEnrollment mounts enrollment and returns its service for contexts that grant access.
+func registerEnrollment(r *httpserver.Router, tx enrollmentapp.TxRunner, courses *courseauthoringapp.CourseService, ids *id.Generator, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) *enrollmentapp.Service {
+	svc := enrollmentapp.NewService(tx, courseCatalog{courses: courses}, ids, clk)
+	enrollmenthttp.New(svc, enrollmenthttp.Config{RequireAuth: requireAuth, Logger: logger}).Register(r)
+	return svc
 }

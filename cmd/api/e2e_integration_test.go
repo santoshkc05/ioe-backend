@@ -1123,3 +1123,204 @@ func TestExamsEndToEnd(t *testing.T) {
 		t.Fatalf("expired attempt: %d %v", resp.StatusCode, body)
 	}
 }
+
+// fakeEsewa answers eSewa status requests from a status map keyed by transaction_uuid.
+type fakeEsewa struct {
+	mu     sync.Mutex
+	status map[string]string
+}
+
+func (f *fakeEsewa) set(ref, status string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status[ref] = status
+}
+
+func (f *fakeEsewa) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	ref := q.Get("transaction_uuid")
+	f.mu.Lock()
+	status, ok := f.status[ref]
+	f.mu.Unlock()
+	if !ok {
+		status = "NOT_FOUND"
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = fmt.Fprintf(w, `{"product_code":%q,"transaction_uuid":%q,"total_amount":%s,"status":%q,"ref_id":"REF-%s"}`,
+		q.Get("product_code"), ref, q.Get("total_amount"), status, ref)
+}
+
+func esewaConfig(cfg config.Config, statusURL string) config.Config {
+	cfg.EsewaProductCode = "EPAYTEST"
+	cfg.EsewaSecretKey = "8gBm/:&EnhH.1/q"
+	cfg.EsewaFormURL = "https://rc-epay.esewa.com.np/api/epay/main/v2/form"
+	cfg.EsewaStatusURL = statusURL
+	cfg.PaymentReturnURL = appOrigin
+	return cfg
+}
+
+func TestPaymentEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	fake := &fakeEsewa{status: map[string]string{}}
+	esewaSrv := httptest.NewServer(fake)
+	defer esewaSrv.Close()
+	cfg := esewaConfig(baseConfig(t, google), esewaSrv.URL+"/api/epay/transaction/status/")
+	a, err := buildApp(ctx, cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) string {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string)
+	}
+	admin := bearer(signIn("sub-admin", "admin@example.com"))
+	student := bearer(signIn("sub-student", "student@example.com"))
+	stranger := bearer(signIn("sub-stranger", "stranger@example.com"))
+
+	publish := func(priced bool) (string, string) {
+		t.Helper()
+		resp, body := c.do(http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("create: %d %v", resp.StatusCode, body)
+		}
+		courseID := body["id"].(string)
+		if priced {
+			if resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/price", `{"amount_minor":150000,"currency":"NPR"}`, admin); resp.StatusCode != http.StatusOK {
+				t.Fatalf("price: %d %v", resp.StatusCode, body)
+			}
+		}
+		resp, body = c.do(http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"L1","text_body":"<p>x</p>"}`, admin)
+		if resp.StatusCode != http.StatusCreated {
+			t.Fatalf("lecture: %d %v", resp.StatusCode, body)
+		}
+		lectures := body["lectures"].([]any)
+		lectureID := lectures[len(lectures)-1].(map[string]any)["id"].(string)
+		if resp, _ = c.do(http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin); resp.StatusCode != http.StatusNoContent {
+			t.Fatalf("publish: %d", resp.StatusCode)
+		}
+		return courseID, lectureID
+	}
+	read := func(who map[string]string, courseID, lectureID string) int {
+		resp, _ := c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content", "", who)
+		return resp.StatusCode
+	}
+	checkout := func(who map[string]string, courseID string) (*http.Response, map[string]any) {
+		return c.do(http.MethodPost, "/v1/courses/"+courseID+"/purchases", `{"gateway":"esewa"}`, who)
+	}
+
+	freeID, _ := publish(false)
+	if resp, body := checkout(student, freeID); resp.StatusCode != http.StatusConflict || body["type"] != "course_free" {
+		t.Fatalf("free checkout: %d %v", resp.StatusCode, body)
+	}
+
+	courseID, lectureID := publish(true)
+	resp, body := checkout(student, courseID)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("checkout: %d %v", resp.StatusCode, body)
+	}
+	purchase := body["purchase"].(map[string]any)
+	form := body["checkout"].(map[string]any)
+	fields := form["fields"].(map[string]any)
+	purchaseID := purchase["id"].(string)
+	if purchase["status"] != "pending" || purchase["amount_minor"] != float64(150000) || form["method"] != "POST" ||
+		form["url"] != "https://rc-epay.esewa.com.np/api/epay/main/v2/form" || fields["total_amount"] != "1500" ||
+		fields["transaction_uuid"] != purchaseID || fields["success_url"] != appOrigin+"/payments/"+purchaseID+"/return" ||
+		fields["signature"] == "" {
+		t.Fatalf("checkout body = %v", body)
+	}
+	if code := read(student, courseID, lectureID); code != http.StatusForbidden {
+		t.Fatalf("read before paying: %d", code)
+	}
+
+	confirm := func(who map[string]string, id string) (*http.Response, map[string]any) {
+		return c.do(http.MethodPost, "/v1/purchases/"+id+"/confirm", "", who)
+	}
+	fake.set(purchaseID, "PENDING")
+	if resp, body = confirm(student, purchaseID); resp.StatusCode != http.StatusOK || body["purchase"].(map[string]any)["status"] != "pending" {
+		t.Fatalf("pending confirm: %d %v", resp.StatusCode, body)
+	}
+	fake.set(purchaseID, "COMPLETE")
+	resp, body = confirm(student, purchaseID)
+	if p := body["purchase"].(map[string]any); resp.StatusCode != http.StatusOK || p["status"] != "paid" || p["granted"] != true {
+		t.Fatalf("complete confirm: %d %v", resp.StatusCode, body)
+	}
+	if code := read(student, courseID, lectureID); code != http.StatusOK {
+		t.Fatalf("read after paying: %d", code)
+	}
+	if resp, body = checkout(student, courseID); resp.StatusCode != http.StatusConflict || body["type"] != "already_enrolled" {
+		t.Fatalf("second checkout: %d %v", resp.StatusCode, body)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/purchases/"+purchaseID, "", stranger); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("stranger get: %d", resp.StatusCode)
+	}
+	if resp, _ = c.do(http.MethodGet, "/v1/purchases/"+purchaseID, "", admin); resp.StatusCode != http.StatusOK {
+		t.Fatalf("admin get: %d", resp.StatusCode)
+	}
+
+	// The stranger pays but never comes back; the reconciler enrolls them.
+	resp, body = checkout(stranger, courseID)
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("stranger checkout: %d %v", resp.StatusCode, body)
+	}
+	strangerPurchase := body["purchase"].(map[string]any)["id"].(string)
+	fake.set(strangerPurchase, "COMPLETE")
+	strangerPurchaseID, err := strconv.ParseInt(strangerPurchase, 10, 64)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, "UPDATE payment.purchases SET created_at = created_at - interval '1 hour' WHERE id = $1", strangerPurchaseID); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.payments.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if code := read(stranger, courseID, lectureID); code != http.StatusOK {
+		t.Fatalf("stranger read after reconcile: %d", code)
+	}
+
+	var initiated, paid int
+	if err := pool.QueryRow(ctx, `SELECT
+		count(*) FILTER (WHERE payload->>'destination_topic' = 'payment.purchase.initiated'),
+		count(*) FILTER (WHERE payload->>'destination_topic' = 'payment.purchase.paid')
+		FROM platform.outbox_messages`).Scan(&initiated, &paid); err != nil {
+		t.Fatal(err)
+	}
+	if initiated != 2 || paid != 2 {
+		t.Fatalf("initiated=%d paid=%d", initiated, paid)
+	}
+}
+
+func TestPaymentsDisabledReturn503(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	tok := google.Sign(t, googletest.Claims("sub-student", "student@example.com", "web-client", time.Now()))
+	_, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+	headers := map[string]string{"Authorization": "Bearer " + body["access_token"].(string)}
+	resp, body := c.do(http.MethodPost, "/v1/courses/1/purchases", `{"gateway":"esewa"}`, headers)
+	if resp.StatusCode != http.StatusServiceUnavailable || body["type"] != "payment_unavailable" {
+		t.Fatalf("disabled checkout: %d %v", resp.StatusCode, body)
+	}
+}
