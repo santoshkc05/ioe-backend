@@ -19,3 +19,8 @@ regexes = ['''Complexpass#123''']
 description = "Local-only media service credentials used by docker compose and .env.example"
 regexTarget = "secret"
 regexes = ['''local-media-api-key-change-me-32-bytes''', '''local-media-delivery-secret-change-me-32''', '''media-local-dev''']
+
+[[allowlists]]
+description = "eSewa's publicly documented ePay sandbox secret (product code EPAYTEST), used by .env.example, tests and docs"
+regexTarget = "secret"
+regexes = ['''8gBm/:&EnhH\.1/q''']

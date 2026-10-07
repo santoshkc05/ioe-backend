@@ -216,3 +216,63 @@ func TestMediaConfigRejectsInvalidValues(t *testing.T) {
 		})
 	}
 }
+
+// esewaSandboxKey is eSewa's published ePay sandbox secret for product code EPAYTEST.
+const esewaSandboxKey = "8gBm/:&EnhH.1/q"
+
+func esewaEnv() map[string]string {
+	env := validEnv()
+	env["ESEWA_PRODUCT_CODE"] = "EPAYTEST"
+	env["ESEWA_SECRET_KEY"] = esewaSandboxKey
+	env["ESEWA_FORM_URL"] = "https://rc-epay.esewa.com.np/api/epay/main/v2/form"
+	env["ESEWA_STATUS_URL"] = "https://rc.esewa.com.np/api/epay/transaction/status/"
+	env["PAYMENT_RETURN_URL"] = "http://localhost:5173"
+	return env
+}
+
+func TestEsewaDisabledByDefault(t *testing.T) {
+	cfg, err := config.LoadFrom(validEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.EsewaEnabled() {
+		t.Fatal("eSewa enabled without configuration")
+	}
+}
+
+func TestEsewaEnabled(t *testing.T) {
+	cfg, err := config.LoadFrom(esewaEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.EsewaEnabled() || cfg.EsewaProductCode != "EPAYTEST" || cfg.EsewaSecretKey != esewaSandboxKey ||
+		cfg.EsewaFormURL != "https://rc-epay.esewa.com.np/api/epay/main/v2/form" ||
+		cfg.EsewaStatusURL != "https://rc.esewa.com.np/api/epay/transaction/status/" || cfg.PaymentReturnURL != "http://localhost:5173" {
+		t.Fatalf("cfg = %+v", cfg)
+	}
+}
+
+func TestEsewaConfigRejectsInvalidValues(t *testing.T) {
+	cases := []struct {
+		name, key, value, want string
+	}{
+		{"missing secret", "ESEWA_SECRET_KEY", "", "ESEWA_SECRET_KEY: required"},
+		{"missing return url", "PAYMENT_RETURN_URL", "", "PAYMENT_RETURN_URL: required"},
+		{"bad form url", "ESEWA_FORM_URL", "ftp://esewa.test/form", "ESEWA_FORM_URL"},
+		{"status url with query", "ESEWA_STATUS_URL", "https://esewa.test/status/?x=1", "ESEWA_STATUS_URL"},
+		{"relative return url", "PAYMENT_RETURN_URL", "/payments", "PAYMENT_RETURN_URL"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			env := esewaEnv()
+			env[c.key] = c.value
+			_, err := config.LoadFrom(env)
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Fatalf("err = %v, want %q", err, c.want)
+			}
+			if strings.Contains(err.Error(), esewaSandboxKey) {
+				t.Fatalf("error leaks the secret: %v", err)
+			}
+		})
+	}
+}

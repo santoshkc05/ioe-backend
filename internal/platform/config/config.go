@@ -37,6 +37,11 @@ type Config struct {
 	MediaServiceBaseURL           string   `env:"MEDIA_SERVICE_BASE_URL"`
 	MediaServicePublicURL         string   `env:"MEDIA_SERVICE_PUBLIC_URL"`
 	MediaServiceAPIKey            string   `env:"MEDIA_SERVICE_API_KEY"`
+	EsewaProductCode              string   `env:"ESEWA_PRODUCT_CODE"`
+	EsewaSecretKey                string   `env:"ESEWA_SECRET_KEY"`
+	EsewaFormURL                  string   `env:"ESEWA_FORM_URL"`
+	EsewaStatusURL                string   `env:"ESEWA_STATUS_URL"`
+	PaymentReturnURL              string   `env:"PAYMENT_RETURN_URL"`
 }
 
 // Load reads the process environment.
@@ -92,6 +97,10 @@ func (c Config) NotificationsEnabled() bool { return c.NotificationServiceBaseUR
 // LoadFrom guarantees that all three media variables are set or none is.
 func (c Config) MediaEnabled() bool { return c.MediaServiceBaseURL != "" }
 
+// EsewaEnabled reports whether the eSewa gateway is configured.
+// LoadFrom guarantees that all five eSewa variables are set or none is.
+func (c Config) EsewaEnabled() bool { return c.EsewaProductCode != "" }
+
 func (c *Config) normalize() {
 	c.GoogleClientIDs = cleanList(c.GoogleClientIDs)
 	c.AllowedOrigins = cleanList(c.AllowedOrigins)
@@ -128,6 +137,7 @@ func (c *Config) validate() error {
 	}
 	errs = append(errs, c.validateNotifications()...)
 	errs = append(errs, c.validateMedia()...)
+	errs = append(errs, c.validateEsewa()...)
 	return errors.Join(errs...)
 }
 
@@ -151,14 +161,11 @@ func (c *Config) validateNotifications() []error {
 	return errs
 }
 
-const minMediaAPIKeyLen = 32
+type envVar struct{ name, value string }
 
-func (c *Config) validateMedia() []error {
-	vars := []struct{ name, value string }{
-		{"MEDIA_SERVICE_BASE_URL", c.MediaServiceBaseURL},
-		{"MEDIA_SERVICE_PUBLIC_URL", c.MediaServicePublicURL},
-		{"MEDIA_SERVICE_API_KEY", c.MediaServiceAPIKey},
-	}
+// allOrNone reports whether any of vars is set and, when some but not all are, one error per
+// missing variable.
+func allOrNone(vars []envVar) (bool, []error) {
 	var set, missing []string
 	for _, v := range vars {
 		if v.value == "" {
@@ -168,13 +175,24 @@ func (c *Config) validateMedia() []error {
 		}
 	}
 	if len(set) == 0 {
-		return nil
+		return false, nil
 	}
 	var errs []error
 	for _, name := range missing {
 		errs = append(errs, fmt.Errorf("%s: required when %s is set", name, strings.Join(set, " and ")))
 	}
-	if len(errs) > 0 {
+	return true, errs
+}
+
+const minMediaAPIKeyLen = 32
+
+func (c *Config) validateMedia() []error {
+	set, errs := allOrNone([]envVar{
+		{"MEDIA_SERVICE_BASE_URL", c.MediaServiceBaseURL},
+		{"MEDIA_SERVICE_PUBLIC_URL", c.MediaServicePublicURL},
+		{"MEDIA_SERVICE_API_KEY", c.MediaServiceAPIKey},
+	})
+	if !set || len(errs) > 0 {
 		return errs
 	}
 	if !isBaseURL(c.MediaServiceBaseURL) {
@@ -185,6 +203,30 @@ func (c *Config) validateMedia() []error {
 	}
 	if len(c.MediaServiceAPIKey) < minMediaAPIKeyLen {
 		errs = append(errs, fmt.Errorf("MEDIA_SERVICE_API_KEY: must be at least %d characters", minMediaAPIKeyLen))
+	}
+	return errs
+}
+
+// validateEsewa never echoes ESEWA_SECRET_KEY.
+func (c *Config) validateEsewa() []error {
+	set, errs := allOrNone([]envVar{
+		{"ESEWA_PRODUCT_CODE", c.EsewaProductCode},
+		{"ESEWA_SECRET_KEY", c.EsewaSecretKey},
+		{"ESEWA_FORM_URL", c.EsewaFormURL},
+		{"ESEWA_STATUS_URL", c.EsewaStatusURL},
+		{"PAYMENT_RETURN_URL", c.PaymentReturnURL},
+	})
+	if !set || len(errs) > 0 {
+		return errs
+	}
+	for _, v := range []envVar{
+		{"ESEWA_FORM_URL", c.EsewaFormURL},
+		{"ESEWA_STATUS_URL", c.EsewaStatusURL},
+		{"PAYMENT_RETURN_URL", c.PaymentReturnURL},
+	} {
+		if !isBaseURL(v.value) {
+			errs = append(errs, fmt.Errorf("%s: %q is not an absolute http(s) URL without query or fragment", v.name, v.value))
+		}
 	}
 	return errs
 }
