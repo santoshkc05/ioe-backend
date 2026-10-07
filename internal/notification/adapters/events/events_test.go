@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ThreeDotsLabs/watermill/message"
 	"go.opentelemetry.io/otel/metric/noop"
@@ -20,11 +21,20 @@ type fakeSender struct {
 	calls int
 	in    app.WelcomeInput
 	err   error
+
+	paidCalls int
+	paid      app.PurchasePaidInput
 }
 
 func (f *fakeSender) SendWelcome(_ context.Context, in app.WelcomeInput) error {
 	f.calls++
 	f.in = in
+	return f.err
+}
+
+func (f *fakeSender) SendPurchasePaid(_ context.Context, in app.PurchasePaidInput) error {
+	f.paidCalls++
+	f.paid = in
 	return f.err
 }
 
@@ -92,5 +102,44 @@ func TestWelcomeReturnsRetryableFailure(t *testing.T) {
 	h, _ := newHandlers(t, &fakeSender{err: errDown})
 	if err := h.Welcome(message.NewMessage("ev-1", []byte(`{"email":"a@example.com"}`))); !errors.Is(err, errDown) {
 		t.Fatalf("err = %v, want %v", err, errDown)
+	}
+}
+
+const paidPayload = `{"purchase_id":"9","user_id":"200","course_id":"11","course_title":"Go","amount_minor":150000,
+"currency":"NPR","gateway":"manual","gateway_txn":"R-1","manual_method":"cash","occurred_at":"2026-10-07T04:15:00Z"}`
+
+func TestPurchasePaidSends(t *testing.T) {
+	s := &fakeSender{}
+	h, _ := newHandlers(t, s)
+	if err := h.PurchasePaid(message.NewMessage("ev-9", []byte(paidPayload))); err != nil {
+		t.Fatal(err)
+	}
+	want := app.PurchasePaidInput{EventID: "ev-9", UserID: "200", CourseID: "11", CourseTitle: "Go", AmountMinor: 150000,
+		Currency: "NPR", Gateway: "manual", ManualMethod: "cash", PaidAt: time.Date(2026, 10, 7, 4, 15, 0, 0, time.UTC)}
+	if s.paidCalls != 1 || s.paid != want {
+		t.Fatalf("calls=%d in=%+v", s.paidCalls, s.paid)
+	}
+}
+
+func TestPurchasePaidDropsInvalidPayloadAndPermanentFailure(t *testing.T) {
+	s := &fakeSender{}
+	h, logs := newHandlers(t, s)
+	if err := h.PurchasePaid(message.NewMessage("ev-1", []byte("not json"))); err != nil || s.paidCalls != 0 {
+		t.Fatalf("err=%v calls=%d", err, s.paidCalls)
+	}
+	s.err = fmt.Errorf("%w: unknown user", app.ErrPermanent)
+	if err := h.PurchasePaid(message.NewMessage("ev-2", []byte(paidPayload))); err != nil {
+		t.Fatalf("permanent err = %v", err)
+	}
+	if !strings.Contains(logs.String(), "invalid_payload") || !strings.Contains(logs.String(), "permanent") {
+		t.Fatalf("logs = %s", logs)
+	}
+}
+
+func TestPurchasePaidReturnsRetryableFailure(t *testing.T) {
+	errDown := errors.New("down")
+	h, _ := newHandlers(t, &fakeSender{err: errDown})
+	if err := h.PurchasePaid(message.NewMessage("ev-1", []byte(paidPayload))); !errors.Is(err, errDown) {
+		t.Fatalf("err = %v", err)
 	}
 }

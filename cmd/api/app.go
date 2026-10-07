@@ -30,6 +30,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/notification/adapters/templates"
 	notificationapp "github.com/santoshkc2200/ioe-backend/internal/notification/app"
 	paymentapp "github.com/santoshkc2200/ioe-backend/internal/payment/app"
+	paymentdomain "github.com/santoshkc2200/ioe-backend/internal/payment/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/clock"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/config"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/httpserver"
@@ -118,6 +119,7 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, users notifi
 		return err
 	}
 	fw.Handle(identitydomain.UserRegistered{}.EventName(), handlers.Welcome)
+	fw.Handle(paymentdomain.PurchasePaid{}.EventName(), handlers.PurchasePaid)
 	return nil
 }
 
