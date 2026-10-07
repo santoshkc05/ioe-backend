@@ -54,7 +54,7 @@ tests. The copied folder is then deleted.
 | Pagination | Public list and sitemap index both use keyset pagination on `(first_published_at DESC, post_id DESC)` with an opaque `next_cursor`, like the course catalog. `first_published_at` never changes, so republishing does not reorder pages. |
 | Rate limits | Public routes use `httpserver.RateLimiter` per client IP (120 per minute), like the course catalog. Content writes are limited per user and post (60 per minute), like lecture content. |
 | Patch validation | The client-block-ID set checks behind content PATCH move from `courseauthoring/app` into `platform/contentblocks`, so blog and course authoring share one implementation. |
-| Events | `blog.post_published` and `blog.post_unpublished` written to the outbox in the state-change transaction. No consumers yet. |
+| Events | `blog.post.published` and `blog.post.unpublished` written to the outbox in the state-change transaction. No consumers yet. |
 
 ## Architecture
 
