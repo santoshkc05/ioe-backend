@@ -165,7 +165,7 @@ func TestFacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	f, err := svc.Facts(ctx, c.ID)
-	if err != nil || f.Published || !f.Free || f.OwnerID != owner.UserID || f.LectureIDs == nil || len(f.LectureIDs) != 0 {
+	if err != nil || f.Published || !f.Free || !f.Price.IsFree() || f.OwnerID != owner.UserID || f.LectureIDs == nil || len(f.LectureIDs) != 0 {
 		t.Fatalf("draft facts = %+v, %v", f, err)
 	}
 	if _, err := svc.SetPrice(ctx, owner, c.ID, 150000, "NPR"); err != nil {
@@ -183,7 +183,8 @@ func TestFacts(t *testing.T) {
 	}
 	f, err = svc.Facts(ctx, c.ID)
 	want := []id.ID{withTwo.Lectures[0].ID, withTwo.Lectures[1].ID}
-	if err != nil || !f.Published || f.Free || f.OwnerID != owner.UserID || !slices.Equal(f.LectureIDs, want) {
+	if err != nil || !f.Published || f.Free || f.Price != (domain.Price{AmountMinor: 150000, Currency: "NPR"}) ||
+		f.OwnerID != owner.UserID || !slices.Equal(f.LectureIDs, want) {
 		t.Fatalf("published facts = %+v, %v; want lecture IDs %v", f, err, want)
 	}
 	if _, err := svc.Facts(ctx, 424242); !errors.Is(err, app.ErrNotFound) {

@@ -242,3 +242,60 @@ func TestAccessQuery(t *testing.T) {
 		t.Fatalf("canceled: %v %v", ok, err)
 	}
 }
+
+func TestEnrollPurchasedInPaidCourse(t *testing.T) {
+	f := newFixture(t)
+	if err := f.svc.EnrollPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.EnrollPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatalf("again: %v", err)
+	}
+	active, err := app.NewAccessQuery(f.store).IsActivelyEnrolled(ctx, paidCourse, student.UserID)
+	if err != nil || !active {
+		t.Fatalf("active=%v err=%v", active, err)
+	}
+	if len(f.store.published) != 1 {
+		t.Fatalf("events = %v", f.store.published)
+	}
+}
+
+func TestEnrollPurchasedReactivatesCanceled(t *testing.T) {
+	f := newFixture(t)
+	if err := f.svc.EnrollPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Cancel(ctx, student, paidCourse, student.UserID, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.EnrollPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.store.published) != 3 {
+		t.Fatalf("events = %v", f.store.published)
+	}
+	if _, ok := f.store.published[2].(domain.EnrollmentActivated); !ok {
+		t.Fatalf("last event = %#v", f.store.published[2])
+	}
+}
+
+func TestEnrollPurchasedIgnoresPublication(t *testing.T) {
+	f := newFixture(t)
+	if err := f.svc.EnrollPurchased(ctx, draftCourse, student.UserID); err != nil {
+		t.Fatalf("unpublished course: %v", err)
+	}
+	if err := f.svc.EnrollPurchased(ctx, 999, student.UserID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("missing course err = %v", err)
+	}
+}
+
+func TestEnrollPurchasedSurvivesConcurrentFirstEnrollment(t *testing.T) {
+	f := newFixture(t)
+	f.store.race = &domain.Enrollment{ID: 77, CourseID: paidCourse, UserID: student.UserID, Status: domain.StatusActive, EnrolledAt: t0, Version: 1}
+	if err := f.svc.EnrollPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.store.published) != 0 {
+		t.Fatalf("events = %v", f.store.published)
+	}
+}

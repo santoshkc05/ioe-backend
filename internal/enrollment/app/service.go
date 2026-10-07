@@ -38,9 +38,25 @@ func (s *Service) Enroll(ctx context.Context, p auth.Principal, courseID, userID
 	if err := domain.AuthorizeEnroll(p, c, userID); err != nil {
 		return domain.Enrollment{}, false, err
 	}
+	return s.enrollRetrying(ctx, courseID, userID)
+}
+
+// EnrollPurchased actively enrolls userID after the payment context confirmed a purchase.
+// It applies no principal check and does not require the course to still be published:
+// the buyer has paid. An already active enrollment is success.
+func (s *Service) EnrollPurchased(ctx context.Context, courseID, userID id.ID) error {
+	if _, err := s.courses.CourseFacts(ctx, courseID); err != nil {
+		return err
+	}
+	_, _, err := s.enrollRetrying(ctx, courseID, userID)
+	return err
+}
+
+// enrollRetrying runs enroll again when a concurrent first enrollment won the unique
+// constraint; that row is then visible.
+func (s *Service) enrollRetrying(ctx context.Context, courseID, userID id.ID) (domain.Enrollment, bool, error) {
 	e, activated, err := s.enroll(ctx, courseID, userID)
 	if errors.Is(err, ErrDuplicate) {
-		// A concurrent first enrollment won the unique constraint; its row is now visible.
 		e, activated, err = s.enroll(ctx, courseID, userID)
 	}
 	return e, activated, err

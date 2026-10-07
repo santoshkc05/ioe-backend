@@ -125,6 +125,7 @@ func (s *CourseService) Get(ctx context.Context, p auth.Principal, courseID id.I
 type CourseFacts struct {
 	Published  bool
 	Free       bool
+	Price      domain.Price
 	OwnerID    id.ID
 	LectureIDs []id.ID // course order; empty, never nil, when the course has no lectures
 }
@@ -142,7 +143,7 @@ func (s *CourseService) Facts(ctx context.Context, courseID id.ID) (CourseFacts,
 		for i, l := range c.Lectures {
 			lectureIDs[i] = l.ID
 		}
-		f = CourseFacts{Published: c.Status == domain.StatusPublished, Free: c.Price.IsFree(), OwnerID: c.OwnerID, LectureIDs: lectureIDs}
+		f = CourseFacts{Published: c.Status == domain.StatusPublished, Free: c.Price.IsFree(), Price: c.Price, OwnerID: c.OwnerID, LectureIDs: lectureIDs}
 		return nil
 	})
 	return f, err
