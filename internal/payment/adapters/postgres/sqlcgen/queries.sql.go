@@ -27,7 +27,7 @@ func (q *Queries) CountPaidPurchases(ctx context.Context, arg CountPaidPurchases
 }
 
 const getPurchase = `-- name: GetPurchase :one
-SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version FROM payment.purchases WHERE id = $1
+SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note FROM payment.purchases WHERE id = $1
 `
 
 func (q *Queries) GetPurchase(ctx context.Context, id int64) (PaymentPurchase, error) {
@@ -47,30 +47,38 @@ func (q *Queries) GetPurchase(ctx context.Context, id int64) (PaymentPurchase, e
 		&i.SettledAt,
 		&i.GrantedAt,
 		&i.Version,
+		&i.CourseTitle,
+		&i.ManualMethod,
+		&i.RecordedBy,
+		&i.Note,
 	)
 	return i, err
 }
 
 const insertPurchase = `-- name: InsertPurchase :exec
 INSERT INTO payment.purchases
-  (id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status,
-   created_at, settled_at, granted_at, version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1)
+  (id, user_id, course_id, course_title, amount_minor, currency, gateway, gateway_ref, gateway_txn, status,
+   created_at, settled_at, granted_at, manual_method, recorded_by, note, version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1)
 `
 
 type InsertPurchaseParams struct {
-	ID          int64
-	UserID      int64
-	CourseID    int64
-	AmountMinor int64
-	Currency    string
-	Gateway     string
-	GatewayRef  string
-	GatewayTxn  string
-	Status      string
-	CreatedAt   time.Time
-	SettledAt   *time.Time
-	GrantedAt   *time.Time
+	ID           int64
+	UserID       int64
+	CourseID     int64
+	CourseTitle  string
+	AmountMinor  int64
+	Currency     string
+	Gateway      string
+	GatewayRef   string
+	GatewayTxn   string
+	Status       string
+	CreatedAt    time.Time
+	SettledAt    *time.Time
+	GrantedAt    *time.Time
+	ManualMethod *string
+	RecordedBy   *int64
+	Note         string
 }
 
 func (q *Queries) InsertPurchase(ctx context.Context, arg InsertPurchaseParams) error {
@@ -78,6 +86,7 @@ func (q *Queries) InsertPurchase(ctx context.Context, arg InsertPurchaseParams) 
 		arg.ID,
 		arg.UserID,
 		arg.CourseID,
+		arg.CourseTitle,
 		arg.AmountMinor,
 		arg.Currency,
 		arg.Gateway,
@@ -87,12 +96,67 @@ func (q *Queries) InsertPurchase(ctx context.Context, arg InsertPurchaseParams) 
 		arg.CreatedAt,
 		arg.SettledAt,
 		arg.GrantedAt,
+		arg.ManualMethod,
+		arg.RecordedBy,
+		arg.Note,
 	)
 	return err
 }
 
+const listPurchasesByUser = `-- name: ListPurchasesByUser :many
+SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note FROM payment.purchases
+WHERE user_id = $1::bigint
+  AND ($2::bigint = 0 OR id < $2::bigint)
+ORDER BY id DESC
+LIMIT $3::bigint
+`
+
+type ListPurchasesByUserParams struct {
+	UserID    int64
+	BeforeID  int64
+	PageLimit int64
+}
+
+func (q *Queries) ListPurchasesByUser(ctx context.Context, arg ListPurchasesByUserParams) ([]PaymentPurchase, error) {
+	rows, err := q.db.Query(ctx, listPurchasesByUser, arg.UserID, arg.BeforeID, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PaymentPurchase
+	for rows.Next() {
+		var i PaymentPurchase
+		if err := rows.Scan(
+			&i.ID,
+			&i.UserID,
+			&i.CourseID,
+			&i.AmountMinor,
+			&i.Currency,
+			&i.Gateway,
+			&i.GatewayRef,
+			&i.GatewayTxn,
+			&i.Status,
+			&i.CreatedAt,
+			&i.SettledAt,
+			&i.GrantedAt,
+			&i.Version,
+			&i.CourseTitle,
+			&i.ManualMethod,
+			&i.RecordedBy,
+			&i.Note,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listUnsettledPurchases = `-- name: ListUnsettledPurchases :many
-SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version FROM payment.purchases
+SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note FROM payment.purchases
 WHERE id > $1::bigint
   AND ((status = 'pending' AND created_at < $2::timestamptz)
        OR (status = 'paid' AND granted_at IS NULL))
@@ -129,6 +193,10 @@ func (q *Queries) ListUnsettledPurchases(ctx context.Context, arg ListUnsettledP
 			&i.SettledAt,
 			&i.GrantedAt,
 			&i.Version,
+			&i.CourseTitle,
+			&i.ManualMethod,
+			&i.RecordedBy,
+			&i.Note,
 		); err != nil {
 			return nil, err
 		}

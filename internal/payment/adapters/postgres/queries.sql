@@ -12,11 +12,18 @@ WHERE id > sqlc.arg(after_id)::bigint
 ORDER BY id
 LIMIT sqlc.arg(page_limit)::bigint;
 
+-- name: ListPurchasesByUser :many
+SELECT * FROM payment.purchases
+WHERE user_id = sqlc.arg(user_id)::bigint
+  AND (sqlc.arg(before_id)::bigint = 0 OR id < sqlc.arg(before_id)::bigint)
+ORDER BY id DESC
+LIMIT sqlc.arg(page_limit)::bigint;
+
 -- name: InsertPurchase :exec
 INSERT INTO payment.purchases
-  (id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status,
-   created_at, settled_at, granted_at, version)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 1);
+  (id, user_id, course_id, course_title, amount_minor, currency, gateway, gateway_ref, gateway_txn, status,
+   created_at, settled_at, granted_at, manual_method, recorded_by, note, version)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1);
 
 -- name: UpdatePurchase :execrows
 UPDATE payment.purchases

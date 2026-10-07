@@ -38,11 +38,25 @@ func (r purchases) ListUnsettled(ctx context.Context, pendingBefore time.Time, a
 	if err != nil {
 		return nil, err
 	}
+	return toDomainAll(rows), nil
+}
+
+func (r purchases) ListByUser(ctx context.Context, userID, before id.ID, limit int) ([]domain.Purchase, error) {
+	rows, err := r.q.ListPurchasesByUser(ctx, sqlcgen.ListPurchasesByUserParams{
+		UserID: int64(userID), BeforeID: int64(before), PageLimit: int64(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	return toDomainAll(rows), nil
+}
+
+func toDomainAll(rows []sqlcgen.PaymentPurchase) []domain.Purchase {
 	out := make([]domain.Purchase, len(rows))
 	for i, row := range rows {
 		out[i] = toDomain(row)
 	}
-	return out, nil
+	return out
 }
 
 func (r purchases) Insert(ctx context.Context, p *domain.Purchase) error {
@@ -51,6 +65,8 @@ func (r purchases) Insert(ctx context.Context, p *domain.Purchase) error {
 		AmountMinor: p.Price.AmountMinor, Currency: p.Price.Currency, Gateway: p.Gateway,
 		GatewayRef: p.GatewayRef, GatewayTxn: p.GatewayTxn, Status: string(p.Status), CreatedAt: p.CreatedAt,
 		SettledAt: optionalTime(p.SettledAt), GrantedAt: optionalTime(p.GrantedAt),
+		CourseTitle: p.CourseTitle, ManualMethod: optionalString(p.ManualMethod),
+		RecordedBy: optionalID(p.RecordedBy), Note: p.Note,
 	})
 	if err != nil {
 		return err
@@ -80,6 +96,13 @@ func toDomain(r sqlcgen.PaymentPurchase) domain.Purchase {
 		Price:   domain.Money{AmountMinor: r.AmountMinor, Currency: r.Currency},
 		Gateway: r.Gateway, GatewayRef: r.GatewayRef, GatewayTxn: r.GatewayTxn,
 		Status: domain.Status(r.Status), CreatedAt: r.CreatedAt.UTC(), Version: r.Version,
+		CourseTitle: r.CourseTitle, Note: r.Note,
+	}
+	if r.ManualMethod != nil {
+		p.ManualMethod = *r.ManualMethod
+	}
+	if r.RecordedBy != nil {
+		p.RecordedBy = id.ID(*r.RecordedBy)
 	}
 	if r.SettledAt != nil {
 		p.SettledAt = r.SettledAt.UTC()
@@ -95,4 +118,19 @@ func optionalTime(t time.Time) *time.Time {
 		return nil
 	}
 	return &t
+}
+
+func optionalString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+func optionalID(v id.ID) *int64 {
+	if v == 0 {
+		return nil
+	}
+	n := int64(v)
+	return &n
 }

@@ -13,6 +13,9 @@ import (
 // Update returns ErrConcurrentModification when p.Version is stale and increments it on success.
 type Repository interface {
 	Find(ctx context.Context, purchaseID id.ID) (domain.Purchase, bool, error)
+	// ListByUser returns userID's purchases with an ID below before (no bound when before is
+	// zero), newest first, at most limit.
+	ListByUser(ctx context.Context, userID, before id.ID, limit int) ([]domain.Purchase, error)
 	CountPaid(ctx context.Context, userID, courseID id.ID) (int, error)
 	// ListUnsettled returns purchases with an ID above afterID that are pending and created
 	// before pendingBefore, or paid and not yet granted, in ID order.

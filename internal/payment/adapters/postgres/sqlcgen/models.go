@@ -277,19 +277,23 @@ type MediaAsset struct {
 }
 
 type PaymentPurchase struct {
-	ID          int64
-	UserID      int64
-	CourseID    int64
-	AmountMinor int64
-	Currency    string
-	Gateway     string
-	GatewayRef  string
-	GatewayTxn  string
-	Status      string
-	CreatedAt   time.Time
-	SettledAt   *time.Time
-	GrantedAt   *time.Time
-	Version     int64
+	ID           int64
+	UserID       int64
+	CourseID     int64
+	AmountMinor  int64
+	Currency     string
+	Gateway      string
+	GatewayRef   string
+	GatewayTxn   string
+	Status       string
+	CreatedAt    time.Time
+	SettledAt    *time.Time
+	GrantedAt    *time.Time
+	Version      int64
+	CourseTitle  string
+	ManualMethod *string
+	RecordedBy   *int64
+	Note         string
 }
 
 type PlatformOutboxMessage struct {

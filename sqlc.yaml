@@ -150,3 +150,11 @@ sql:
               import: time
               type: Time
               pointer: true
+          - column: payment.purchases.manual_method
+            go_type:
+              type: string
+              pointer: true
+          - column: payment.purchases.recorded_by
+            go_type:
+              type: int64
+              pointer: true

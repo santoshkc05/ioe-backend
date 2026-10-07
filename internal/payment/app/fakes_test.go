@@ -159,3 +159,17 @@ func (g *fakeGateway) FetchStatus(_ context.Context, p domain.Purchase) (app.Res
 	}
 	return g.results[p.GatewayRef], nil
 }
+
+func (t *memTx) ListByUser(_ context.Context, userID, before id.ID, limit int) ([]domain.Purchase, error) {
+	var out []domain.Purchase
+	for _, p := range t.rows {
+		if p.UserID == userID && (before == 0 || p.ID < before) {
+			out = append(out, p)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID > out[j].ID })
+	if len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}

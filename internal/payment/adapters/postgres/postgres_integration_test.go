@@ -9,11 +9,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jackc/pgx/v5/stdlib"
 
 	"github.com/santoshkc2200/ioe-backend/internal/payment/adapters/postgres"
 	"github.com/santoshkc2200/ioe-backend/internal/payment/app"
 	"github.com/santoshkc2200/ioe-backend/internal/payment/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/migrate"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/postgres/pgtest"
 )
 
@@ -197,5 +199,120 @@ func TestCountPaidAndListUnsettled(t *testing.T) {
 	}
 	if len(page2) != 1 || page2[0].ID != paidUngranted.ID {
 		t.Fatalf("page2 = %+v", page2)
+	}
+}
+
+func (f fixture) insertManual(t *testing.T, userID, courseID id.ID) domain.Purchase {
+	t.Helper()
+	p, ev, err := domain.RecordManualPurchase(f.ids.New(), userID, courseID, "Go", npr,
+		domain.ManualPayment{Method: domain.MethodBankTransfer, Reference: "V-1", Note: "n", RecordedBy: 1}, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.tx.RunInTx(ctx, func(r app.Repos) error {
+		if err := r.Purchases.Insert(ctx, &p); err != nil {
+			return err
+		}
+		return r.Events.Publish(ctx, ev)
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestManualPurchaseRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	p := f.insertManual(t, 200, 10)
+	got, found := f.find(t, p.ID)
+	if !found || !samePurchase(got, p) {
+		t.Fatalf("got=%+v want=%+v", got, p)
+	}
+	esewa := f.insert(t, 200, 11, f.now)
+	got, _ = f.find(t, esewa.ID)
+	if got.CourseTitle != "Go" || got.ManualMethod != "" || got.RecordedBy != 0 || got.Note != "" {
+		t.Fatalf("esewa row = %+v", got)
+	}
+	var paid int
+	if err := f.pool.QueryRow(ctx, `SELECT count(*) FROM platform.outbox_messages
+		WHERE payload->>'destination_topic' = 'payment.purchase.paid'`).Scan(&paid); err != nil || paid != 1 {
+		t.Fatalf("paid events = %d err=%v", paid, err)
+	}
+}
+
+func TestManualConstraints(t *testing.T) {
+	f := newFixture(t)
+	esewa := f.insert(t, 200, 10, f.now)
+	manual := f.insertManual(t, 201, 10)
+	cases := []struct {
+		sql string
+		id  id.ID
+	}{
+		{"UPDATE payment.purchases SET manual_method = 'cash', recorded_by = 1 WHERE id = $1", esewa.ID}, // method on a gateway purchase
+		{"UPDATE payment.purchases SET manual_method = NULL WHERE id = $1", manual.ID},                   // manual without method
+		{"UPDATE payment.purchases SET recorded_by = NULL WHERE id = $1", manual.ID},                     // manual without recorder
+		{"UPDATE payment.purchases SET manual_method = 'cheque' WHERE id = $1", manual.ID},               // unknown method
+	}
+	for _, c := range cases {
+		if _, err := f.pool.Exec(ctx, c.sql, int64(c.id)); err == nil {
+			t.Fatalf("accepted: %s", c.sql)
+		}
+	}
+}
+
+func TestListByUser(t *testing.T) {
+	f := newFixture(t)
+	var mine []domain.Purchase
+	for range 5 {
+		mine = append(mine, f.insert(t, 200, 10, f.now))
+	}
+	f.insert(t, 201, 10, f.now)
+	list := func(before id.ID, limit int) []domain.Purchase {
+		t.Helper()
+		var out []domain.Purchase
+		if err := f.tx.RunInTx(ctx, func(r app.Repos) error {
+			var err error
+			out, err = r.Purchases.ListByUser(ctx, 200, before, limit)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	first := list(0, 3)
+	if len(first) != 3 || first[0].ID != mine[4].ID || first[2].ID != mine[2].ID {
+		t.Fatalf("first page = %v", first)
+	}
+	rest := list(first[2].ID, 3)
+	if len(rest) != 2 || rest[0].ID != mine[1].ID || rest[1].ID != mine[0].ID {
+		t.Fatalf("second page = %v", rest)
+	}
+	if got := list(0, 10); len(got) != 5 {
+		t.Fatalf("all = %d", len(got))
+	}
+}
+
+func TestMigrationBackfillsCourseTitle(t *testing.T) {
+	f := newFixture(t)
+	p, err := migrate.NewProvider(stdlib.OpenDBFromPool(f.pool))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.DownTo(ctx, 11); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO courseauthoring.courses (id, owner_id, title, status, version, created_at, updated_at)
+		VALUES (77, 1, 'Backfilled', 'draft', 1, now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.pool.Exec(ctx, `INSERT INTO payment.purchases (id, user_id, course_id, amount_minor, currency, gateway,
+		gateway_ref, status, created_at, version) VALUES (900, 200, 77, 100, 'NPR', 'esewa', '900', 'pending', now(), 1)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Up(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var title string
+	if err := f.pool.QueryRow(ctx, "SELECT course_title FROM payment.purchases WHERE id = 900").Scan(&title); err != nil || title != "Backfilled" {
+		t.Fatalf("title = %q err=%v", title, err)
 	}
 }
