@@ -1,0 +1,11 @@
+Hello{{with .Name}}, {{.}}{{end}},
+
+We received your payment{{with .CourseTitle}} for {{.}}{{end}}. You are enrolled.
+
+Amount: {{.Amount}}
+Method: {{.Method}}
+Date:   {{.PaidOn}}
+{{with .CourseURL}}
+Start learning: {{.}}
+{{end}}
+The IOE team

@@ -1,0 +1,5 @@
+<p>Hello{{with .Name}}, {{.}}{{end}},</p>
+<p>We received your payment{{with .CourseTitle}} for {{.}}{{end}}. You are enrolled.</p>
+<p>Amount: {{.Amount}}<br>Method: {{.Method}}<br>Date: {{.PaidOn}}</p>
+{{with .CourseURL}}<p><a href="{{.}}">Start learning</a>: {{.}}</p>{{end}}
+<p>The IOE team</p>

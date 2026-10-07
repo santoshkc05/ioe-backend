@@ -24,6 +24,7 @@ func (f *fakeMailer) Enqueue(_ context.Context, email app.Email, key string) err
 type fakeRenderer struct {
 	name string
 	err  error
+	paid app.PurchasePaidEmail
 }
 
 func (f *fakeRenderer) Welcome(name string) (string, string, string, error) {
@@ -31,9 +32,14 @@ func (f *fakeRenderer) Welcome(name string) (string, string, string, error) {
 	return "Subject", "Text", "<p>HTML</p>", f.err
 }
 
+func (f *fakeRenderer) PurchasePaid(e app.PurchasePaidEmail) (string, string, string, error) {
+	f.paid = e
+	return "Paid", "Text", "<p>HTML</p>", f.err
+}
+
 func TestSendWelcomeRendersAndEnqueues(t *testing.T) {
 	m, r := &fakeMailer{}, &fakeRenderer{}
-	err := app.NewService(m, r).SendWelcome(context.Background(), app.WelcomeInput{EventID: "ev-1", Email: "a@example.com", Name: "Alice"})
+	err := app.NewService(m, r, nil, "").SendWelcome(context.Background(), app.WelcomeInput{EventID: "ev-1", Email: "a@example.com", Name: "Alice"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +62,7 @@ func TestSendWelcomeRejectsMissingFieldsAsPermanent(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			m := &fakeMailer{}
-			err := app.NewService(m, &fakeRenderer{}).SendWelcome(context.Background(), in)
+			err := app.NewService(m, &fakeRenderer{}, nil, "").SendWelcome(context.Background(), in)
 			if !errors.Is(err, app.ErrPermanent) {
 				t.Fatalf("err = %v, want ErrPermanent", err)
 			}
@@ -69,7 +75,7 @@ func TestSendWelcomeRejectsMissingFieldsAsPermanent(t *testing.T) {
 
 func TestSendWelcomeRenderFailureIsPermanent(t *testing.T) {
 	m := &fakeMailer{}
-	err := app.NewService(m, &fakeRenderer{err: errors.New("bad template")}).
+	err := app.NewService(m, &fakeRenderer{err: errors.New("bad template")}, nil, "").
 		SendWelcome(context.Background(), app.WelcomeInput{EventID: "ev-1", Email: "a@example.com"})
 	if !errors.Is(err, app.ErrPermanent) || m.calls != 0 {
 		t.Fatalf("err = %v, calls = %d", err, m.calls)
@@ -78,7 +84,7 @@ func TestSendWelcomeRenderFailureIsPermanent(t *testing.T) {
 
 func TestSendWelcomePropagatesMailerError(t *testing.T) {
 	errDown := errors.New("down")
-	err := app.NewService(&fakeMailer{err: errDown}, &fakeRenderer{}).
+	err := app.NewService(&fakeMailer{err: errDown}, &fakeRenderer{}, nil, "").
 		SendWelcome(context.Background(), app.WelcomeInput{EventID: "ev-1", Email: "a@example.com"})
 	if !errors.Is(err, errDown) || errors.Is(err, app.ErrPermanent) {
 		t.Fatalf("err = %v", err)

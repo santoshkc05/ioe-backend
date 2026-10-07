@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 // ErrPermanent marks a failure that retrying the same request cannot fix.
@@ -27,6 +28,7 @@ type Mailer interface {
 // Renderer produces the subject and bodies of each email.
 type Renderer interface {
 	Welcome(name string) (subject, text, html string, err error)
+	PurchasePaid(e PurchasePaidEmail) (subject, text, html string, err error)
 }
 
 // WelcomeInput is the data needed to welcome a newly registered user.
@@ -37,12 +39,16 @@ type WelcomeInput struct {
 }
 
 type Service struct {
-	mailer   Mailer
-	renderer Renderer
+	mailer        Mailer
+	renderer      Renderer
+	users         UserDirectory
+	courseURLBase string
 }
 
-func NewService(mailer Mailer, renderer Renderer) *Service {
-	return &Service{mailer: mailer, renderer: renderer}
+// NewService builds the notification use cases. courseURLBase is the frontend origin used for
+// course links; links are omitted when it is empty.
+func NewService(mailer Mailer, renderer Renderer, users UserDirectory, courseURLBase string) *Service {
+	return &Service{mailer: mailer, renderer: renderer, users: users, courseURLBase: strings.TrimRight(courseURLBase, "/")}
 }
 
 // SendWelcome renders the welcome email and enqueues it exactly once per event.

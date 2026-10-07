@@ -93,7 +93,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	if err != nil {
 		return nil, err
 	}
-	if err := registerNotifications(fw, cfg, logger); err != nil {
+	if err := registerNotifications(fw, cfg, identityUsers{svc: identity}, logger); err != nil {
 		return nil, errors.Join(err, fw.Close())
 	}
 	fw.Handle(assessmentevents.DraftDiscardedTopic,
@@ -102,7 +102,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 }
 
 // registerNotifications subscribes the notification context to the events it consumes.
-func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog.Logger) error {
+func registerNotifications(fw *outbox.Forwarder, cfg config.Config, users notificationapp.UserDirectory, logger *slog.Logger) error {
 	if !cfg.NotificationsEnabled() {
 		logger.Warn("notifications disabled: NOTIFICATION_SERVICE_BASE_URL and NOTIFICATION_SERVICE_SEND_API_KEY are not set")
 		return nil
@@ -112,7 +112,7 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, logger *slog
 		return err
 	}
 	mailer := notifysvc.New(cfg.NotificationServiceBaseURL, cfg.NotificationServiceSendAPIKey)
-	handlers, err := notificationevents.New(notificationapp.NewService(mailer, renderer), logger,
+	handlers, err := notificationevents.New(notificationapp.NewService(mailer, renderer, users, cfg.PaymentReturnURL), logger,
 		otel.Meter("github.com/santoshkc2200/ioe-backend/internal/notification"))
 	if err != nil {
 		return err
