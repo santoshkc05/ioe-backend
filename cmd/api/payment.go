@@ -39,6 +39,7 @@ func (c paymentCourseCatalog) CourseFacts(ctx context.Context, courseID id.ID) (
 	}
 	return paymentapp.CourseFacts{
 		Published: f.Published,
+		Title:     f.Title,
 		Price:     paymentdomain.Money{AmountMinor: f.Price.AmountMinor, Currency: f.Price.Currency},
 	}, nil
 }

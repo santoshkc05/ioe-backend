@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"strings"
 	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
@@ -21,25 +22,45 @@ const (
 	StatusFailed  Status = "failed"
 )
 
+// GatewayManual names purchases a root admin records for payments made outside any gateway.
+// It is never registered as a Gateway, so such purchases are never sent to one.
+const GatewayManual = "manual"
+
+// Offline payment methods of a manual purchase.
+const (
+	MethodBankTransfer = "bank_transfer"
+	MethodCash         = "cash"
+	MethodOther        = "other"
+)
+
+const (
+	maxReferenceLen = 200
+	maxNoteLen      = 1000
+)
+
 // Purchase is one buyer's attempt to pay for one course through one gateway. A buyer may have
 // several; each is settled independently from the gateway's status.
 type Purchase struct {
-	ID         id.ID
-	UserID     id.ID
-	CourseID   id.ID
-	Price      Money  // snapshot taken at checkout
-	Gateway    string // gateway name, such as "esewa"
-	GatewayRef string // our reference at the gateway; for eSewa, transaction_uuid
-	GatewayTxn string // the gateway's transaction id; set when paid
-	Status     Status
-	CreatedAt  time.Time
-	SettledAt  time.Time // zero while pending
-	GrantedAt  time.Time // zero until the enrollment grant succeeds
-	Version    int64
+	ID           id.ID
+	UserID       id.ID
+	CourseID     id.ID
+	CourseTitle  string // snapshot taken when the purchase is created
+	Price        Money  // snapshot taken at checkout
+	Gateway      string // gateway name, such as "esewa"
+	GatewayRef   string // our reference at the gateway; for eSewa, transaction_uuid
+	GatewayTxn   string // the gateway's transaction id; set when paid
+	Status       Status
+	CreatedAt    time.Time
+	SettledAt    time.Time // zero while pending
+	GrantedAt    time.Time // zero until the enrollment grant succeeds
+	ManualMethod string    // one of the Method constants; empty unless Gateway is GatewayManual
+	RecordedBy   id.ID     // root admin who recorded a manual purchase; zero otherwise
+	Note         string    // admin's remark on a manual purchase; may be empty
+	Version      int64
 }
 
 // NewPurchase starts a pending purchase. Its gateway reference is the purchase ID.
-func NewPurchase(purchaseID, userID, courseID id.ID, price Money, gateway string, now time.Time) (Purchase, Event, error) {
+func NewPurchase(purchaseID, userID, courseID id.ID, courseTitle string, price Money, gateway string, now time.Time) (Purchase, Event, error) {
 	if price.AmountMinor <= 0 {
 		return Purchase{}, nil, ErrFreePrice
 	}
@@ -47,13 +68,52 @@ func NewPurchase(purchaseID, userID, courseID id.ID, price Money, gateway string
 		return Purchase{}, nil, ErrInvalidPurchase
 	}
 	p := Purchase{
-		ID: purchaseID, UserID: userID, CourseID: courseID, Price: price, Gateway: gateway,
+		ID: purchaseID, UserID: userID, CourseID: courseID, CourseTitle: courseTitle, Price: price, Gateway: gateway,
 		GatewayRef: purchaseID.String(), Status: StatusPending, CreatedAt: now,
 	}
 	return p, PurchaseInitiated{
 		PurchaseID: p.ID, UserID: userID, CourseID: courseID, AmountMinor: price.AmountMinor,
 		Currency: price.Currency, Gateway: gateway, OccurredAt: now,
 	}, nil
+}
+
+// ManualPayment describes an offline payment a root admin records.
+type ManualPayment struct {
+	Method     string
+	Reference  string // bank voucher number, receipt number or similar; stored as GatewayTxn
+	Note       string
+	RecordedBy id.ID
+}
+
+// RecordManualPurchase creates a purchase that is already paid. The amount may differ from the
+// course price. It emits PurchasePaid and no PurchaseInitiated.
+func RecordManualPurchase(purchaseID, userID, courseID id.ID, courseTitle string, price Money, m ManualPayment, now time.Time) (Purchase, Event, error) {
+	if price.AmountMinor <= 0 {
+		return Purchase{}, nil, ErrFreePrice
+	}
+	ref, note := strings.TrimSpace(m.Reference), strings.TrimSpace(m.Note)
+	if price.Currency == "" || !validMethod(m.Method) || ref == "" || len(ref) > maxReferenceLen ||
+		len(note) > maxNoteLen || m.RecordedBy == 0 {
+		return Purchase{}, nil, ErrInvalidPurchase
+	}
+	p := Purchase{
+		ID: purchaseID, UserID: userID, CourseID: courseID, CourseTitle: courseTitle, Price: price,
+		Gateway: GatewayManual, GatewayRef: purchaseID.String(), GatewayTxn: ref, Status: StatusPaid,
+		CreatedAt: now, SettledAt: now, ManualMethod: m.Method, RecordedBy: m.RecordedBy, Note: note,
+	}
+	return p, p.paidEvent(now), nil
+}
+
+func validMethod(m string) bool {
+	return m == MethodBankTransfer || m == MethodCash || m == MethodOther
+}
+
+func (p *Purchase) paidEvent(now time.Time) PurchasePaid {
+	return PurchasePaid{
+		PurchaseID: p.ID, UserID: p.UserID, CourseID: p.CourseID, CourseTitle: p.CourseTitle,
+		AmountMinor: p.Price.AmountMinor, Currency: p.Price.Currency, Gateway: p.Gateway,
+		GatewayTxn: p.GatewayTxn, ManualMethod: p.ManualMethod, OccurredAt: now,
+	}
 }
 
 // MarkPaid records the gateway's confirmation. A failed purchase can still become paid when the
@@ -66,10 +126,7 @@ func (p *Purchase) MarkPaid(txn string, now time.Time) (Event, error) {
 		return nil, nil
 	}
 	p.Status, p.GatewayTxn, p.SettledAt = StatusPaid, txn, now
-	return PurchasePaid{
-		PurchaseID: p.ID, UserID: p.UserID, CourseID: p.CourseID, AmountMinor: p.Price.AmountMinor,
-		Currency: p.Price.Currency, Gateway: p.Gateway, GatewayTxn: txn, OccurredAt: now,
-	}, nil
+	return p.paidEvent(now), nil
 }
 
 // MarkFailed records that a pending payment will not complete. On any other status it changes

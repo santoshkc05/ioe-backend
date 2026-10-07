@@ -24,16 +24,18 @@ type PurchaseInitiated struct {
 
 func (PurchaseInitiated) EventName() string { return "payment.purchase.initiated" }
 
-// PurchasePaid is emitted when the gateway confirms the payment.
+// PurchasePaid is emitted when the gateway confirms the payment or a root admin records an offline one.
 type PurchasePaid struct {
-	PurchaseID  id.ID     `json:"purchase_id"`
-	UserID      id.ID     `json:"user_id"`
-	CourseID    id.ID     `json:"course_id"`
-	AmountMinor int64     `json:"amount_minor"`
-	Currency    string    `json:"currency"`
-	Gateway     string    `json:"gateway"`
-	GatewayTxn  string    `json:"gateway_txn"`
-	OccurredAt  time.Time `json:"occurred_at"`
+	PurchaseID   id.ID     `json:"purchase_id"`
+	UserID       id.ID     `json:"user_id"`
+	CourseID     id.ID     `json:"course_id"`
+	CourseTitle  string    `json:"course_title"`
+	AmountMinor  int64     `json:"amount_minor"`
+	Currency     string    `json:"currency"`
+	Gateway      string    `json:"gateway"`
+	GatewayTxn   string    `json:"gateway_txn"`
+	ManualMethod string    `json:"manual_method"` // empty for gateway purchases
+	OccurredAt   time.Time `json:"occurred_at"`
 }
 
 func (PurchasePaid) EventName() string { return "payment.purchase.paid" }

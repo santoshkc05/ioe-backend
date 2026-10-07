@@ -54,9 +54,9 @@ func newFixture(t *testing.T) fixture {
 		logs:   &bytes.Buffer{},
 	}
 	courses := catalog{
-		freeCourse:  {Published: true},
-		paidCourse:  {Published: true, Price: price},
-		draftCourse: {Published: false, Price: price},
+		freeCourse:  {Published: true, Title: "Free"},
+		paidCourse:  {Published: true, Title: "Go", Price: price},
+		draftCourse: {Published: false, Title: "Draft", Price: price},
 	}
 	f.svc = app.NewService(f.store, courses, f.enroll, map[string]app.Gateway{"esewa": f.gw}, ids, f.clock,
 		slog.New(slog.NewTextHandler(f.logs, nil)))
@@ -93,6 +93,9 @@ func TestCheckoutCreatesPendingPurchase(t *testing.T) {
 	if p.Status != domain.StatusPending || p.Price != price || p.UserID != student.UserID || p.CourseID != paidCourse ||
 		p.Gateway != "esewa" || p.GatewayRef != p.ID.String() || p.Version != 1 || !p.CreatedAt.Equal(t0) {
 		t.Fatalf("purchase = %+v", p)
+	}
+	if p.CourseTitle != "Go" {
+		t.Fatalf("title = %q", p.CourseTitle)
 	}
 	if co.URL != "https://pay.test/form" || co.Fields["ref"] != p.GatewayRef {
 		t.Fatalf("checkout = %+v", co)

@@ -3,6 +3,7 @@ package domain_test
 import (
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -17,7 +18,7 @@ var (
 
 func newPending(t *testing.T) domain.Purchase {
 	t.Helper()
-	p, _, err := domain.NewPurchase(42, 200, 10, npr, "esewa", t0)
+	p, _, err := domain.NewPurchase(42, 200, 10, "Go", npr, "esewa", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -25,11 +26,11 @@ func newPending(t *testing.T) domain.Purchase {
 }
 
 func TestNewPurchase(t *testing.T) {
-	p, ev, err := domain.NewPurchase(42, 200, 10, npr, "esewa", t0)
+	p, ev, err := domain.NewPurchase(42, 200, 10, "Go", npr, "esewa", t0)
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := domain.Purchase{ID: 42, UserID: 200, CourseID: 10, Price: npr, Gateway: "esewa", GatewayRef: "42",
+	want := domain.Purchase{ID: 42, UserID: 200, CourseID: 10, CourseTitle: "Go", Price: npr, Gateway: "esewa", GatewayRef: "42",
 		Status: domain.StatusPending, CreatedAt: t0}
 	if p != want {
 		t.Fatalf("purchase = %+v", p)
@@ -58,7 +59,7 @@ func TestNewPurchaseRejects(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, ev, err := domain.NewPurchase(1, 2, 3, c.price, c.gateway, t0); !errors.Is(err, c.want) || ev != nil {
+			if _, ev, err := domain.NewPurchase(1, 2, 3, "Go", c.price, c.gateway, t0); !errors.Is(err, c.want) || ev != nil {
 				t.Fatalf("err = %v, ev = %v", err, ev)
 			}
 		})
@@ -76,7 +77,7 @@ func TestMarkPaid(t *testing.T) {
 		t.Fatalf("purchase = %+v", p)
 	}
 	paid, ok := ev.(domain.PurchasePaid)
-	if !ok || paid.GatewayTxn != "0001TS9" || paid.AmountMinor != 150000 || paid.Currency != "NPR" || !paid.OccurredAt.Equal(at) {
+	if !ok || paid.GatewayTxn != "0001TS9" || paid.CourseTitle != "Go" || paid.AmountMinor != 150000 || paid.Currency != "NPR" || !paid.OccurredAt.Equal(at) {
 		t.Fatalf("event = %#v", ev)
 	}
 	before := p
@@ -182,5 +183,80 @@ func TestEventPayloads(t *testing.T) {
 	}
 	if (domain.PurchasePaid{}).EventName() != "payment.purchase.paid" || (domain.PurchaseFailed{}).EventName() != "payment.purchase.failed" {
 		t.Fatal("event names")
+	}
+}
+
+func TestPaidEventCarriesTitleAndMethod(t *testing.T) {
+	p := newPending(t)
+	ev, err := p.MarkPaid("T1", t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(ev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	if m["course_title"] != "Go" || m["manual_method"] != "" {
+		t.Fatalf("payload = %s", b)
+	}
+}
+
+var cash = domain.ManualPayment{Method: domain.MethodCash, Reference: "  R-1  ", Note: "paid at desk", RecordedBy: 1}
+
+func TestRecordManualPurchase(t *testing.T) {
+	p, ev, err := domain.RecordManualPurchase(43, 200, 10, "Go", npr, cash, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := domain.Purchase{ID: 43, UserID: 200, CourseID: 10, CourseTitle: "Go", Price: npr, Gateway: domain.GatewayManual,
+		GatewayRef: "43", GatewayTxn: "R-1", Status: domain.StatusPaid, CreatedAt: t0, SettledAt: t0,
+		ManualMethod: "cash", RecordedBy: 1, Note: "paid at desk"}
+	if p != want {
+		t.Fatalf("purchase = %+v", p)
+	}
+	if !p.NeedsGrant() {
+		t.Fatal("manual purchase should need a grant")
+	}
+	got, ok := ev.(domain.PurchasePaid)
+	if !ok || got != (domain.PurchasePaid{PurchaseID: 43, UserID: 200, CourseID: 10, CourseTitle: "Go", AmountMinor: 150000,
+		Currency: "NPR", Gateway: "manual", GatewayTxn: "R-1", ManualMethod: "cash", OccurredAt: t0}) {
+		t.Fatalf("event = %#v", ev)
+	}
+}
+
+func TestRecordManualPurchaseRejects(t *testing.T) {
+	with := func(f func(*domain.ManualPayment)) domain.ManualPayment { m := cash; f(&m); return m }
+	cases := []struct {
+		name  string
+		price domain.Money
+		m     domain.ManualPayment
+		want  error
+	}{
+		{"zero amount", domain.Money{Currency: "NPR"}, cash, domain.ErrFreePrice},
+		{"empty currency", domain.Money{AmountMinor: 100}, cash, domain.ErrInvalidPurchase},
+		{"unknown method", npr, with(func(m *domain.ManualPayment) { m.Method = "cheque" }), domain.ErrInvalidPurchase},
+		{"empty method", npr, with(func(m *domain.ManualPayment) { m.Method = "" }), domain.ErrInvalidPurchase},
+		{"blank reference", npr, with(func(m *domain.ManualPayment) { m.Reference = " \t " }), domain.ErrInvalidPurchase},
+		{"long reference", npr, with(func(m *domain.ManualPayment) { m.Reference = strings.Repeat("r", 201) }), domain.ErrInvalidPurchase},
+		{"long note", npr, with(func(m *domain.ManualPayment) { m.Note = strings.Repeat("n", 1001) }), domain.ErrInvalidPurchase},
+		{"no recorder", npr, with(func(m *domain.ManualPayment) { m.RecordedBy = 0 }), domain.ErrInvalidPurchase},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, _, err := domain.RecordManualPurchase(43, 200, 10, "Go", c.price, c.m, t0); !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+		})
+	}
+	if _, _, err := domain.RecordManualPurchase(43, 200, 10, "Go", npr,
+		with(func(m *domain.ManualPayment) {
+			m.Reference = strings.Repeat("r", 200)
+			m.Note = strings.Repeat("n", 1000)
+		}), t0); err != nil {
+		t.Fatalf("limits inclusive: %v", err)
 	}
 }

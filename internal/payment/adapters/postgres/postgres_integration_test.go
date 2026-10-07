@@ -52,7 +52,7 @@ func withoutTimes(p domain.Purchase) domain.Purchase {
 
 func (f fixture) insert(t *testing.T, userID, courseID id.ID, at time.Time) domain.Purchase {
 	t.Helper()
-	p, ev, err := domain.NewPurchase(f.ids.New(), userID, courseID, npr, "esewa", at)
+	p, ev, err := domain.NewPurchase(f.ids.New(), userID, courseID, "Go", npr, "esewa", at)
 	if err != nil {
 		t.Fatal(err)
 	}

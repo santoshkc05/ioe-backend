@@ -40,6 +40,7 @@ type TxRunner interface {
 // CourseFacts is what payment knows about a course. A zero Price.AmountMinor means free.
 type CourseFacts struct {
 	Published bool
+	Title     string
 	Price     domain.Money
 }
 

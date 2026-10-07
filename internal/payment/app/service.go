@@ -75,7 +75,7 @@ func (s *Service) Checkout(ctx context.Context, p auth.Principal, courseID id.ID
 			return ErrAlreadyPurchased
 		}
 		var ev domain.Event
-		purchase, ev, err = domain.NewPurchase(s.ids.New(), p.UserID, courseID, c.Price, gateway, s.clock.Now())
+		purchase, ev, err = domain.NewPurchase(s.ids.New(), p.UserID, courseID, c.Title, c.Price, gateway, s.clock.Now())
 		if err != nil {
 			return err
 		}
