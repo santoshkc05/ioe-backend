@@ -1817,6 +1817,77 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/me/purchases:
+    get:
+      summary: List the caller's purchases
+      description: Newest first. Pass `next_cursor` of one page as `cursor` to read the next.
+      security:
+        - bearer: []
+      parameters:
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "`next_cursor` of the previous page" }
+      responses:
+        "200":
+          description: A page of purchases
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchasePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/users/{userID}/purchases:
+    get:
+      summary: List a user's purchases
+      description: The user themselves or a root admin; anyone else gets 404. Newest first.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+        - { name: limit, in: query, required: false, schema: { type: integer, minimum: 1, maximum: 50, default: 20 } }
+        - { name: cursor, in: query, required: false, schema: { type: string }, description: "`next_cursor` of the previous page" }
+      responses:
+        "200":
+          description: A page of purchases
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchasePage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      summary: Record an offline payment
+      description: >
+        Root admin only. Creates a paid purchase under gateway `manual` for a published paid course,
+        enrolls the user, and sends the payment-received email. The amount may differ from the
+        course price. 403 `forbidden` for anyone else; 404 `not_found` for an unknown user or a
+        missing or unpublished course; 409 `course_free` or `already_purchased`.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/UserID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ManualPurchaseRequest" }
+      responses:
+        "201":
+          description: The recorded purchase
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
     bearer:
@@ -2109,18 +2180,44 @@ components:
         gateway: { type: string, enum: [esewa] }
     Purchase:
       type: object
-      required: [id, course_id, user_id, amount_minor, currency, gateway, status, created_at, settled_at, granted]
+      required: [id, course_id, course_title, user_id, amount_minor, currency, gateway, status, created_at, settled_at, granted, manual_method, reference, note, recorded_by]
       properties:
         id: { $ref: "#/components/schemas/ID" }
         course_id: { $ref: "#/components/schemas/ID" }
         user_id: { $ref: "#/components/schemas/ID" }
         amount_minor: { type: integer, format: int64, minimum: 1, description: Price snapshot in the currency's minor unit }
         currency: { type: string, description: ISO 4217 code }
-        gateway: { type: string, enum: [esewa] }
+        gateway: { type: string, enum: [esewa, manual] }
         status: { type: string, enum: [pending, paid, failed] }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time, description: Null while pending }
         granted: { type: boolean, description: True once the buyer is enrolled }
+        course_title: { type: string, description: Course title when the purchase was made }
+        manual_method: { type: [string, "null"], enum: [bank_transfer, cash, other, null] }
+        reference: { type: [string, "null"], description: Voucher or receipt number; manual purchases only }
+        note: { type: [string, "null"] }
+        recorded_by:
+          oneOf: [{ $ref: "#/components/schemas/ID" }, { type: "null" }]
+          description: Root admin who recorded a manual purchase
+    PurchasePage:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Purchase" }
+        next_cursor: { type: string, description: Cursor of the next page; absent on the last page }
+    ManualPurchaseRequest:
+      type: object
+      additionalProperties: false
+      required: [course_id, amount_minor, currency, method, reference]
+      properties:
+        course_id: { $ref: "#/components/schemas/ID" }
+        amount_minor: { type: integer, format: int64, minimum: 1 }
+        currency: { type: string }
+        method: { type: string, enum: [bank_transfer, cash, other] }
+        reference: { type: string, minLength: 1, maxLength: 200 }
+        note: { type: string, maxLength: 1000 }
     Checkout:
       type: object
       required: [method, url, fields]

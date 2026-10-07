@@ -33,6 +33,23 @@ type stub struct {
 	courseID   id.ID
 	purchaseID id.ID
 	gateway    string
+
+	page   []domain.Purchase
+	next   id.ID
+	userID id.ID
+	before id.ID
+	limit  int
+	manual app.ManualInput
+}
+
+func (s *stub) ListByUser(_ context.Context, p auth.Principal, userID, before id.ID, limit int) ([]domain.Purchase, id.ID, error) {
+	s.principal, s.userID, s.before, s.limit = p, userID, before, limit
+	return s.page, s.next, s.err
+}
+
+func (s *stub) RecordManual(_ context.Context, p auth.Principal, in app.ManualInput) (domain.Purchase, error) {
+	s.principal, s.manual = p, in
+	return s.purchase, s.err
 }
 
 func (s *stub) Checkout(_ context.Context, p auth.Principal, courseID id.ID, gateway string) (domain.Purchase, app.Checkout, error) {
@@ -103,7 +120,8 @@ func TestCheckoutStatusAndShape(t *testing.T) {
 		} `json:"checkout"`
 	}](t, body)
 	want := map[string]any{"id": "1", "course_id": "10", "user_id": "200", "amount_minor": float64(150000), "currency": "NPR",
-		"gateway": "esewa", "status": "pending", "created_at": "2026-10-07T00:00:00Z", "settled_at": nil, "granted": false}
+		"gateway": "esewa", "status": "pending", "created_at": "2026-10-07T00:00:00Z", "settled_at": nil, "granted": false,
+		"course_title": "", "manual_method": nil, "reference": nil, "note": nil, "recorded_by": nil}
 	if len(got.Purchase) != len(want) {
 		t.Fatalf("purchase keys = %v", got.Purchase)
 	}
@@ -171,6 +189,7 @@ func TestErrorMapping(t *testing.T) {
 	}{
 		{fmt.Errorf("%w: gateway is required", app.ErrInvalidInput), http.StatusBadRequest, "invalid_input"},
 		{app.ErrNotFound, http.StatusNotFound, "not_found"},
+		{app.ErrForbidden, http.StatusForbidden, "forbidden"},
 		{app.ErrCourseFree, http.StatusConflict, "course_free"},
 		{app.ErrAlreadyEnrolled, http.StatusConflict, "already_enrolled"},
 		{app.ErrAlreadyPurchased, http.StatusConflict, "already_purchased"},
@@ -186,6 +205,77 @@ func TestErrorMapping(t *testing.T) {
 		}
 		if c.status == http.StatusServiceUnavailable && strings.Contains(string(body), "timeout") {
 			t.Fatalf("gateway detail leaked: %s", body)
+		}
+	}
+}
+
+func TestListMine(t *testing.T) {
+	manual := domain.Purchase{ID: 9, UserID: 200, CourseID: 11, CourseTitle: "Go", Price: domain.Money{AmountMinor: 100, Currency: "NPR"},
+		Gateway: "manual", GatewayRef: "9", GatewayTxn: "R-1", Status: domain.StatusPaid, CreatedAt: t0, SettledAt: t0, GrantedAt: t0,
+		ManualMethod: "cash", RecordedBy: 1, Note: "desk"}
+	esewa := domain.Purchase{ID: 8, UserID: 200, CourseID: 11, CourseTitle: "Go", Price: domain.Money{AmountMinor: 100, Currency: "NPR"},
+		Gateway: "esewa", GatewayRef: "8", Status: domain.StatusPending, CreatedAt: t0}
+	s := &stub{page: []domain.Purchase{manual, esewa}, next: 8}
+	code, body := call(newServer(s), http.MethodGet, "/v1/me/purchases", "")
+	if code != http.StatusOK || s.userID != 200 || s.before != 0 || s.limit != 20 {
+		t.Fatalf("code=%d stub=%+v", code, s)
+	}
+	got := decode[map[string]any](t, body)
+	items := got["items"].([]any)
+	m, e := items[0].(map[string]any), items[1].(map[string]any)
+	if got["next_cursor"] != "8" || m["course_title"] != "Go" || m["manual_method"] != "cash" || m["reference"] != "R-1" ||
+		m["note"] != "desk" || m["recorded_by"] != "1" {
+		t.Fatalf("body = %s", body)
+	}
+	for _, k := range []string{"manual_method", "reference", "note", "recorded_by"} {
+		if v, ok := e[k]; !ok || v != nil {
+			t.Fatalf("esewa %s = %v (present=%v)", k, v, ok)
+		}
+	}
+	s = &stub{}
+	code, body = call(newServer(s), http.MethodGet, "/v1/me/purchases?limit=5&cursor=42", "")
+	if code != http.StatusOK || s.limit != 5 || s.before != 42 {
+		t.Fatalf("code=%d stub=%+v", code, s)
+	}
+	if got := decode[map[string]any](t, body); got["items"] == nil || len(got["items"].([]any)) != 0 || got["next_cursor"] != nil {
+		t.Fatalf("empty page body = %s", body)
+	}
+}
+
+func TestListQueryValidation(t *testing.T) {
+	for _, q := range []string{"?cursor=abc", "?limit=x", "?limit=0", "?limit=51", "?cursor=-1"} {
+		code, body := call(newServer(&stub{}), http.MethodGet, "/v1/me/purchases"+q, "")
+		if code != http.StatusBadRequest || decode[map[string]any](t, body)["type"] != "invalid_input" {
+			t.Fatalf("%s: %d %s", q, code, body)
+		}
+	}
+}
+
+func TestListUser(t *testing.T) {
+	s := &stub{}
+	if code, _ := call(newServer(s), http.MethodGet, "/v1/users/300/purchases", ""); code != http.StatusOK || s.userID != 300 {
+		t.Fatalf("code=%d userID=%v", code, s.userID)
+	}
+	if code, _ := call(newServer(&stub{}), http.MethodGet, "/v1/users/abc/purchases", ""); code != http.StatusNotFound {
+		t.Fatalf("malformed user id: %d", code)
+	}
+}
+
+func TestRecordManual(t *testing.T) {
+	s := &stub{purchase: domain.Purchase{ID: 9, Gateway: "manual", ManualMethod: "cash", GatewayTxn: "R-1", RecordedBy: 1, Status: domain.StatusPaid, CreatedAt: t0, SettledAt: t0}}
+	code, body := call(newServer(s), http.MethodPost, "/v1/users/300/purchases",
+		`{"course_id":"11","amount_minor":150000,"currency":"NPR","method":"cash","reference":"R-1","note":"desk"}`)
+	want := app.ManualInput{UserID: 300, CourseID: 11, AmountMinor: 150000, Currency: "NPR", Method: "cash", Reference: "R-1", Note: "desk"}
+	if code != http.StatusCreated || s.manual != want {
+		t.Fatalf("code=%d manual=%+v body=%s", code, s.manual, body)
+	}
+	if p := decode[map[string]any](t, body)["purchase"].(map[string]any); p["manual_method"] != "cash" {
+		t.Fatalf("body = %s", body)
+	}
+	for _, b := range []string{`{"course_id":"x","amount_minor":1,"currency":"NPR","method":"cash","reference":"r"}`,
+		`{"course_id":"11","extra":1}`} {
+		if code, _ := call(newServer(&stub{}), http.MethodPost, "/v1/users/300/purchases", b); code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", b, code)
 		}
 	}
 }
