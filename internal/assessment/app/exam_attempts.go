@@ -36,8 +36,9 @@ func (se *StudentExam) add(a domain.ExamAttempt) {
 
 // AttemptDetail is an attempt with its exam, which its deadline and review are read against.
 type AttemptDetail struct {
-	Attempt domain.ExamAttempt
-	Exam    domain.Exam
+	Attempt         domain.ExamAttempt
+	Exam            domain.Exam
+	RevealPermitted bool
 }
 
 // List returns the course's published exams with the caller's standing, settling the
@@ -76,7 +77,7 @@ func (s *ExamService) List(ctx context.Context, p auth.Principal, courseID id.ID
 	return out, err
 }
 
-// Get returns a published exam to an enrolled student. Drafts are ErrNotFound.
+// Get returns a published exam to an enrolled student once its window opens. Drafts are ErrNotFound.
 func (s *ExamService) Get(ctx context.Context, p auth.Principal, examID id.ID) (domain.Exam, error) {
 	e, err := s.find(ctx, examID)
 	if err != nil {
@@ -87,6 +88,9 @@ func (s *ExamService) Get(ctx context.Context, p auth.Principal, examID id.ID) (
 	}
 	if e.Status != domain.ExamPublished {
 		return domain.Exam{}, ErrNotFound
+	}
+	if e.Availability(s.clock.Now()) == domain.AvailabilityNotOpen {
+		return domain.Exam{}, &WindowError{Err: ErrExamNotOpen, At: *e.OpensAt}
 	}
 	return e, nil
 }
@@ -180,7 +184,11 @@ func (s *ExamService) Submit(ctx context.Context, p auth.Principal, attemptID id
 			return err
 		}
 		a.Grade(e, now)
-		out = AttemptDetail{Attempt: a, Exam: e}
+		out = AttemptDetail{
+			Attempt:         a,
+			Exam:            e,
+			RevealPermitted: a.CheckReveal(e, now) == nil,
+		}
 		return r.Exams.SaveResult(ctx, a)
 	})
 	return out, err
@@ -194,10 +202,15 @@ func (s *ExamService) GetAttempt(ctx context.Context, p auth.Principal, attemptI
 		if err != nil {
 			return err
 		}
-		if err := settle(ctx, r, e, &a, s.clock.Now()); err != nil {
+		now := s.clock.Now()
+		if err := settle(ctx, r, e, &a, now); err != nil {
 			return err
 		}
-		out = AttemptDetail{Attempt: a, Exam: e}
+		out = AttemptDetail{
+			Attempt:         a,
+			Exam:            e,
+			RevealPermitted: a.CheckReveal(e, now) == nil,
+		}
 		return nil
 	})
 	return out, err
@@ -246,7 +259,7 @@ func (s *ExamService) Review(ctx context.Context, p auth.Principal, attemptID id
 		case a.Open():
 			return domain.ErrRevealAttemptOpen
 		}
-		out = AttemptDetail{Attempt: a, Exam: e}
+		out = AttemptDetail{Attempt: a, Exam: e, RevealPermitted: true}
 		return nil
 	})
 	return out, err
@@ -306,15 +319,43 @@ func ownAttempt(ctx context.Context, r Repos, p auth.Principal, attemptID id.ID,
 	return a, e, err
 }
 
-// settle grades a in place as of its deadline when it has expired and stores the result. When a
-// concurrent submit or settlement wins, a is reloaded instead.
+// settleExamAttempts settles all expired attempts for an exam.
+func settleExamAttempts(ctx context.Context, r Repos, e domain.Exam, now time.Time) error {
+	attempts, err := r.Exams.ListAttempts(ctx, e.ID)
+	if err != nil {
+		return err
+	}
+	for i := range attempts {
+		if err := settle(ctx, r, e, &attempts[i], now); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// settle grades a in place as of its deadline when it has expired and stores the result.
+// It locks the fresh attempt row before grading and saving so concurrent answers are not lost.
+// When a concurrent submit or settlement wins, a is reloaded instead.
 func settle(ctx context.Context, r Repos, e domain.Exam, a *domain.ExamAttempt, now time.Time) error {
-	if !a.Settle(e, now) {
+	d := a.Deadline(e)
+	if !a.Open() || d == nil || !now.After(*d) {
 		return nil
 	}
-	err := r.Exams.SaveResult(ctx, *a)
-	if errors.Is(err, domain.ErrAttemptSubmitted) {
-		*a, err = r.Exams.FindAttempt(ctx, a.ID, false)
+	fresh, err := r.Exams.FindAttempt(ctx, a.ID, true)
+	if err != nil {
+		return err
 	}
-	return err
+	if !fresh.Settle(e, now) {
+		*a = fresh
+		return nil
+	}
+	err = r.Exams.SaveResult(ctx, fresh)
+	if errors.Is(err, domain.ErrAttemptSubmitted) {
+		fresh, err = r.Exams.FindAttempt(ctx, a.ID, false)
+	}
+	if err != nil {
+		return err
+	}
+	*a = fresh
+	return nil
 }

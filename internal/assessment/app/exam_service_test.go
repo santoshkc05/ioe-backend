@@ -331,3 +331,31 @@ func TestDeleteExam(t *testing.T) {
 		t.Fatal("not deleted")
 	}
 }
+
+func TestSaveExamSettlesExpiredAttempts(t *testing.T) {
+	f := newFixture(t)
+	in := examInput()
+	in.TimeLimitSeconds = intPtr(30)
+	e := f.createExam(t, in)
+	_ = f.exams.Publish(ctx, owner, e.ID)
+	att := f.addAttempt(t, e, 900, false)
+
+	f.clock.now = t0.Add(time.Minute)
+
+	editInput := inputOf(e)
+	editInput.Questions = append(editInput.Questions, app.QuestionInput{
+		Prompt:  "Question 3?",
+		Type:    "true_false",
+		Options: []app.OptionInput{{Label: "yes", IsCorrect: true}, {Label: "no"}},
+	})
+	d, err := f.exams.Save(ctx, owner, e.ID, editInput)
+	if err != nil {
+		t.Fatalf("save should succeed after settling expired attempt, got: %v", err)
+	}
+	if d.Locks.OpenAttempts != 0 || d.Locks.SubmittedAttempts != 1 {
+		t.Fatalf("locks = %+v; want 0 open, 1 submitted", d.Locks)
+	}
+	if !f.store.examAttempts[att.ID].AutoSubmitted {
+		t.Fatal("attempt should be settled as auto-submitted")
+	}
+}

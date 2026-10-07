@@ -1221,7 +1221,7 @@ paths:
   /v1/exams/{examID}:
     get:
       summary: Read a published exam as a student
-      description: An actively enrolled student. Answer keys and explanations are never included. Drafts are 404.
+      description: An actively enrolled student, once the exam's window opens (409 exam_not_open with details.opens_at). Answer keys and explanations are never included. Drafts are 404.
       security:
         - bearer: []
       parameters:
@@ -2341,7 +2341,7 @@ components:
     ExamAnswer:
       type: object
       required: [question_id, option_ids]
-      description: Grading fields appear only once the attempt is graded.
+      description: Grading fields appear only once the attempt is graded and the exam's reveal policy allows it.
       properties:
         question_id: { $ref: "#/components/schemas/ID" }
         option_ids:

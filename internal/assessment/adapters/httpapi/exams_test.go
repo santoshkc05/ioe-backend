@@ -386,13 +386,22 @@ func TestExamAttemptWire(t *testing.T) {
 	}
 
 	graded := gradedAttempt(e)
-	_, body = call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: graded, Exam: e}}), "POST", "/v1/exam-attempts/7/submit", "")
+	_, body = call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: graded, Exam: e, RevealPermitted: true}}), "POST", "/v1/exam-attempts/7/submit", "")
 	want = `{"id":"7","course_id":"10","exam_id":"1","user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
 		`"deadline":"2026-10-06T09:30:00Z","submitted_at":"2026-10-06T09:01:00Z","score":66,"passed":true,"auto_submitted":false,` +
 		`"answers":[{"question_id":"11","option_ids":["111"],"is_correct":true,"points_possible":2,"points_awarded":2,"reference_lecture_id":"50"},` +
 		`{"question_id":"12","option_ids":[],"is_correct":false,"points_possible":1,"points_awarded":0}]}`
 	if strings.TrimSpace(string(body)) != want {
-		t.Fatalf("graded attempt = %s", body)
+		t.Fatalf("graded attempt with reveal = %s", body)
+	}
+
+	_, body = call(newExamServer(&examStub{attempt: app.AttemptDetail{Attempt: graded, Exam: e, RevealPermitted: false}}), "POST", "/v1/exam-attempts/7/submit", "")
+	want = `{"id":"7","course_id":"10","exam_id":"1","user_id":"200","started_at":"2026-10-06T09:00:00Z",` +
+		`"deadline":"2026-10-06T09:30:00Z","submitted_at":"2026-10-06T09:01:00Z","score":66,"passed":true,"auto_submitted":false,` +
+		`"answers":[{"question_id":"11","option_ids":["111"]},` +
+		`{"question_id":"12","option_ids":[]}]}`
+	if strings.TrimSpace(string(body)) != want {
+		t.Fatalf("graded attempt without reveal = %s", body)
 	}
 }
 

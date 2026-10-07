@@ -78,6 +78,15 @@ func TestStudentListAndGet(t *testing.T) {
 	if e, err := f.exams.Get(ctx, student, pub.ID); err != nil || e.ID != pub.ID {
 		t.Fatalf("get = %v", err)
 	}
+	if _, err := f.exams.Get(ctx, student, notOpen.ID); !errors.Is(err, app.ErrExamNotOpen) {
+		t.Fatalf("not open student get: %v", err)
+	}
+	past := examInput()
+	past.ClosesAt = ptrTime(t0.Add(-time.Hour))
+	closed := f.publishedExam(t, past)
+	if e, err := f.exams.Get(ctx, student, closed.ID); err != nil || e.ID != closed.ID {
+		t.Fatalf("closed student get: %v", err)
+	}
 	if _, err := f.exams.Get(ctx, student, draft.ID); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("draft get: %v", err)
 	}
@@ -236,10 +245,21 @@ func TestReview(t *testing.T) {
 	if _, err := f.exams.Review(ctx, owner, a.ID); !errors.Is(err, domain.ErrRevealAttemptOpen) {
 		t.Fatalf("open, manager: %v", err)
 	}
-	if _, err := f.exams.Submit(ctx, student, a.ID); err != nil {
+	subDetail, err := f.exams.Submit(ctx, student, a.ID)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if d, err := f.exams.Review(ctx, student, a.ID); err != nil || d.Attempt.ID != a.ID {
+	if !subDetail.RevealPermitted {
+		t.Fatal("expected RevealPermitted for after_attempt on Submit")
+	}
+	getDetail, err := f.exams.GetAttempt(ctx, student, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !getDetail.RevealPermitted {
+		t.Fatal("expected RevealPermitted for after_attempt on GetAttempt")
+	}
+	if d, err := f.exams.Review(ctx, student, a.ID); err != nil || d.Attempt.ID != a.ID || !d.RevealPermitted {
 		t.Fatalf("after_attempt: %v", err)
 	}
 	if _, err := f.exams.Review(ctx, stranger, a.ID); !errors.Is(err, app.ErrNotFound) {
@@ -252,6 +272,9 @@ func TestReview(t *testing.T) {
 	never := app.ExamSettingsInput{ExamSettings: app.ExamSettings{Title: "Final", PassMark: 50, RetakesAllowed: true, RevealPolicy: "never"}}
 	if _, err := f.exams.SaveSettings(ctx, owner, e.ID, never); err != nil {
 		t.Fatal(err)
+	}
+	if getNever, err := f.exams.GetAttempt(ctx, student, a.ID); err != nil || getNever.RevealPermitted {
+		t.Fatalf("never on GetAttempt: err=%v, RevealPermitted=%v", err, getNever.RevealPermitted)
 	}
 	if _, err := f.exams.Review(ctx, student, a.ID); !errors.Is(err, domain.ErrRevealDisabled) {
 		t.Fatalf("never: %v", err)
@@ -266,14 +289,24 @@ func TestReview(t *testing.T) {
 		return in
 	}())
 	b := f.start(t, closing)
-	if _, err := f.exams.Submit(ctx, student, b.ID); err != nil {
+	bSub, err := f.exams.Submit(ctx, student, b.ID)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if bSub.RevealPermitted {
+		t.Fatal("expected RevealPermitted=false for after_close on Submit before close")
+	}
+	if bGet, err := f.exams.GetAttempt(ctx, student, b.ID); err != nil || bGet.RevealPermitted {
+		t.Fatalf("before close on GetAttempt: err=%v, RevealPermitted=%v", err, bGet.RevealPermitted)
 	}
 	var notYet *domain.RevealNotYetError
 	if _, err := f.exams.Review(ctx, student, b.ID); !errors.As(err, &notYet) || !notYet.At.Equal(t0.Add(time.Hour)) {
 		t.Fatalf("before close: %v", err)
 	}
 	f.clock.now = t0.Add(time.Hour)
+	if bGetAfter, err := f.exams.GetAttempt(ctx, student, b.ID); err != nil || !bGetAfter.RevealPermitted {
+		t.Fatalf("after close on GetAttempt: err=%v, RevealPermitted=%v", err, bGetAfter.RevealPermitted)
+	}
 	if _, err := f.exams.Review(ctx, student, b.ID); err != nil {
 		t.Fatalf("after close: %v", err)
 	}
@@ -356,5 +389,39 @@ func TestUnpublishKeepsOpenAttemptUsable(t *testing.T) {
 	}
 	if _, err := f.exams.Start(ctx, student, e.ID); !errors.Is(err, app.ErrNotFound) {
 		t.Fatalf("start after unpublish: %v", err)
+	}
+}
+
+func TestSettlePreservesConcurrentAnswer(t *testing.T) {
+	f := newFixture(t)
+	e := f.publishedExam(t, timed(30))
+	a := f.start(t, e)
+
+	if err := f.exams.SaveAnswer(ctx, student, a.ID, answer(e, 0, 0)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.clock.now = t0.Add(31 * time.Minute)
+
+	q1Ans := domain.ExamAnswer{
+		QuestionID: e.Questions[1].ID,
+		OptionIDs:  []id.ID{e.Questions[1].Options[0].ID, e.Questions[1].Options[1].ID},
+	}
+	if err := (memExams{f.store}).MergeAnswer(ctx, a.ID, q1Ans); err != nil {
+		t.Fatal(err)
+	}
+
+	d, err := f.exams.GetAttempt(ctx, student, a.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Attempt.AutoSubmitted {
+		t.Fatal("expected auto-submitted")
+	}
+	if len(d.Attempt.Answers) != 2 {
+		t.Fatalf("expected 2 answers, got %d: %+v", len(d.Attempt.Answers), d.Attempt.Answers)
+	}
+	if d.Attempt.Score == nil || *d.Attempt.Score != 100 {
+		t.Fatalf("score = %v; want 100", d.Attempt.Score)
 	}
 }

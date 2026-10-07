@@ -277,7 +277,7 @@ func toExamAttemptWire(d app.AttemptDetail) examAttemptWire {
 			continue
 		}
 		aw := examAnswerWire{QuestionID: q.ID, OptionIDs: nonNilIDs(ans.OptionIDs)}
-		if ans.IsCorrect != nil {
+		if d.RevealPermitted && ans.IsCorrect != nil {
 			possible := ans.PointsPossible
 			aw.IsCorrect, aw.PointsPossible, aw.PointsAwarded = ans.IsCorrect, &possible, ans.PointsAwarded
 			aw.ReferenceLectureID = refPtr(q.ReferenceLectureID)

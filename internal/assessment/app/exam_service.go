@@ -78,6 +78,9 @@ func (s *ExamService) GetAuthoring(ctx context.Context, p auth.Principal, examID
 		if err != nil {
 			return err
 		}
+		if err := settleExamAttempts(ctx, r, e, s.clock.Now()); err != nil {
+			return err
+		}
 		locks, err := r.Exams.Locks(ctx, examID)
 		out = ExamDetail{Exam: e, Locks: locks}
 		return err
@@ -257,7 +260,11 @@ func (s *ExamService) edit(ctx context.Context, p auth.Principal, examID id.ID, 
 		if err != nil {
 			return err
 		}
-		next, err := change(cur, s.clock.Now())
+		now := s.clock.Now()
+		if err := settleExamAttempts(ctx, r, cur, now); err != nil {
+			return err
+		}
+		next, err := change(cur, now)
 		if err != nil {
 			return err
 		}
