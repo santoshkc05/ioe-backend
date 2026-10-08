@@ -46,8 +46,10 @@ Current state:
   The exam must belong to the course.
 - **Claim on demand.** `POST` checks eligibility through ports and issues. No event consumers are
   needed for issuing.
-- **Revoke on refund.** The context consumes `payment.purchase.refunded` and revokes when
-  `access_revoked` is true.
+- **Revoke on refund.** The context consumes `enrollment.enrollment.canceled` and revokes when
+  `reason` is `refunded`. It listens to enrollment, not to `payment.purchase.refunded`, because
+  payment announces a refund before the enrollment is canceled: a claim in between would keep
+  its certificate.
 - **Snapshots.** The record stores the student's name and the course title at issue time.
 - **Reissue.** A revoked certificate stays revoked. If the student later qualifies again and
   claims, a new certificate with a new code is issued.
@@ -63,7 +65,7 @@ internal/certificate/
   adapters/
     postgres/ repository, sqlc queries
     httpapi/  handlers, wire types
-    events/   payment.purchase.refunded consumer
+    events/   enrollment.enrollment.canceled consumer
 ```
 
 ### Domain
@@ -93,7 +95,8 @@ type Certificate struct {
   `ExamID` under any other mode.
 - `Code` is generated from a cryptographic random source: 16 random bytes, base32 without padding,
   so it is URL-safe and unguessable.
-- `Certificate.Revoke(now)` is a no-op on an already revoked certificate.
+- Revocation is a single SQL update on the valid certificate, so it is a no-op on one already
+  revoked.
 
 ### App ports
 
@@ -102,9 +105,9 @@ Defined in `certificate/app`, wired in `cmd/api`:
 | Port | Method | Backed by |
 |---|---|---|
 | `CourseManagement` | `CanManage(p, courseID)` | courseauthoring |
-| `Enrollments` | `IsActive(userID, courseID)` | enrollment |
-| `Progress` | `IsComplete(userID, courseID)` | progress |
-| `Exams` | `BelongsToCourse(examID, courseID)`, `HasPassed(userID, examID)` | assessment |
+| `Enrollments` | `IsActivelyEnrolled(courseID, userID)` | enrollment |
+| `Progress` | `IsComplete(courseID, userID)` | progress |
+| `Exams` | `ExamInCourse(courseID, examID)`, `HasPassed(courseID, userID, examID)` | assessment |
 | `Directory` | `StudentName(userID)`, `CourseTitle(courseID)` | identity, courseauthoring |
 
 `progress` and `assessment` gain the small query methods those adapters need. They emit no events
@@ -113,19 +116,23 @@ and change no behavior.
 ### Service
 
 - `SetPolicy(p, courseID, mode, examID)`: requires `CanManage`. For `completion_and_exam`, requires
-  `Exams.BelongsToCourse`. Upserts the policy.
+  `Exams.ExamInCourse`. Upserts the policy.
 - `GetPolicy(p, courseID)`: requires `CanManage`.
 - `Claim(p, courseID)`:
   1. Load the policy. `off` or absent returns `ErrCertificatesDisabled`.
-  2. Require `Enrollments.IsActive`, otherwise `ErrNotEnrolled`.
+  2. Require `Enrollments.IsActivelyEnrolled`, otherwise `ErrNotEnrolled`.
   3. If the user already has a valid certificate for the course, return it with `created=false`.
   4. Require `Progress.IsComplete`, otherwise `ErrProgressIncomplete`.
-  5. For `completion_and_exam`, require `Exams.HasPassed`, otherwise `ErrExamNotPassed`.
+  5. For `completion_and_exam`, require `Exams.ExamInCourse`, otherwise `ErrCertificatesDisabled`
+     (the exam was deleted after the policy was set, so the policy can no longer be met), then
+     `Exams.HasPassed`, otherwise `ErrExamNotPassed`.
   6. Snapshot names through `Directory`, generate a code, insert. A unique-violation on the
      (course, user) valid index returns the existing certificate, so concurrent claims converge.
 - `ListMine(p)`, `GetMine(p, courseID)`: the caller's certificates.
 - `Verify(code)`: public; returns the certificate or `ErrNotFound`.
-- `RevokeForRefund(userID, courseID, now)`: used by the event consumer; idempotent.
+- `RevokeForRefund(userID, courseID, refundedAt)`: used by the event consumer; idempotent. It
+  revokes only a certificate issued at or before `refundedAt`, so a late or redelivered event
+  never revokes a certificate the student earned again after the refund.
 
 ## HTTP
 
@@ -178,9 +185,9 @@ No foreign keys cross schemas. sqlc config gains the new schema.
 
 ## Events
 
-The `events` adapter subscribes to `payment.purchase.refunded`. When `access_revoked` is true it
-calls `RevokeForRefund(user_id, course_id)`. When false, it does nothing. Handling is idempotent, so
-outbox redelivery is safe.
+The `events` adapter subscribes to `enrollment.enrollment.canceled`. When `reason` is `refunded`
+it calls `RevokeForRefund(user_id, course_id, occurred_at)`. Any other reason does nothing.
+Handling is idempotent and bounded by `occurred_at`, so outbox redelivery is safe.
 
 ## Repository rules
 
@@ -191,16 +198,17 @@ outbox redelivery is safe.
 
 ## Testing
 
-- **Domain:** policy validation (all mode and exam combinations), revoke idempotence, code format
+- **Domain:** policy validation (all mode and exam combinations), code format
   and uniqueness.
 - **App, with fakes:** the eligibility matrix across the three modes (not enrolled, progress
   incomplete, exam not passed, success), existing certificate returned on repeat claim, reissue
-  after revoke, policy validation including a foreign exam, authorization on policy routes.
+  after revoke, revoke idempotence and its `refundedAt` bound, a policy exam removed from the
+  course, policy validation including a foreign exam, authorization on policy routes.
 - **HTTP:** status codes and problem reasons, the public verify body has no private fields, unknown
   code is 404.
-- **Integration (Docker):** the valid-certificate unique index under concurrent claims, refund event
-  revokes only when `access_revoked` is true, and a cmd/api e2e flow from policy to claim to verify
-  to refund.
+- **Integration (Docker):** the valid-certificate unique index under concurrent claims, revocation
+  sparing certificates issued after the refund, and a cmd/api e2e flow from policy to claim to
+  verify to refund.
 - Integration tests are reported as passing only if they actually ran.
 
 ## Risks

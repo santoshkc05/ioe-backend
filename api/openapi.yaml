@@ -1991,7 +1991,8 @@ paths:
         Issues a certificate when the caller is actively enrolled and meets the course's policy.
         Returns 201 for a new certificate and 200 with the existing one on a repeat claim.
         Refusals are 409 with a problem `type` of `certificates_disabled`, `not_enrolled`,
-        `progress_incomplete` or `exam_not_passed`.
+        `progress_incomplete` or `exam_not_passed`. `certificates_disabled` also covers a policy
+        whose exam was deleted from the course.
       security:
         - bearer: []
       parameters:
