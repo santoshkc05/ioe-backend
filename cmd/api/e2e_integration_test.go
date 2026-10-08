@@ -1621,3 +1621,55 @@ func TestManualPaymentEndToEnd(t *testing.T) {
 		}
 	}
 }
+
+func TestBlogEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	bearer := func(tok string) map[string]string { return map[string]string{"Authorization": "Bearer " + tok} }
+	signIn := func(sub, email string) string {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return body["access_token"].(string)
+	}
+	admin := bearer(signIn("sub-admin", "admin@example.com"))
+	student := bearer(signIn("sub-student", "student@example.com"))
+
+	mustStatus(t, c, http.MethodPost, "/v1/blog/posts", `{"title":"Nope"}`, student, http.StatusForbidden)
+	post := mustStatus(t, c, http.MethodPost, "/v1/blog/posts", `{"title":"Hello Blog","tags":["Go"]}`, admin, http.StatusCreated)
+	postID := post["id"].(string)
+	mustStatus(t, c, http.MethodPost, "/v1/blog/posts/"+postID+"/publish", "", admin, http.StatusBadRequest) // empty
+	mustStatus(t, c, http.MethodPut, "/v1/blog/posts/"+postID+"/content",
+		`{"blocks":[{"client_block_id":"b1","type":"text","body":"<p>hello readers</p>"}]}`, admin, http.StatusOK)
+	live := mustStatus(t, c, http.MethodPost, "/v1/blog/posts/"+postID+"/publish", "", admin, http.StatusOK)
+	if live["live_version"] != float64(1) {
+		t.Fatalf("publish %v", live)
+	}
+	mustStatus(t, c, http.MethodPut, "/v1/blog/posts/"+postID+"/slug", `{"slug":"hello-again"}`, admin, http.StatusOK)
+
+	got := mustStatus(t, c, http.MethodGet, "/v1/blog/public/posts/hello-blog", "", nil, http.StatusOK)
+	if got["slug"] != "hello-again" || got["requested_slug"] != "hello-blog" || got["author_name"] != "Test User" {
+		t.Fatalf("public get %v", got)
+	}
+	list := mustStatus(t, c, http.MethodGet, "/v1/blog/public/posts?tag=go", "", nil, http.StatusOK)
+	if items := list["items"].([]any); len(items) != 1 {
+		t.Fatalf("list %v", list)
+	}
+	mustStatus(t, c, http.MethodGet, "/v1/blog/public/index", "", nil, http.StatusOK)
+	mustStatus(t, c, http.MethodGet, "/v1/blog/public/tags", "", nil, http.StatusOK)
+	mustStatus(t, c, http.MethodPost, "/v1/blog/posts/"+postID+"/unpublish", "", admin, http.StatusOK)
+	mustStatus(t, c, http.MethodGet, "/v1/blog/public/posts/hello-again", "", nil, http.StatusNotFound)
+}

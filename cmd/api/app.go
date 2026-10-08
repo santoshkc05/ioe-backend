@@ -89,6 +89,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
 	registerMedia(router, mediaAssets, courses, contents, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerAssessment(router, assessmentTx, courses, contents, enrollmentAccess, ids, clk, identityHandler.RequireAuth, logger)
+	registerBlog(router, pool, ids, clk, identityUsers{svc: identity}, identityHandler.RequireAuth, ips, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
 	if err != nil {

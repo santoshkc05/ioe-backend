@@ -34,3 +34,23 @@ func (u identityUsers) Contact(ctx context.Context, userID string) (string, stri
 	}
 	return user.Email, user.Name, nil
 }
+
+// Names returns display names for blog authors. Identity has no batch read, so this makes
+// one lookup per distinct ID; callers pass at most one page of authors.
+func (u identityUsers) Names(ctx context.Context, userIDs []id.ID) (map[id.ID]string, error) {
+	out := make(map[id.ID]string, len(userIDs))
+	for _, uid := range userIDs {
+		if _, seen := out[uid]; seen {
+			continue
+		}
+		user, err := u.svc.GetMe(ctx, uid)
+		if errors.Is(err, identityapp.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		out[uid] = user.Name
+	}
+	return out, nil
+}

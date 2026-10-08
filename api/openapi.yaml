@@ -1887,6 +1887,366 @@ paths:
         "413": { $ref: "#/components/responses/Problem" }
         "415": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
+  /v1/blog/posts:
+    post:
+      summary: Create a draft blog post. Instructors and root admins.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/BlogPostDetailsInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    get:
+      summary: A post's draft. Author or root admin.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      summary: Replace a draft's details. Fails with 409 when version is stale.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              allOf:
+                - $ref: "#/components/schemas/BlogPostDetailsInput"
+                - type: object
+                  required: [version]
+                  properties:
+                    version: { type: integer, format: int64 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/slug:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    put:
+      summary: Change a post's slug. Former slugs keep resolving to it.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slug]
+              additionalProperties: false
+              properties:
+                slug: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 96 }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogPost" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/publish:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    post:
+      summary: Snapshot the draft as the next live version. 400 empty_post when it has no blocks.
+      security:
+        - bearer: []
+      responses:
+        "200": { $ref: "#/components/responses/BlogPost" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/unpublish:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    post:
+      summary: Take a live post off the public site. Root admins only.
+      security:
+        - bearer: []
+      responses:
+        "200": { $ref: "#/components/responses/BlogPost" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/archive:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    post:
+      summary: Retire a post for good. Its slugs stay reserved.
+      security:
+        - bearer: []
+      responses:
+        "200": { $ref: "#/components/responses/BlogPost" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/discard-draft:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    post:
+      summary: Restore details and blocks from the live version.
+      security:
+        - bearer: []
+      responses:
+        "200": { $ref: "#/components/responses/BlogPost" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/versions:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    get:
+      summary: A post's published versions, newest first. Author or root admin.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogVersionSummary" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/versions/{versionNumber}:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+      - name: versionNumber
+        in: path
+        required: true
+        schema: { type: integer, minimum: 1 }
+    get:
+      summary: One published version with its blocks. Author or root admin.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogVersion" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/posts/{postID}/content:
+    parameters:
+      - $ref: "#/components/parameters/BlogPostID"
+    get:
+      summary: The draft's blocks and content revision.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogContent" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    put:
+      summary: Replace every block. Rate-limited per user and post.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [blocks]
+              additionalProperties: false
+              properties:
+                blocks:
+                  type: array
+                  maxItems: 200
+                  items: { $ref: "#/components/schemas/BlogBlockInput" }
+      responses:
+        "200": { $ref: "#/components/responses/BlogContentRevision" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    patch:
+      summary: >
+        Apply an incremental diff. order lists every resulting client_block_id; a stale
+        base_revision returns 409 revision_conflict with the current content as extension members.
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [base_revision, order]
+              additionalProperties: false
+              properties:
+                base_revision: { type: integer, format: int64 }
+                order: { type: array, maxItems: 500, items: { type: string } }
+                upserts: { type: array, maxItems: 200, items: { $ref: "#/components/schemas/BlogBlockInput" } }
+                deletes: { type: array, maxItems: 500, items: { type: string } }
+      responses:
+        "200": { $ref: "#/components/responses/BlogContentRevision" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/users/{authorID}/blog/posts:
+    parameters:
+      - name: authorID
+        in: path
+        required: true
+        schema: { type: string }
+    get:
+      summary: An author's posts, newest first. The author or a root admin.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [posts]
+                properties:
+                  posts: { type: array, items: { $ref: "#/components/schemas/BlogPost" } }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/public/posts:
+    get:
+      summary: Live posts, first published newest first. Public, cacheable, rate-limited per client IP.
+      security: []
+      parameters:
+        - name: tag
+          in: query
+          schema: { type: string, maxLength: 32 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
+        - name: cursor
+          in: query
+          description: The next_cursor of the previous page. Opaque.
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicBlogCardPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/public/posts/{slug}:
+    get:
+      summary: >
+        A live post by current or former slug. When requested_slug differs from slug,
+        redirect the reader to slug. Unknown, draft and archived posts are 404.
+      security: []
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PublicBlogPost" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/public/tags:
+    get:
+      summary: Tags of live posts with counts, most used first.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/BlogTagCount" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/blog/public/index:
+    get:
+      summary: Sitemap index of live posts, first published newest first.
+      security: []
+      parameters:
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 500, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/BlogIndexPage" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "429": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/InternalError" }
 components:
   securitySchemes:
@@ -1967,6 +2327,11 @@ components:
       in: path
       required: true
       schema: { $ref: "#/components/schemas/ID" }
+    BlogPostID:
+      name: postID
+      in: path
+      required: true
+      schema: { type: string }
   headers:
     RefreshCookie:
       description: >
@@ -2001,6 +2366,20 @@ components:
       content:
         application/problem+json:
           schema: { $ref: "#/components/schemas/Problem" }
+    BlogPost:
+      description: OK
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/BlogPost" }
+    BlogContentRevision:
+      description: OK
+      content:
+        application/json:
+          schema:
+            type: object
+            required: [content_revision]
+            properties:
+              content_revision: { type: integer, format: int64 }
   schemas:
     TokenResponse:
       type: object
@@ -2912,3 +3291,134 @@ components:
               points_possible: { type: integer }
               points_awarded: { type: integer }
               reference_lecture_id: { $ref: "#/components/schemas/ID" }
+    BlogPostDetailsInput:
+      type: object
+      required: [title]
+      properties:
+        title: { type: string }
+        summary: { type: string, maxLength: 300 }
+        cover_url: { type: string, description: Empty or an absolute https URL }
+        tags:
+          type: array
+          maxItems: 10
+          items: { type: string, pattern: "^[a-z0-9]+(-[a-z0-9]+)*$", maxLength: 32 }
+    BlogDetails:
+      type: object
+      required: [title, summary, cover_url, tags]
+      properties:
+        title: { type: string }
+        summary: { type: string }
+        cover_url: { type: string }
+        tags: { type: array, items: { type: string } }
+    BlogPost:
+      allOf:
+        - $ref: "#/components/schemas/BlogDetails"
+        - type: object
+          required: [id, author_id, slug, status, last_version, live_version, live_published_at, first_published_at, version, created_at, updated_at]
+          properties:
+            id: { type: string }
+            author_id: { type: string }
+            slug: { type: string }
+            status: { type: string, enum: [draft, published, archived] }
+            last_version: { type: integer }
+            live_version: { type: [integer, "null"] }
+            live_published_at: { type: [string, "null"], format: date-time }
+            first_published_at: { type: [string, "null"], format: date-time }
+            version: { type: integer, format: int64 }
+            created_at: { type: string, format: date-time }
+            updated_at: { type: string, format: date-time }
+    BlogBlockInput:
+      type: object
+      required: [client_block_id, type]
+      additionalProperties: false
+      properties:
+        client_block_id: { type: string, minLength: 1, maxLength: 64 }
+        type: { type: string, enum: [text, image] }
+        body: { type: string, description: Sanitized HTML for text blocks }
+        url: { type: string, description: https URL for image blocks }
+        alt: { type: string }
+        caption: { type: string }
+        layout: { type: string, enum: [inline, wide] }
+        alignment: { type: string, enum: [left, center, right] }
+        rotation: { type: integer, minimum: 0, maximum: 359 }
+        width: { type: integer, minimum: 0 }
+        height: { type: integer, minimum: 0 }
+    BlogBlock:
+      allOf:
+        - $ref: "#/components/schemas/BlogBlockInput"
+        - type: object
+          required: [id, position]
+          properties:
+            id: { type: string }
+            position: { type: integer }
+    BlogContent:
+      type: object
+      required: [post_id, content_revision, blocks]
+      properties:
+        post_id: { type: string }
+        content_revision: { type: integer, format: int64 }
+        blocks: { type: array, items: { $ref: "#/components/schemas/BlogBlock" } }
+    BlogVersionSummary:
+      type: object
+      required: [version_number, published_by, published_at]
+      properties:
+        version_number: { type: integer }
+        published_by: { type: string }
+        published_at: { type: string, format: date-time }
+    BlogVersion:
+      allOf:
+        - $ref: "#/components/schemas/BlogVersionSummary"
+        - $ref: "#/components/schemas/BlogDetails"
+        - type: object
+          required: [reading_time_minutes, blocks]
+          properties:
+            reading_time_minutes: { type: integer, minimum: 1 }
+            blocks: { type: array, items: { $ref: "#/components/schemas/BlogBlock" } }
+    PublicBlogCard:
+      allOf:
+        - $ref: "#/components/schemas/BlogDetails"
+        - type: object
+          required: [id, author_id, author_name, slug, version_number, reading_time_minutes, first_published_at, published_at]
+          properties:
+            id: { type: string }
+            author_id: { type: string }
+            author_name: { type: string }
+            slug: { type: string }
+            version_number: { type: integer }
+            reading_time_minutes: { type: integer }
+            first_published_at: { type: string, format: date-time }
+            published_at: { type: string, format: date-time }
+    PublicBlogCardPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items: { type: array, items: { $ref: "#/components/schemas/PublicBlogCard" } }
+        next_cursor: { type: [string, "null"] }
+    PublicBlogPost:
+      allOf:
+        - $ref: "#/components/schemas/PublicBlogCard"
+        - type: object
+          required: [requested_slug, blocks]
+          properties:
+            requested_slug: { type: string }
+            blocks: { type: array, items: { $ref: "#/components/schemas/BlogBlock" } }
+    BlogTagCount:
+      type: object
+      required: [tag, count]
+      properties:
+        tag: { type: string }
+        count: { type: integer }
+    BlogIndexPage:
+      type: object
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          items:
+            type: object
+            required: [slug, first_published_at, published_at]
+            properties:
+              slug: { type: string }
+              first_published_at: { type: string, format: date-time }
+              published_at: { type: string, format: date-time }
+        next_cursor: { type: [string, "null"] }

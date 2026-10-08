@@ -115,6 +115,63 @@ type AssessmentQuizRevisionRow struct {
 	UpdatedAt    time.Time
 }
 
+type BlogPost struct {
+	ID               int64
+	AuthorID         int64
+	Title            string
+	Summary          string
+	CoverUrl         string
+	Tags             []string
+	Slug             string
+	Status           string
+	ContentRevision  int64
+	LastVersion      int32
+	LiveVersion      pgtype.Int4
+	FirstPublishedAt *time.Time
+	Version          int64
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
+}
+
+type BlogPostBlock struct {
+	ID            int64
+	PostID        int64
+	Kind          string
+	Position      int32
+	ClientBlockID string
+	Payload       json.RawMessage
+	CreatedAt     time.Time
+	UpdatedAt     time.Time
+}
+
+type BlogPostSlug struct {
+	Slug      string
+	PostID    int64
+	CreatedAt time.Time
+}
+
+type BlogPostVersion struct {
+	PostID             int64
+	Number             int32
+	Title              string
+	Summary            string
+	CoverUrl           string
+	Tags               []string
+	ReadingTimeMinutes int32
+	PublishedBy        int64
+	PublishedAt        time.Time
+}
+
+type BlogPostVersionBlock struct {
+	PostID        int64
+	Number        int32
+	ID            int64
+	Kind          string
+	Position      int32
+	ClientBlockID string
+	Payload       json.RawMessage
+}
+
 type CourseauthoringCourse struct {
 	ID               int64
 	OwnerID          int64
