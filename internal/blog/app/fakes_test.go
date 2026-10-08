@@ -294,10 +294,11 @@ func (n names) Names(_ context.Context, ids []id.ID) (map[id.ID]string, error) {
 
 // fixture grows with the services: Task 4 adds contents, Task 5 adds public.
 type fixture struct {
-	ids   *id.Generator
-	store *memStore
-	clock *clock.Fake
-	posts *app.PostService
+	ids      *id.Generator
+	store    *memStore
+	clock    *clock.Fake
+	posts    *app.PostService
+	contents *app.ContentService
 }
 
 func newFixture(t *testing.T) fixture {
@@ -307,7 +308,7 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	store, clk := newMemStore(), clock.NewFake(t0)
-	return fixture{ids: ids, store: store, clock: clk, posts: app.NewPostService(store, ids, clk)}
+	return fixture{ids: ids, store: store, clock: clk, posts: app.NewPostService(store, ids, clk), contents: app.NewContentService(store, ids)}
 }
 
 func textBlock(cid, body string) app.BlockInput {

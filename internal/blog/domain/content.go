@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"regexp"
 	"strings"
 
@@ -43,4 +44,10 @@ func ReadingMinutes(blocks []contentblocks.Block) int {
 		}
 	}
 	return max((words+wordsPerMinute-1)/wordsPerMinute, 1)
+}
+
+// IsPolicyError reports whether err is a blog block-policy rejection rather than a
+// generic contentblocks validation failure.
+func IsPolicyError(err error) bool {
+	return errors.Is(err, ErrBlockKindNotAllowed) || errors.Is(err, ErrInvalidImage)
 }
