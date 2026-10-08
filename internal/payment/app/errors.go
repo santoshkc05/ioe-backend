@@ -11,4 +11,5 @@ var (
 	ErrConcurrentModification = errors.New("concurrent modification")
 	ErrInvalidInput           = errors.New("invalid input")
 	ErrForbidden              = errors.New("forbidden")
+	ErrNotRefundable          = errors.New("purchase is not refundable")
 )

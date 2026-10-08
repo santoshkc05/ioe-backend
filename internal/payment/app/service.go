@@ -128,7 +128,8 @@ func (s *Service) Get(ctx context.Context, p auth.Principal, purchaseID id.ID) (
 }
 
 // Reconcile settles every pending purchase older than pendingGrace and retries every failed
-// grant. Errors on single purchases are logged so one bad purchase never blocks the rest.
+// grant and every failed revocation. Errors on single purchases are logged so one bad purchase
+// never blocks the rest.
 func (s *Service) Reconcile(ctx context.Context) error {
 	now := s.clock.Now()
 	var after id.ID
@@ -145,6 +146,12 @@ func (s *Service) Reconcile(ctx context.Context) error {
 		for _, p := range page {
 			if err := ctx.Err(); err != nil {
 				return err
+			}
+			if p.Status == domain.StatusRefunded {
+				if _, err := s.revoke(ctx, p); err != nil {
+					s.logger.WarnContext(ctx, "purchase reconcile failed", "purchase_id", p.ID, "error", err)
+				}
+				continue
 			}
 			settled, err := s.settle(ctx, p)
 			if err != nil {
@@ -165,7 +172,7 @@ func (s *Service) Reconcile(ctx context.Context) error {
 // settle asks the gateway about an unpaid purchase, records the outcome, and grants the
 // enrollment of a paid purchase that was not granted yet. It is idempotent.
 func (s *Service) settle(ctx context.Context, p domain.Purchase) (domain.Purchase, error) {
-	if p.Status != domain.StatusPaid {
+	if p.AwaitsGateway() {
 		gw, ok := s.gateways[p.Gateway]
 		if !ok {
 			return p, ErrGatewayUnavailable
@@ -361,4 +368,80 @@ func (s *Service) RecordManual(ctx context.Context, p auth.Principal, in ManualI
 	}
 	// The purchase is paid, so settle skips the gateway and only grants.
 	return s.settle(ctx, purchase)
+}
+
+// RefundInput is a full refund a root admin records after paying the buyer back.
+type RefundInput struct {
+	Reference string
+	Note      string
+}
+
+// Refund records a full refund of a paid purchase and cancels the buyer's enrollment, unless
+// the buyer holds another paid purchase of the course. Only a root admin may refund; anyone
+// else gets ErrNotFound.
+func (s *Service) Refund(ctx context.Context, p auth.Principal, purchaseID id.ID, in RefundInput) (domain.Purchase, error) {
+	if p.Role != auth.RoleRootAdmin {
+		return domain.Purchase{}, ErrNotFound
+	}
+	r := domain.Refund{Reference: in.Reference, Note: in.Note, RefundedBy: p.UserID}
+	purchase, err := s.refundOnce(ctx, purchaseID, r)
+	if errors.Is(err, ErrConcurrentModification) {
+		purchase, err = s.refundOnce(ctx, purchaseID, r)
+	}
+	if err != nil {
+		return domain.Purchase{}, err
+	}
+	return s.revoke(ctx, purchase)
+}
+
+func (s *Service) refundOnce(ctx context.Context, purchaseID id.ID, refund domain.Refund) (domain.Purchase, error) {
+	var p domain.Purchase
+	err := s.tx.RunInTx(ctx, func(r Repos) error {
+		var (
+			found bool
+			err   error
+		)
+		p, found, err = r.Purchases.Find(ctx, purchaseID)
+		if err != nil {
+			return err
+		}
+		if !found {
+			return ErrNotFound
+		}
+		paid, err := r.Purchases.CountPaid(ctx, p.UserID, p.CourseID)
+		if err != nil {
+			return err
+		}
+		// p itself is still paid, so another paid purchase makes the count exceed one.
+		ev, err := p.Refund(refund, paid > 1, s.clock.Now())
+		switch {
+		case errors.Is(err, domain.ErrNotRefundable):
+			return fmt.Errorf("%w: %w", ErrNotRefundable, err)
+		case errors.Is(err, domain.ErrInvalidPurchase):
+			return fmt.Errorf("%w: reference is required (at most 200 characters) and note is at most 1000 characters", ErrInvalidInput)
+		case err != nil:
+			return err
+		}
+		if err := r.Purchases.Update(ctx, &p); err != nil {
+			return err
+		}
+		return r.Events.Publish(ctx, ev)
+	})
+	return p, err
+}
+
+// revoke cancels the enrollment of a refunded purchase that still needs it. A failed cancel is
+// logged and left for the next reconcile pass.
+func (s *Service) revoke(ctx context.Context, p domain.Purchase) (domain.Purchase, error) {
+	if !p.NeedsRevoke() {
+		return p, nil
+	}
+	if err := s.enroll.RevokePurchased(ctx, p.CourseID, p.UserID); err != nil {
+		s.logger.ErrorContext(ctx, "enrollment revoke failed", "purchase_id", p.ID, "error", err)
+		return p, nil
+	}
+	return s.update(ctx, p.ID, func(cur *domain.Purchase) (domain.Event, error) {
+		cur.MarkRevoked(s.clock.Now())
+		return nil, nil
+	})
 }

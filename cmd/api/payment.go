@@ -44,7 +44,7 @@ func (c paymentCourseCatalog) CourseFacts(ctx context.Context, courseID id.ID) (
 	}, nil
 }
 
-// paymentEnrollments lets payment check and grant enrollment.
+// paymentEnrollments lets payment check, grant and revoke enrollment.
 type paymentEnrollments struct {
 	access *enrollmentapp.AccessQuery
 	svc    *enrollmentapp.Service
@@ -56,6 +56,10 @@ func (e paymentEnrollments) IsEnrolled(ctx context.Context, courseID, userID id.
 
 func (e paymentEnrollments) GrantPurchased(ctx context.Context, courseID, userID id.ID) error {
 	return e.svc.EnrollPurchased(ctx, courseID, userID)
+}
+
+func (e paymentEnrollments) RevokePurchased(ctx context.Context, courseID, userID id.ID) error {
+	return e.svc.CancelPurchased(ctx, courseID, userID)
 }
 
 // registerPayment mounts payment routes and returns the service the reconciler runs. Without

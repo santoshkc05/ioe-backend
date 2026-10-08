@@ -18,7 +18,7 @@ type Repository interface {
 	ListByUser(ctx context.Context, userID, before id.ID, limit int) ([]domain.Purchase, error)
 	CountPaid(ctx context.Context, userID, courseID id.ID) (int, error)
 	// ListUnsettled returns purchases with an ID above afterID that are pending and created
-	// before pendingBefore, or paid and not yet granted, in ID order.
+	// before pendingBefore, paid and not yet granted, or refunded and not yet revoked, in ID order.
 	ListUnsettled(ctx context.Context, pendingBefore time.Time, afterID id.ID, limit int) ([]domain.Purchase, error)
 	Insert(ctx context.Context, p *domain.Purchase) error
 	Update(ctx context.Context, p *domain.Purchase) error
@@ -62,6 +62,9 @@ type EnrollmentGranter interface {
 	IsEnrolled(ctx context.Context, courseID, userID id.ID) (bool, error)
 	// GrantPurchased actively enrolls the user. It is idempotent.
 	GrantPurchased(ctx context.Context, courseID, userID id.ID) error
+	// RevokePurchased cancels the user's enrollment after a refund. A missing or already
+	// canceled enrollment is success.
+	RevokePurchased(ctx context.Context, courseID, userID id.ID) error
 }
 
 // Gateway is one payment provider.

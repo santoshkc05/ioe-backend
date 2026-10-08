@@ -502,3 +502,158 @@ func TestListByUserAccess(t *testing.T) {
 		}
 	}
 }
+
+var refundIn = app.RefundInput{Reference: "RF-1", Note: "duplicate"}
+
+// paidPurchase checks out as student and confirms through the fake gateway.
+func (f fixture) paidPurchase(t *testing.T, txn string) domain.Purchase {
+	t.Helper()
+	p := f.checkout(t, student)
+	f.complete(p, txn)
+	p, err := f.svc.Confirm(ctx, student, p.ID)
+	if err != nil || p.Status != domain.StatusPaid {
+		t.Fatalf("confirm p=%+v err=%v", p, err)
+	}
+	return p
+}
+
+func TestRefundRevokesEnrollment(t *testing.T) {
+	f := newFixture(t)
+	p := f.paidPurchase(t, "T1")
+	f.store.published = nil
+	got, err := f.svc.Refund(ctx, admin, p.ID, refundIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.StatusRefunded || got.RefundedBy != admin.UserID || got.RefundReference != "RF-1" ||
+		got.RevokedAt.IsZero() || f.enroll.revokes != 1 || f.enroll.enrolled[[2]id.ID{paidCourse, student.UserID}] {
+		t.Fatalf("p=%+v revokes=%d", got, f.enroll.revokes)
+	}
+	if stored := f.store.get(p.ID); stored != got {
+		t.Fatalf("stored=%+v returned=%+v", stored, got)
+	}
+	if names := eventNames(f.store.published); len(names) != 1 || names[0] != "payment.purchase.refunded" {
+		t.Fatalf("events = %v", names)
+	}
+}
+
+func TestRefundRejects(t *testing.T) {
+	f := newFixture(t)
+	paid := f.paidPurchase(t, "T1")
+	pending := f.checkout(t, other)
+	cases := []struct {
+		name string
+		who  auth.Principal
+		id   id.ID
+		in   app.RefundInput
+		want error
+	}{
+		{"buyer", student, paid.ID, refundIn, app.ErrNotFound},
+		{"missing", admin, 999, refundIn, app.ErrNotFound},
+		{"pending", admin, pending.ID, refundIn, app.ErrNotRefundable},
+		{"blank reference", admin, paid.ID, app.RefundInput{Reference: " "}, app.ErrInvalidInput},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if _, err := f.svc.Refund(ctx, c.who, c.id, c.in); !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+		})
+	}
+	if f.store.get(paid.ID).Status != domain.StatusPaid || f.enroll.revokes != 0 {
+		t.Fatal("rejected refund changed state")
+	}
+	if _, err := f.svc.Refund(ctx, admin, paid.ID, refundIn); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Refund(ctx, admin, paid.ID, refundIn); !errors.Is(err, app.ErrNotRefundable) {
+		t.Fatalf("repeat err = %v", err)
+	}
+}
+
+func TestRefundKeepsAccessWhenAnotherPaid(t *testing.T) {
+	f := newFixture(t)
+	first := f.checkout(t, student)
+	second := f.checkout(t, student)
+	f.complete(first, "T1")
+	f.complete(second, "T2")
+	for _, p := range []domain.Purchase{first, second} {
+		if _, err := f.svc.Confirm(ctx, student, p.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := f.svc.Refund(ctx, admin, second.ID, refundIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.NeedsRevoke() || f.enroll.revokes != 0 || !f.enroll.enrolled[[2]id.ID{paidCourse, student.UserID}] {
+		t.Fatalf("p=%+v revokes=%d", got, f.enroll.revokes)
+	}
+	ev := f.store.published[len(f.store.published)-1].(domain.PurchaseRefunded)
+	if ev.AccessRevoked {
+		t.Fatalf("event = %+v", ev)
+	}
+}
+
+func TestRevokeFailureIsReconciled(t *testing.T) {
+	f := newFixture(t)
+	p := f.paidPurchase(t, "T1")
+	f.enroll.revokeErr = errors.New("db down")
+	got, err := f.svc.Refund(ctx, admin, p.ID, refundIn)
+	if err != nil || !got.NeedsRevoke() || !strings.Contains(f.logs.String(), "enrollment revoke failed") {
+		t.Fatalf("p=%+v err=%v logs=%s", got, err, f.logs)
+	}
+	f.enroll.revokeErr = nil
+	statusCalls := f.gw.statusCalls
+	if err := f.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.store.get(p.ID).NeedsRevoke() || f.enroll.revokes != 2 || f.gw.statusCalls != statusCalls {
+		t.Fatalf("p=%+v revokes=%d statusCalls=%d", f.store.get(p.ID), f.enroll.revokes, f.gw.statusCalls)
+	}
+}
+
+func TestRefundOfUngrantedStopsGrant(t *testing.T) {
+	f := newFixture(t)
+	f.enroll.grantErr = errors.New("db down")
+	p := f.paidPurchase(t, "T1")
+	if !f.store.get(p.ID).NeedsGrant() {
+		t.Fatal("expected ungranted purchase")
+	}
+	if _, err := f.svc.Refund(ctx, admin, p.ID, refundIn); err != nil {
+		t.Fatal(err)
+	}
+	f.enroll.grantErr = nil
+	grants := f.enroll.grants
+	if err := f.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if f.enroll.grants != grants {
+		t.Fatalf("grants = %d, want %d", f.enroll.grants, grants)
+	}
+}
+
+func TestConfirmRefundedSkipsGateway(t *testing.T) {
+	f := newFixture(t)
+	manual, err := f.svc.RecordManual(ctx, admin, app.ManualInput{UserID: student.UserID, CourseID: paidCourse,
+		AmountMinor: 100000, Currency: "NPR", Method: domain.MethodCash, Reference: "R-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.Refund(ctx, admin, manual.ID, refundIn); err != nil {
+		t.Fatal(err)
+	}
+	got, err := f.svc.Confirm(ctx, student, manual.ID)
+	if err != nil || got.Status != domain.StatusRefunded || f.gw.statusCalls != 0 {
+		t.Fatalf("p=%+v err=%v statusCalls=%d", got, err, f.gw.statusCalls)
+	}
+}
+
+func TestRefundRetriesStaleVersion(t *testing.T) {
+	f := newFixture(t)
+	p := f.paidPurchase(t, "T1")
+	f.store.conflicts = 1
+	if got, err := f.svc.Refund(ctx, admin, p.ID, refundIn); err != nil || got.Status != domain.StatusRefunded {
+		t.Fatalf("p=%+v err=%v", got, err)
+	}
+}

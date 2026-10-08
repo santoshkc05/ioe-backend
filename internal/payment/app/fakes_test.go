@@ -72,7 +72,7 @@ func (t *memTx) ListUnsettled(_ context.Context, pendingBefore time.Time, afterI
 	var out []domain.Purchase
 	for _, p := range t.rows {
 		stale := p.Status == domain.StatusPending && p.CreatedAt.Before(pendingBefore)
-		if p.ID > afterID && (stale || p.NeedsGrant()) {
+		if p.ID > afterID && (stale || p.NeedsGrant() || p.NeedsRevoke()) {
 			out = append(out, p)
 		}
 	}
@@ -119,9 +119,11 @@ func (c catalog) CourseFacts(_ context.Context, courseID id.ID) (app.CourseFacts
 }
 
 type fakeEnrollments struct {
-	enrolled map[[2]id.ID]bool // course, user
-	grantErr error
-	grants   int
+	enrolled  map[[2]id.ID]bool // course, user
+	grantErr  error
+	grants    int
+	revokeErr error
+	revokes   int
 }
 
 func (e *fakeEnrollments) IsEnrolled(_ context.Context, courseID, userID id.ID) (bool, error) {
@@ -134,6 +136,15 @@ func (e *fakeEnrollments) GrantPurchased(_ context.Context, courseID, userID id.
 		return e.grantErr
 	}
 	e.enrolled[[2]id.ID{courseID, userID}] = true
+	return nil
+}
+
+func (e *fakeEnrollments) RevokePurchased(_ context.Context, courseID, userID id.ID) error {
+	e.revokes++
+	if e.revokeErr != nil {
+		return e.revokeErr
+	}
+	delete(e.enrolled, [2]id.ID{courseID, userID})
 	return nil
 }
 
