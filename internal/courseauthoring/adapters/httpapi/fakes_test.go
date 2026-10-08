@@ -2,7 +2,9 @@ package httpapi_test
 
 import (
 	"context"
+	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,13 +20,14 @@ func (c fixedClock) Now() time.Time { return c.now }
 
 // memStore is a single-goroutine fake; RunInTx copies state and commits only on success.
 type memStore struct {
-	mu        sync.Mutex
-	courses   map[id.ID]domain.Course
-	headers   map[id.ID]app.LectureHeader
-	blocks    map[id.ID][]contentblocks.Block
-	reviews   []domain.Review
-	versions  map[versionKey]snapshot
-	published []domain.Event
+	mu         sync.Mutex
+	courses    map[id.ID]domain.Course
+	headers    map[id.ID]app.LectureHeader
+	blocks     map[id.ID][]contentblocks.Block
+	reviews    []domain.Review
+	versions   map[versionKey]snapshot
+	published  []domain.Event
+	categories map[id.ID]domain.Category
 }
 
 type versionKey struct {
@@ -42,18 +45,20 @@ type snapshot struct {
 
 func newMemStore() *memStore {
 	return &memStore{courses: map[id.ID]domain.Course{}, headers: map[id.ID]app.LectureHeader{}, blocks: map[id.ID][]contentblocks.Block{},
-		versions: map[versionKey]snapshot{}}
+		versions: map[versionKey]snapshot{}, categories: map[id.ID]domain.Category{}}
 }
 
 func (m *memStore) RunInTx(_ context.Context, fn func(app.Repos) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	tx := &memTx{store: m, courses: clone(m.courses), headers: clone(m.headers), blocks: clone(m.blocks),
-		reviews: append([]domain.Review(nil), m.reviews...), versions: clone(m.versions)}
-	if err := fn(app.Repos{Courses: tx, Contents: tx, Events: tx}); err != nil {
+		reviews: append([]domain.Review(nil), m.reviews...), versions: clone(m.versions),
+		categories: clone(m.categories)}
+	if err := fn(app.Repos{Courses: tx, Contents: tx, Events: tx, Categories: memCategories{tx}}); err != nil {
 		return err
 	}
 	m.courses, m.headers, m.blocks, m.reviews, m.versions = tx.courses, tx.headers, tx.blocks, tx.reviews, tx.versions
+	m.categories = tx.categories
 	m.published = append(m.published, tx.events...)
 	return nil
 }
@@ -67,13 +72,14 @@ func clone[K comparable, V any](in map[K]V) map[K]V {
 }
 
 type memTx struct {
-	store    *memStore
-	courses  map[id.ID]domain.Course
-	headers  map[id.ID]app.LectureHeader
-	blocks   map[id.ID][]contentblocks.Block
-	reviews  []domain.Review
-	versions map[versionKey]snapshot
-	events   []domain.Event
+	store      *memStore
+	courses    map[id.ID]domain.Course
+	headers    map[id.ID]app.LectureHeader
+	blocks     map[id.ID][]contentblocks.Block
+	reviews    []domain.Review
+	versions   map[versionKey]snapshot
+	categories map[id.ID]domain.Category
+	events     []domain.Event
 }
 
 func (t *memTx) FindByID(_ context.Context, cid id.ID) (domain.Course, error) {
@@ -83,7 +89,7 @@ func (t *memTx) FindByID(_ context.Context, cid id.ID) (domain.Course, error) {
 	}
 	c.Sections = append([]domain.Section(nil), c.Sections...)
 	c.Lectures = append([]domain.Lecture(nil), c.Lectures...)
-	return c, nil
+	return t.hydrate(c), nil
 }
 
 func (t *memTx) ListByOwner(_ context.Context, owner id.ID) ([]domain.Course, error) {
@@ -102,15 +108,23 @@ func (t *memTx) ListPublished(_ context.Context, q app.CatalogQuery) ([]app.Cour
 		if !w.IsLive() {
 			continue
 		}
-		c := t.versions[versionKey{w.ID, w.Live.Number}].course
+		c := t.hydrate(t.versions[versionKey{w.ID, w.Live.Number}].course)
 		if (q.After != 0 && c.ID >= q.After) ||
 			(q.Level != "" && c.Level != q.Level) ||
-			(q.Price == app.PriceFree && !c.Price.IsFree()) || (q.Price == app.PricePaid && c.Price.IsFree()) {
+			(q.Price == app.PriceFree && !c.Price.IsFree()) || (q.Price == app.PricePaid && c.Price.IsFree()) ||
+			(q.Category != "" && !slices.ContainsFunc(c.Categories, func(r domain.CategoryRef) bool { return r.Slug == q.Category })) ||
+			(q.Tag != "" && !slices.Contains(c.Tags, q.Tag)) ||
+			(q.Q != "" && !strings.Contains(strings.ToLower(c.Title.String()+" "+c.Description), strings.ToLower(q.Q))) {
 			continue
+		}
+		var rank float32
+		if q.Q != "" {
+			rank = 1 // the fake ranks every match alike; ordering by rank is a PostgreSQL concern
 		}
 		out = append(out, app.CourseSummary{
 			ID: c.ID, OwnerID: c.OwnerID, Title: c.Title.String(), Description: c.Description,
 			Level: c.Level, ThumbnailURL: c.ThumbnailURL, Price: c.Price,
+			Categories: c.Categories, Tags: c.Tags, Rank: rank,
 			LectureCount: len(c.Lectures), SectionCount: len(c.Sections),
 			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 		})
@@ -147,7 +161,7 @@ func (t *memTx) FindVersion(ctx context.Context, cid id.ID, number int) (domain.
 	v.Lectures = append([]domain.Lecture(nil), v.Lectures...)
 	v.Status, v.Version, v.LastVersion, v.Live = domain.StatusPublished, c.Version, c.LastVersion, c.Live
 	v.ReviewNote, v.SubmittedAt, v.ReviewedAt, v.UpdatedAt = "", time.Time{}, time.Time{}, snap.course.Live.PublishedAt
-	return v, nil
+	return t.hydrate(v), nil
 }
 
 func (t *memTx) ListVersions(_ context.Context, cid id.ID) ([]app.VersionSummary, error) {
@@ -355,4 +369,89 @@ type fakeAssessments struct{}
 
 func (fakeAssessments) Heads(_ context.Context, _ id.ID) ([]domain.AssessmentPin, error) {
 	return nil, nil
+}
+
+// hydrate fills category names and drops categories that no longer exist, as the database's
+// join and cascade do.
+func (t *memTx) hydrate(c domain.Course) domain.Course {
+	refs := make([]domain.CategoryRef, 0, len(c.Categories))
+	for _, r := range c.Categories {
+		if k, ok := t.categories[r.ID]; ok {
+			refs = append(refs, domain.CategoryRef{ID: k.ID, Name: k.Name, Slug: k.Slug})
+		}
+	}
+	c.Categories, c.Tags = refs, append([]string{}, c.Tags...)
+	return c
+}
+
+// memCategories is the category repository over a memTx.
+type memCategories struct{ t *memTx }
+
+func (m memCategories) conflicts(c domain.Category) bool {
+	for _, k := range m.t.categories {
+		if k.ID != c.ID && (strings.EqualFold(k.Name, c.Name) || k.Slug == c.Slug) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m memCategories) Insert(_ context.Context, c domain.Category) error {
+	if m.conflicts(c) {
+		return app.ErrCategoryExists
+	}
+	m.t.categories[c.ID] = c
+	return nil
+}
+
+func (m memCategories) Update(_ context.Context, c domain.Category) error {
+	if _, ok := m.t.categories[c.ID]; !ok {
+		return app.ErrNotFound
+	}
+	if m.conflicts(c) {
+		return app.ErrCategoryExists
+	}
+	m.t.categories[c.ID] = c
+	return nil
+}
+
+func (m memCategories) Delete(_ context.Context, categoryID id.ID) error {
+	if _, ok := m.t.categories[categoryID]; !ok {
+		return app.ErrNotFound
+	}
+	delete(m.t.categories, categoryID)
+	return nil
+}
+
+func (m memCategories) Get(_ context.Context, categoryID id.ID) (domain.Category, error) {
+	c, ok := m.t.categories[categoryID]
+	if !ok {
+		return domain.Category{}, app.ErrNotFound
+	}
+	return c, nil
+}
+
+func (m memCategories) List(_ context.Context) ([]app.CategoryWithCount, error) {
+	out := make([]app.CategoryWithCount, 0, len(m.t.categories))
+	for _, k := range m.t.categories {
+		n := 0
+		for _, w := range m.t.courses {
+			if w.IsLive() && slices.ContainsFunc(m.t.versions[versionKey{w.ID, w.Live.Number}].course.Categories,
+				func(r domain.CategoryRef) bool { return r.ID == k.ID }) {
+				n++
+			}
+		}
+		out = append(out, app.CategoryWithCount{Category: k, CourseCount: n})
+	}
+	sort.Slice(out, func(i, j int) bool { return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name) })
+	return out, nil
+}
+
+func (m memCategories) ExistAll(_ context.Context, ids []id.ID) (bool, error) {
+	for _, cid := range ids {
+		if _, ok := m.t.categories[cid]; !ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }

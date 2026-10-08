@@ -69,8 +69,9 @@ func (h *Handler) updateDetails(w http.ResponseWriter, r *http.Request) {
 	if !httpserver.DecodeJSON(w, r, &req) {
 		return
 	}
-	err := h.courses.UpdateDetails(r.Context(), principal(r), ids[0],
-		app.DetailsInput{Title: req.Title, Description: req.Description, Level: req.Level, ThumbnailURL: req.ThumbnailURL})
+	err := h.courses.UpdateDetails(r.Context(), principal(r), ids[0], app.DetailsInput{
+		Title: req.Title, Description: req.Description, Level: req.Level, ThumbnailURL: req.ThumbnailURL,
+		CategoryIDs: req.CategoryIDs, Tags: req.Tags})
 	h.noContent(w, r, err)
 }
 

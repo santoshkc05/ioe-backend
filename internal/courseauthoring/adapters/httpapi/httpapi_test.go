@@ -52,11 +52,15 @@ func newServer(t *testing.T, perMinute int) http.Handler {
 	clk := fixedClock{time.Date(2026, 10, 4, 0, 0, 0, 0, time.UTC)}
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	r, h := httpserver.NewRouter(httpserver.Options{Logger: logger, AllowedOrigins: []string{"https://app.test"}, ServiceName: "test"})
-	httpapi.New(app.NewCourseService(store, ids, clk, assetCatalog{}, quizCatalog{}, fakeAssessments{}), app.NewContentService(store, ids, enrolled{}, assetCatalog{}, quizCatalog{}), httpapi.Config{
-		RequireAuth: fakeAuth, OptionalAuth: fakeOptionalAuth, IPs: httpserver.NewIPResolver(nil),
-		ContentLimiter: httpserver.NewRateLimiter(perMinute), CatalogLimiter: httpserver.NewRateLimiter(perMinute),
-		Logger: logger,
-	}).Register(r)
+	httpapi.New(
+		app.NewCourseService(store, ids, clk, assetCatalog{}, quizCatalog{}, fakeAssessments{}),
+		app.NewContentService(store, ids, enrolled{}, assetCatalog{}, quizCatalog{}),
+		app.NewCategoryService(store, ids, clk),
+		httpapi.Config{
+			RequireAuth: fakeAuth, OptionalAuth: fakeOptionalAuth, IPs: httpserver.NewIPResolver(nil),
+			ContentLimiter: httpserver.NewRateLimiter(perMinute), CatalogLimiter: httpserver.NewRateLimiter(perMinute),
+			Logger: logger,
+		}).Register(r)
 	return h
 }
 

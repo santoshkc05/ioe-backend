@@ -148,6 +148,7 @@ func registerCourseAuthoring(r *httpserver.Router, pool *pgxpool.Pool, ids *id.G
 	courseauthoringhttp.New(
 		courses,
 		contents,
+		courseauthoringapp.NewCategoryService(tx, ids, clk),
 		courseauthoringhttp.Config{
 			RequireAuth: authn.RequireAuth, OptionalAuth: authn.OptionalAuth, IPs: ips,
 			ContentLimiter: httpserver.NewRateLimiter(60), CatalogLimiter: httpserver.NewRateLimiter(120),

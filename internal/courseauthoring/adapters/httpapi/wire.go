@@ -32,20 +32,22 @@ type lectureWire struct {
 }
 
 type courseWire struct {
-	ID           id.ID         `json:"id"`
-	OwnerID      id.ID         `json:"owner_id"`
-	Title        string        `json:"title"`
-	Description  string        `json:"description"`
-	Status       string        `json:"status"`
-	Price        priceWire     `json:"price"`
-	IsFree       bool          `json:"is_free"`
-	Sections     []sectionWire `json:"sections"`
-	Lectures     []lectureWire `json:"lectures"`
-	ThumbnailURL string        `json:"thumbnail_url"`
-	Level        string        `json:"level"`
-	ReviewNote   string        `json:"latest_review_note,omitempty"`
-	SubmittedAt  *time.Time    `json:"submitted_at,omitempty"`
-	ReviewedAt   *time.Time    `json:"reviewed_at,omitempty"`
+	ID           id.ID          `json:"id"`
+	OwnerID      id.ID          `json:"owner_id"`
+	Title        string         `json:"title"`
+	Description  string         `json:"description"`
+	Status       string         `json:"status"`
+	Price        priceWire      `json:"price"`
+	IsFree       bool           `json:"is_free"`
+	Sections     []sectionWire  `json:"sections"`
+	Lectures     []lectureWire  `json:"lectures"`
+	ThumbnailURL string         `json:"thumbnail_url"`
+	Level        string         `json:"level"`
+	Categories   []categoryWire `json:"categories"`
+	Tags         []string       `json:"tags"`
+	ReviewNote   string         `json:"latest_review_note,omitempty"`
+	SubmittedAt  *time.Time     `json:"submitted_at,omitempty"`
+	ReviewedAt   *time.Time     `json:"reviewed_at,omitempty"`
 	// LiveVersionNumber and LivePublishedAt (unix milliseconds) are omitted when the
 	// course is not live.
 	LiveVersionNumber int       `json:"live_version_number,omitempty"`
@@ -64,7 +66,9 @@ func toCourseWire(c domain.Course) courseWire {
 	w := courseWire{ID: c.ID, OwnerID: c.OwnerID, Title: c.Title.String(), Description: c.Description,
 		Status: string(c.Status), Price: priceWire{c.Price.AmountMinor, c.Price.Currency}, IsFree: c.Price.IsFree(),
 		Sections: make([]sectionWire, 0, len(c.Sections)), Lectures: make([]lectureWire, 0, len(c.Lectures)),
-		ThumbnailURL: c.ThumbnailURL, Level: c.Level, ReviewNote: c.ReviewNote,
+		ThumbnailURL: c.ThumbnailURL, Level: c.Level,
+		Categories: toCategoryRefWires(c.Categories), Tags: nonNilTags(c.Tags),
+		ReviewNote:  c.ReviewNote,
 		SubmittedAt: optionalTime(c.SubmittedAt), ReviewedAt: optionalTime(c.ReviewedAt),
 		LiveVersionNumber: c.Live.Number, HasDraftChanges: c.HasDraftChanges(),
 		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt}
@@ -121,10 +125,12 @@ type createCourseRequest struct {
 }
 
 type updateDetailsRequest struct {
-	Title        string `json:"title"`
-	Description  string `json:"description"`
-	ThumbnailURL string `json:"thumbnail_url"`
-	Level        string `json:"level"`
+	Title        string    `json:"title"`
+	Description  string    `json:"description"`
+	ThumbnailURL string    `json:"thumbnail_url"`
+	Level        string    `json:"level"`
+	CategoryIDs  *[]id.ID  `json:"category_ids"`
+	Tags         *[]string `json:"tags"`
 }
 
 type setPriceRequest struct {
@@ -336,18 +342,20 @@ func lectureContentConflictExt(v app.LectureContentView) map[string]any {
 }
 
 type courseSummaryWire struct {
-	ID           id.ID     `json:"id"`
-	OwnerID      id.ID     `json:"owner_id"`
-	Title        string    `json:"title"`
-	Description  string    `json:"description"`
-	Level        string    `json:"level"`
-	ThumbnailURL string    `json:"thumbnail_url"`
-	Price        priceWire `json:"price"`
-	IsFree       bool      `json:"is_free"`
-	LectureCount int       `json:"lecture_count"`
-	SectionCount int       `json:"section_count"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           id.ID          `json:"id"`
+	OwnerID      id.ID          `json:"owner_id"`
+	Title        string         `json:"title"`
+	Description  string         `json:"description"`
+	Level        string         `json:"level"`
+	ThumbnailURL string         `json:"thumbnail_url"`
+	Price        priceWire      `json:"price"`
+	IsFree       bool           `json:"is_free"`
+	Categories   []categoryWire `json:"categories"`
+	Tags         []string       `json:"tags"`
+	LectureCount int            `json:"lecture_count"`
+	SectionCount int            `json:"section_count"`
+	CreatedAt    time.Time      `json:"created_at"`
+	UpdatedAt    time.Time      `json:"updated_at"`
 }
 
 type catalogPageWire struct {
@@ -355,19 +363,32 @@ type catalogPageWire struct {
 	NextCursor string              `json:"next_cursor,omitempty"`
 }
 
-func toCatalogPageWire(p app.CatalogPage) catalogPageWire {
+func toCatalogPageWire(p app.CatalogPage, q string) catalogPageWire {
 	w := catalogPageWire{Courses: make([]courseSummaryWire, 0, len(p.Courses))}
 	for _, c := range p.Courses {
 		w.Courses = append(w.Courses, courseSummaryWire{
 			ID: c.ID, OwnerID: c.OwnerID, Title: c.Title, Description: c.Description,
 			Level: c.Level, ThumbnailURL: c.ThumbnailURL,
 			Price: priceWire{c.Price.AmountMinor, c.Price.Currency}, IsFree: c.Price.IsFree(),
+			Categories: toCategoryRefWires(c.Categories), Tags: nonNilTags(c.Tags),
 			LectureCount: c.LectureCount, SectionCount: c.SectionCount,
 			CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
 		})
 	}
-	if p.Next != 0 {
+	switch {
+	case p.Next == 0:
+	case q == "":
 		w.NextCursor = p.Next.String()
+	default:
+		w.NextCursor = encodeSearchCursor(p.Next, p.NextRank, q)
 	}
 	return w
+}
+
+// nonNilTags makes an absent tag list encode as [] rather than null.
+func nonNilTags(tags []string) []string {
+	if tags == nil {
+		return []string{}
+	}
+	return tags
 }

@@ -55,6 +55,14 @@ type ContentService interface {
 	Patch(ctx context.Context, p auth.Principal, courseID, lectureID id.ID, in app.PatchInput) (int64, error)
 }
 
+// CategoryService is the category use-case surface the handlers call.
+type CategoryService interface {
+	Create(ctx context.Context, p auth.Principal, name string) (domain.Category, error)
+	Rename(ctx context.Context, p auth.Principal, categoryID id.ID, name string) (domain.Category, error)
+	Delete(ctx context.Context, p auth.Principal, categoryID id.ID) error
+	List(ctx context.Context) ([]app.CategoryWithCount, error)
+}
+
 type Config struct {
 	RequireAuth    httpserver.Middleware
 	OptionalAuth   httpserver.Middleware
@@ -65,17 +73,18 @@ type Config struct {
 }
 
 type Handler struct {
-	courses  CourseService
-	contents ContentService
-	cfg      Config
+	courses    CourseService
+	contents   ContentService
+	categories CategoryService
+	cfg        Config
 }
 
-func New(courses CourseService, contents ContentService, cfg Config) *Handler {
-	return &Handler{courses: courses, contents: contents, cfg: cfg}
+func New(courses CourseService, contents ContentService, categories CategoryService, cfg Config) *Handler {
+	return &Handler{courses: courses, contents: contents, categories: categories, cfg: cfg}
 }
 
-// Register mounts the course authoring routes. GET /v1/courses and GET /v1/courses/{courseID}
-// are public and rate-limited per client IP; every other route requires authentication.
+// Register mounts the course authoring routes. GET /v1/courses, GET /v1/courses/{courseID}
+// and GET /v1/categories are public and rate-limited per client IP; every other route requires authentication.
 func (h *Handler) Register(r *httpserver.Router) {
 	a := func(f http.HandlerFunc) http.Handler { return h.cfg.RequireAuth(f) }
 	public := func(f http.HandlerFunc) http.Handler {
@@ -85,6 +94,10 @@ func (h *Handler) Register(r *httpserver.Router) {
 	r.Handle("POST /v1/courses", a(h.createCourse))
 	r.Handle("GET /v1/users/{ownerID}/courses", a(h.listByOwner))
 	r.Handle("GET /v1/courses/{courseID}", public(h.getCourse))
+	r.Handle("GET /v1/categories", public(h.listCategories))
+	r.Handle("POST /v1/categories", a(h.createCategory))
+	r.Handle("PATCH /v1/categories/{categoryID}", a(h.renameCategory))
+	r.Handle("DELETE /v1/categories/{categoryID}", a(h.deleteCategory))
 	r.Handle("PATCH /v1/courses/{courseID}", a(h.updateDetails))
 	r.Handle("POST /v1/courses/{courseID}/price", a(h.setPrice))
 	r.Handle("POST /v1/courses/{courseID}/publish", a(h.publish))
@@ -167,6 +180,12 @@ var errorMappings = []errorMapping{
 	{domain.ErrCourseNotEditable, http.StatusConflict, "course_not_editable", "Course Not Editable"},
 	{domain.ErrInvalidStatusTransition, http.StatusConflict, "invalid_transition", "Invalid Transition"},
 	{domain.ErrApprovalRequired, http.StatusConflict, "approval_required", "Approval Required"},
+	{app.ErrCategoryExists, http.StatusConflict, "category_exists", "Category Exists"},
+	{app.ErrUnknownCategory, http.StatusBadRequest, "unknown_category", "Unknown Category"},
+	{domain.ErrTooManyCategories, http.StatusBadRequest, "too_many_categories", "Too Many Categories"},
+	{domain.ErrInvalidTag, http.StatusBadRequest, "invalid_tag", "Invalid Tag"},
+	{domain.ErrTooManyTags, http.StatusBadRequest, "too_many_tags", "Too Many Tags"},
+	{domain.ErrInvalidCategoryName, http.StatusBadRequest, "invalid_category_name", "Invalid Category Name"},
 	{app.ErrRevisionRequired, http.StatusBadRequest, "lecture_content_revision_required", "Revision Required"},
 	{app.ErrPatchTooLarge, http.StatusBadRequest, "patch_too_large", "Patch Too Large"},
 	{app.ErrBlockSetMismatch, http.StatusBadRequest, "block_set_mismatch", "Block Set Mismatch"},
