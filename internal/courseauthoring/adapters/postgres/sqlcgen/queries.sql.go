@@ -101,6 +101,38 @@ func (q *Queries) CopyVersionSections(ctx context.Context, arg CopyVersionSectio
 	return err
 }
 
+const countCategories = `-- name: CountCategories :one
+SELECT count(*) FROM courseauthoring.categories WHERE id = ANY($1::bigint[])
+`
+
+func (q *Queries) CountCategories(ctx context.Context, ids []int64) (int64, error) {
+	row := q.db.QueryRow(ctx, countCategories, ids)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const deleteCategory = `-- name: DeleteCategory :execrows
+DELETE FROM courseauthoring.categories WHERE id = $1
+`
+
+func (q *Queries) DeleteCategory(ctx context.Context, id int64) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteCategory, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteCourseCategories = `-- name: DeleteCourseCategories :exec
+DELETE FROM courseauthoring.course_categories WHERE course_id = $1
+`
+
+func (q *Queries) DeleteCourseCategories(ctx context.Context, courseID int64) error {
+	_, err := q.db.Exec(ctx, deleteCourseCategories, courseID)
+	return err
+}
+
 const deleteLectureBlocks = `-- name: DeleteLectureBlocks :exec
 DELETE FROM courseauthoring.lecture_blocks WHERE lecture_id = $1
 `
@@ -183,8 +215,26 @@ func (q *Queries) ForceBumpLectureContentRevision(ctx context.Context, arg Force
 	return content_revision, err
 }
 
+const getCategory = `-- name: GetCategory :one
+SELECT id, name, slug, created_at FROM courseauthoring.categories WHERE id = $1
+`
+
+func (q *Queries) GetCategory(ctx context.Context, id int64) (CourseauthoringCategory, error) {
+	row := q.db.QueryRow(ctx, getCategory, id)
+	var i CourseauthoringCategory
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.Slug,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getCourseVersion = `-- name: GetCourseVersion :one
-SELECT course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at FROM courseauthoring.course_versions WHERE course_id = $1 AND number = $2
+SELECT course_id, number, title, description, level, thumbnail_url, price_amount_minor,
+       price_currency, published_by, published_at, tags
+FROM courseauthoring.course_versions WHERE course_id = $1 AND number = $2
 `
 
 type GetCourseVersionParams struct {
@@ -192,9 +242,23 @@ type GetCourseVersionParams struct {
 	Number   int32
 }
 
-func (q *Queries) GetCourseVersion(ctx context.Context, arg GetCourseVersionParams) (CourseauthoringCourseVersion, error) {
+type GetCourseVersionRow struct {
+	CourseID         int64
+	Number           int32
+	Title            string
+	Description      string
+	Level            string
+	ThumbnailUrl     string
+	PriceAmountMinor int64
+	PriceCurrency    string
+	PublishedBy      int64
+	PublishedAt      time.Time
+	Tags             []string
+}
+
+func (q *Queries) GetCourseVersion(ctx context.Context, arg GetCourseVersionParams) (GetCourseVersionRow, error) {
 	row := q.db.QueryRow(ctx, getCourseVersion, arg.CourseID, arg.Number)
-	var i CourseauthoringCourseVersion
+	var i GetCourseVersionRow
 	err := row.Scan(
 		&i.CourseID,
 		&i.Number,
@@ -206,6 +270,7 @@ func (q *Queries) GetCourseVersion(ctx context.Context, arg GetCourseVersionPara
 		&i.PriceCurrency,
 		&i.PublishedBy,
 		&i.PublishedAt,
+		&i.Tags,
 	)
 	return i, err
 }
@@ -297,10 +362,31 @@ func (q *Queries) GetVersionLecture(ctx context.Context, arg GetVersionLecturePa
 	return i, err
 }
 
+const insertCategory = `-- name: InsertCategory :exec
+INSERT INTO courseauthoring.categories (id, name, slug, created_at) VALUES ($1, $2, $3, $4)
+`
+
+type InsertCategoryParams struct {
+	ID        int64
+	Name      string
+	Slug      string
+	CreatedAt time.Time
+}
+
+func (q *Queries) InsertCategory(ctx context.Context, arg InsertCategoryParams) error {
+	_, err := q.db.Exec(ctx, insertCategory,
+		arg.ID,
+		arg.Name,
+		arg.Slug,
+		arg.CreatedAt,
+	)
+	return err
+}
+
 const insertCourse = `-- name: InsertCourse :exec
 INSERT INTO courseauthoring.courses
-  (id, owner_id, title, description, level, thumbnail_url, status, price_amount_minor, price_currency, version, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11)
+  (id, owner_id, title, description, level, thumbnail_url, status, price_amount_minor, price_currency, version, created_at, updated_at, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12)
 `
 
 type InsertCourseParams struct {
@@ -315,6 +401,7 @@ type InsertCourseParams struct {
 	PriceCurrency    string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
+	Tags             []string
 }
 
 func (q *Queries) InsertCourse(ctx context.Context, arg InsertCourseParams) error {
@@ -330,7 +417,24 @@ func (q *Queries) InsertCourse(ctx context.Context, arg InsertCourseParams) erro
 		arg.PriceCurrency,
 		arg.CreatedAt,
 		arg.UpdatedAt,
+		arg.Tags,
 	)
+	return err
+}
+
+const insertCourseCategories = `-- name: InsertCourseCategories :exec
+INSERT INTO courseauthoring.course_categories (course_id, category_id, position)
+SELECT $1::bigint, t.category_id, (t.ord - 1)::integer
+FROM unnest($2::bigint[]) WITH ORDINALITY AS t(category_id, ord)
+`
+
+type InsertCourseCategoriesParams struct {
+	CourseID    int64
+	CategoryIds []int64
+}
+
+func (q *Queries) InsertCourseCategories(ctx context.Context, arg InsertCourseCategoriesParams) error {
+	_, err := q.db.Exec(ctx, insertCourseCategories, arg.CourseID, arg.CategoryIds)
 	return err
 }
 
@@ -362,8 +466,8 @@ func (q *Queries) InsertCourseReview(ctx context.Context, arg InsertCourseReview
 
 const insertCourseVersion = `-- name: InsertCourseVersion :exec
 INSERT INTO courseauthoring.course_versions
-  (course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+  (course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 type InsertCourseVersionParams struct {
@@ -377,6 +481,7 @@ type InsertCourseVersionParams struct {
 	PriceCurrency    string
 	PublishedBy      int64
 	PublishedAt      time.Time
+	Tags             []string
 }
 
 func (q *Queries) InsertCourseVersion(ctx context.Context, arg InsertCourseVersionParams) error {
@@ -391,6 +496,7 @@ func (q *Queries) InsertCourseVersion(ctx context.Context, arg InsertCourseVersi
 		arg.PriceCurrency,
 		arg.PublishedBy,
 		arg.PublishedAt,
+		arg.Tags,
 	)
 	return err
 }
@@ -441,6 +547,106 @@ func (q *Queries) InsertVersionAssessments(ctx context.Context, arg InsertVersio
 		arg.Revisions,
 	)
 	return err
+}
+
+const insertVersionCategories = `-- name: InsertVersionCategories :exec
+INSERT INTO courseauthoring.course_version_categories (course_id, number, category_id, position)
+SELECT $1::bigint, $2::integer, t.category_id, (t.ord - 1)::integer
+FROM unnest($3::bigint[]) WITH ORDINALITY AS t(category_id, ord)
+`
+
+type InsertVersionCategoriesParams struct {
+	CourseID    int64
+	Number      int32
+	CategoryIds []int64
+}
+
+func (q *Queries) InsertVersionCategories(ctx context.Context, arg InsertVersionCategoriesParams) error {
+	_, err := q.db.Exec(ctx, insertVersionCategories, arg.CourseID, arg.Number, arg.CategoryIds)
+	return err
+}
+
+const listCategoriesByCourseIDs = `-- name: ListCategoriesByCourseIDs :many
+SELECT cc.course_id, k.id, k.name, k.slug
+FROM courseauthoring.course_categories cc
+JOIN courseauthoring.categories k ON k.id = cc.category_id
+WHERE cc.course_id = ANY($1::bigint[])
+ORDER BY cc.course_id, cc.position
+`
+
+type ListCategoriesByCourseIDsRow struct {
+	CourseID int64
+	ID       int64
+	Name     string
+	Slug     string
+}
+
+func (q *Queries) ListCategoriesByCourseIDs(ctx context.Context, courseIds []int64) ([]ListCategoriesByCourseIDsRow, error) {
+	rows, err := q.db.Query(ctx, listCategoriesByCourseIDs, courseIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCategoriesByCourseIDsRow
+	for rows.Next() {
+		var i ListCategoriesByCourseIDsRow
+		if err := rows.Scan(
+			&i.CourseID,
+			&i.ID,
+			&i.Name,
+			&i.Slug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCategoriesWithCounts = `-- name: ListCategoriesWithCounts :many
+SELECT k.id, k.name, k.slug, k.created_at,
+       (SELECT count(*) FROM courseauthoring.course_version_categories vc
+        JOIN courseauthoring.courses c ON c.id = vc.course_id AND c.live_version = vc.number
+        WHERE vc.category_id = k.id) AS course_count
+FROM courseauthoring.categories k
+ORDER BY lower(k.name), k.id
+`
+
+type ListCategoriesWithCountsRow struct {
+	ID          int64
+	Name        string
+	Slug        string
+	CreatedAt   time.Time
+	CourseCount int64
+}
+
+func (q *Queries) ListCategoriesWithCounts(ctx context.Context) ([]ListCategoriesWithCountsRow, error) {
+	rows, err := q.db.Query(ctx, listCategoriesWithCounts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCategoriesWithCountsRow
+	for rows.Next() {
+		var i ListCategoriesWithCountsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Slug,
+			&i.CreatedAt,
+			&i.CourseCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listCourseIDsByOwner = `-- name: ListCourseIDsByOwner :many
@@ -531,7 +737,7 @@ func (q *Queries) ListCourseVersions(ctx context.Context, courseID int64) ([]Lis
 }
 
 const listCoursesByIDs = `-- name: ListCoursesByIDs :many
-SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url, c.status, c.price_amount_minor, c.price_currency, c.version, c.created_at, c.updated_at, c.submitted_at, c.reviewed_at, c.review_note, c.last_version, c.live_version, v.published_at AS live_published_at
+SELECT c.id, c.owner_id, c.title, c.description, c.level, c.thumbnail_url, c.status, c.price_amount_minor, c.price_currency, c.version, c.created_at, c.updated_at, c.submitted_at, c.reviewed_at, c.review_note, c.last_version, c.live_version, c.tags, v.published_at AS live_published_at
 FROM courseauthoring.courses c
 LEFT JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
 WHERE c.id = ANY($1::bigint[])
@@ -555,6 +761,7 @@ type ListCoursesByIDsRow struct {
 	ReviewNote       string
 	LastVersion      int32
 	LiveVersion      *int32
+	Tags             []string
 	LivePublishedAt  *time.Time
 }
 
@@ -585,6 +792,7 @@ func (q *Queries) ListCoursesByIDs(ctx context.Context, ids []int64) ([]ListCour
 			&i.ReviewNote,
 			&i.LastVersion,
 			&i.LiveVersion,
+			&i.Tags,
 			&i.LivePublishedAt,
 		); err != nil {
 			return nil, err
@@ -931,6 +1139,45 @@ func (q *Queries) ListVersionBlocks(ctx context.Context, arg ListVersionBlocksPa
 	return items, nil
 }
 
+const listVersionCategories = `-- name: ListVersionCategories :many
+SELECT k.id, k.name, k.slug
+FROM courseauthoring.course_version_categories vc
+JOIN courseauthoring.categories k ON k.id = vc.category_id
+WHERE vc.course_id = $1 AND vc.number = $2
+ORDER BY vc.position
+`
+
+type ListVersionCategoriesParams struct {
+	CourseID int64
+	Number   int32
+}
+
+type ListVersionCategoriesRow struct {
+	ID   int64
+	Name string
+	Slug string
+}
+
+func (q *Queries) ListVersionCategories(ctx context.Context, arg ListVersionCategoriesParams) ([]ListVersionCategoriesRow, error) {
+	rows, err := q.db.Query(ctx, listVersionCategories, arg.CourseID, arg.Number)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListVersionCategoriesRow
+	for rows.Next() {
+		var i ListVersionCategoriesRow
+		if err := rows.Scan(&i.ID, &i.Name, &i.Slug); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVersionLectures = `-- name: ListVersionLectures :many
 SELECT l.id, l.section_id, l.title, l.free_preview, l.sort_order,
        EXISTS (SELECT 1 FROM courseauthoring.course_version_blocks b
@@ -1032,12 +1279,30 @@ func (q *Queries) LockCourseForUpdate(ctx context.Context, id int64) (int64, err
 	return id_2, err
 }
 
+const updateCategory = `-- name: UpdateCategory :execrows
+UPDATE courseauthoring.categories SET name = $2, slug = $3 WHERE id = $1
+`
+
+type UpdateCategoryParams struct {
+	ID   int64
+	Name string
+	Slug string
+}
+
+func (q *Queries) UpdateCategory(ctx context.Context, arg UpdateCategoryParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateCategory, arg.ID, arg.Name, arg.Slug)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateCourse = `-- name: UpdateCourse :execrows
 UPDATE courseauthoring.courses
 SET title = $3, description = $4, level = $5, thumbnail_url = $6, status = $7,
     price_amount_minor = $8, price_currency = $9, updated_at = $10,
     submitted_at = $11, reviewed_at = $12, review_note = $13, last_version = $14, live_version = $15,
-    version = version + 1
+    tags = $16, version = version + 1
 WHERE id = $1 AND version = $2
 `
 
@@ -1057,6 +1322,7 @@ type UpdateCourseParams struct {
 	ReviewNote       string
 	LastVersion      int32
 	LiveVersion      *int32
+	Tags             []string
 }
 
 func (q *Queries) UpdateCourse(ctx context.Context, arg UpdateCourseParams) (int64, error) {
@@ -1076,6 +1342,7 @@ func (q *Queries) UpdateCourse(ctx context.Context, arg UpdateCourseParams) (int
 		arg.ReviewNote,
 		arg.LastVersion,
 		arg.LiveVersion,
+		arg.Tags,
 	)
 	if err != nil {
 		return 0, err

@@ -71,6 +71,10 @@ func (r courses) load(ctx context.Context, courseIDs []int64) ([]domain.Course, 
 	if err != nil {
 		return nil, err
 	}
+	cats, err := r.q.ListCategoriesByCourseIDs(ctx, courseIDs)
+	if err != nil {
+		return nil, err
+	}
 	out := make([]domain.Course, 0, len(rows))
 	index := make(map[int64]int, len(rows))
 	for _, row := range rows {
@@ -83,6 +87,7 @@ func (r courses) load(ctx context.Context, courseIDs []int64) ([]domain.Course, 
 			ID: id.ID(row.ID), OwnerID: id.ID(row.OwnerID), Title: ttl, Description: row.Description,
 			Level: row.Level, ThumbnailURL: row.ThumbnailUrl, Status: domain.Status(row.Status),
 			Price:       domain.Price{AmountMinor: row.PriceAmountMinor, Currency: row.PriceCurrency},
+			Tags:        row.Tags,
 			SubmittedAt: timeOrZero(row.SubmittedAt), ReviewedAt: timeOrZero(row.ReviewedAt), ReviewNote: row.ReviewNote,
 			LastVersion: int(row.LastVersion), Live: liveVersion(row.LiveVersion, row.LivePublishedAt),
 			Version: row.Version, CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
@@ -108,6 +113,10 @@ func (r courses) load(ctx context.Context, courseIDs []int64) ([]domain.Course, 
 		c := &out[index[l.CourseID]]
 		c.Lectures = append(c.Lectures, domain.Lecture{ID: id.ID(l.ID), SectionID: sectionID, Title: ttl,
 			FreePreview: l.FreePreview, Order: int(l.SortOrder), HasText: l.HasText, HasVideo: l.HasVideo})
+	}
+	for _, k := range cats {
+		c := &out[index[k.CourseID]]
+		c.Categories = append(c.Categories, categoryRef(k.ID, k.Name, k.Slug))
 	}
 	return out, nil
 }
@@ -153,8 +162,13 @@ func (r courses) InsertVersion(ctx context.Context, c *domain.Course, publishedB
 		Level: c.Level, ThumbnailUrl: c.ThumbnailURL,
 		PriceAmountMinor: c.Price.AmountMinor, PriceCurrency: c.Price.Currency,
 		PublishedBy: int64(publishedBy), PublishedAt: c.Live.PublishedAt,
+		Tags: nonNilTags(c.Tags),
 	}); err != nil {
 		return err
+	}
+	if err := r.q.InsertVersionCategories(ctx, sqlcgen.InsertVersionCategoriesParams{
+		CourseID: cid, Number: number, CategoryIds: int64s(c.CategoryIDs())}); err != nil {
+		return unknownCategory(err)
 	}
 	if err := r.q.CopyVersionSections(ctx, sqlcgen.CopyVersionSectionsParams{CourseID: cid, Number: number}); err != nil {
 		return err
@@ -198,6 +212,10 @@ func (r courses) FindVersion(ctx context.Context, courseID id.ID, versionNumber 
 	if err != nil {
 		return domain.Course{}, err
 	}
+	cats, err := r.q.ListVersionCategories(ctx, sqlcgen.ListVersionCategoriesParams{CourseID: cid, Number: number})
+	if err != nil {
+		return domain.Course{}, err
+	}
 	ttl, err := contentblocks.NewTitle(v.Title)
 	if err != nil {
 		return domain.Course{}, fmt.Errorf("course %d version %d title: %w", courseID, v.Number, err)
@@ -205,6 +223,7 @@ func (r courses) FindVersion(ctx context.Context, courseID id.ID, versionNumber 
 	live := domain.Course{
 		ID: c.ID, OwnerID: c.OwnerID, Title: ttl, Description: v.Description, Level: v.Level,
 		ThumbnailURL: v.ThumbnailUrl, Price: domain.Price{AmountMinor: v.PriceAmountMinor, Currency: v.PriceCurrency},
+		Tags:   v.Tags,
 		Status: domain.StatusPublished, LastVersion: c.LastVersion, Live: c.Live, Version: c.Version,
 		CreatedAt: c.CreatedAt, UpdatedAt: v.PublishedAt.UTC(),
 		Sections: make([]domain.Section, 0, len(sections)), Lectures: make([]domain.Lecture, 0, len(lectures)),
@@ -227,6 +246,9 @@ func (r courses) FindVersion(ctx context.Context, courseID id.ID, versionNumber 
 		}
 		live.Lectures = append(live.Lectures, domain.Lecture{ID: id.ID(l.ID), SectionID: sectionID, Title: lt,
 			FreePreview: l.FreePreview, Order: int(l.SortOrder), HasText: l.HasText, HasVideo: l.HasVideo})
+	}
+	for _, k := range cats {
+		live.Categories = append(live.Categories, categoryRef(k.ID, k.Name, k.Slug))
 	}
 	return live, nil
 }
@@ -256,7 +278,7 @@ func (r courses) Insert(ctx context.Context, c *domain.Course) error {
 		ID: int64(c.ID), OwnerID: int64(c.OwnerID), Title: c.Title.String(), Description: c.Description,
 		Level: c.Level, ThumbnailUrl: c.ThumbnailURL, Status: string(c.Status),
 		PriceAmountMinor: c.Price.AmountMinor, PriceCurrency: c.Price.Currency,
-		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt,
+		CreatedAt: c.CreatedAt, UpdatedAt: c.UpdatedAt, Tags: nonNilTags(c.Tags),
 	}); err != nil {
 		return err
 	}
@@ -272,6 +294,7 @@ func (r courses) Update(ctx context.Context, c *domain.Course) error {
 		SubmittedAt: optionalTime(c.SubmittedAt), ReviewedAt: optionalTime(c.ReviewedAt), ReviewNote: c.ReviewNote,
 		LastVersion: int32(c.LastVersion), //nolint:gosec // one per publish, far below int32
 		LiveVersion: optionalVersion(c.Live.Number),
+		Tags:        nonNilTags(c.Tags),
 	})
 	if err != nil {
 		return err
@@ -322,6 +345,13 @@ func (r courses) saveChildren(ctx context.Context, c *domain.Course) error {
 		}); err != nil {
 			return err
 		}
+	}
+	if err := r.q.DeleteCourseCategories(ctx, int64(c.ID)); err != nil {
+		return err
+	}
+	if err := r.q.InsertCourseCategories(ctx, sqlcgen.InsertCourseCategoriesParams{
+		CourseID: int64(c.ID), CategoryIds: int64s(c.CategoryIDs())}); err != nil {
+		return unknownCategory(err)
 	}
 	return nil
 }
@@ -407,4 +437,21 @@ func (r courses) ListVersionPins(ctx context.Context, courseID id.ID, number int
 		out[i] = domain.AssessmentPin{Kind: domain.AssessmentKind(row.Kind), ID: id.ID(row.AssessmentID), Revision: int(row.Revision)}
 	}
 	return out, nil
+}
+
+// nonNilTags keeps a nil slice from being written as NULL into a NOT NULL text[] column.
+func nonNilTags(tags []string) []string {
+	if tags == nil {
+		return []string{}
+	}
+	return tags
+}
+
+// unknownCategory maps a foreign-key failure on a category link, a category deleted after the
+// caller checked it, to app.ErrUnknownCategory.
+func unknownCategory(err error) error {
+	if pgCode(err) == foreignKeyViolation {
+		return app.ErrUnknownCategory
+	}
+	return err
 }

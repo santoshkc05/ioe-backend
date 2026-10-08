@@ -1,14 +1,14 @@
 -- name: InsertCourse :exec
 INSERT INTO courseauthoring.courses
-  (id, owner_id, title, description, level, thumbnail_url, status, price_amount_minor, price_currency, version, created_at, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11);
+  (id, owner_id, title, description, level, thumbnail_url, status, price_amount_minor, price_currency, version, created_at, updated_at, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1, $10, $11, $12);
 
 -- name: UpdateCourse :execrows
 UPDATE courseauthoring.courses
 SET title = $3, description = $4, level = $5, thumbnail_url = $6, status = $7,
     price_amount_minor = $8, price_currency = $9, updated_at = $10,
     submitted_at = $11, reviewed_at = $12, review_note = $13, last_version = $14, live_version = $15,
-    version = version + 1
+    tags = $16, version = version + 1
 WHERE id = $1 AND version = $2;
 
 -- name: LockCourseForUpdate :one
@@ -16,8 +16,8 @@ SELECT id FROM courseauthoring.courses WHERE id = $1 FOR UPDATE;
 
 -- name: InsertCourseVersion :exec
 INSERT INTO courseauthoring.course_versions
-  (course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10);
+  (course_id, number, title, description, level, thumbnail_url, price_amount_minor, price_currency, published_by, published_at, tags)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 
 -- name: CopyVersionSections :exec
 INSERT INTO courseauthoring.course_version_sections (course_id, number, id, title, sort_order)
@@ -39,7 +39,9 @@ SELECT number, published_by, published_at FROM courseauthoring.course_versions
 WHERE course_id = $1 ORDER BY number DESC;
 
 -- name: GetCourseVersion :one
-SELECT * FROM courseauthoring.course_versions WHERE course_id = $1 AND number = $2;
+SELECT course_id, number, title, description, level, thumbnail_url, price_amount_minor,
+       price_currency, published_by, published_at, tags
+FROM courseauthoring.course_versions WHERE course_id = $1 AND number = $2;
 
 -- name: ListVersionSections :many
 SELECT id, title, sort_order FROM courseauthoring.course_version_sections
@@ -206,3 +208,54 @@ FROM ROWS FROM (unnest(@kinds::text[]), unnest(@assessment_ids::bigint[]), unnes
 -- name: ListVersionAssessments :many
 SELECT kind, assessment_id, revision FROM courseauthoring.course_version_assessments
 WHERE course_id = $1 AND number = $2 ORDER BY kind, assessment_id;
+
+-- name: ListCategoriesByCourseIDs :many
+SELECT cc.course_id, k.id, k.name, k.slug
+FROM courseauthoring.course_categories cc
+JOIN courseauthoring.categories k ON k.id = cc.category_id
+WHERE cc.course_id = ANY(sqlc.arg(course_ids)::bigint[])
+ORDER BY cc.course_id, cc.position;
+
+-- name: ListVersionCategories :many
+SELECT k.id, k.name, k.slug
+FROM courseauthoring.course_version_categories vc
+JOIN courseauthoring.categories k ON k.id = vc.category_id
+WHERE vc.course_id = $1 AND vc.number = $2
+ORDER BY vc.position;
+
+-- name: DeleteCourseCategories :exec
+DELETE FROM courseauthoring.course_categories WHERE course_id = $1;
+
+-- name: InsertCourseCategories :exec
+INSERT INTO courseauthoring.course_categories (course_id, category_id, position)
+SELECT sqlc.arg(course_id)::bigint, t.category_id, (t.ord - 1)::integer
+FROM unnest(sqlc.arg(category_ids)::bigint[]) WITH ORDINALITY AS t(category_id, ord);
+
+-- name: InsertVersionCategories :exec
+INSERT INTO courseauthoring.course_version_categories (course_id, number, category_id, position)
+SELECT sqlc.arg(course_id)::bigint, sqlc.arg(number)::integer, t.category_id, (t.ord - 1)::integer
+FROM unnest(sqlc.arg(category_ids)::bigint[]) WITH ORDINALITY AS t(category_id, ord);
+
+-- name: InsertCategory :exec
+INSERT INTO courseauthoring.categories (id, name, slug, created_at) VALUES ($1, $2, $3, $4);
+
+-- name: UpdateCategory :execrows
+UPDATE courseauthoring.categories SET name = $2, slug = $3 WHERE id = $1;
+
+-- name: DeleteCategory :execrows
+DELETE FROM courseauthoring.categories WHERE id = $1;
+
+-- name: GetCategory :one
+SELECT id, name, slug, created_at FROM courseauthoring.categories WHERE id = $1;
+
+-- name: ListCategoriesWithCounts :many
+SELECT k.id, k.name, k.slug, k.created_at,
+       (SELECT count(*) FROM courseauthoring.course_version_categories vc
+        JOIN courseauthoring.courses c ON c.id = vc.course_id AND c.live_version = vc.number
+        WHERE vc.category_id = k.id) AS course_count
+FROM courseauthoring.categories k
+ORDER BY lower(k.name), k.id;
+
+-- name: CountCategories :one
+SELECT count(*) FROM courseauthoring.categories WHERE id = ANY(sqlc.arg(ids)::bigint[]);
+
