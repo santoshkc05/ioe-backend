@@ -50,3 +50,20 @@ type PurchaseFailed struct {
 }
 
 func (PurchaseFailed) EventName() string { return "payment.purchase.failed" }
+
+// PurchaseRefunded is emitted when a root admin records a full refund.
+type PurchaseRefunded struct {
+	PurchaseID      id.ID     `json:"purchase_id"`
+	UserID          id.ID     `json:"user_id"`
+	CourseID        id.ID     `json:"course_id"`
+	CourseTitle     string    `json:"course_title"`
+	AmountMinor     int64     `json:"amount_minor"`
+	Currency        string    `json:"currency"`
+	Gateway         string    `json:"gateway"`
+	ManualMethod    string    `json:"manual_method"` // empty for gateway purchases
+	RefundReference string    `json:"refund_reference"`
+	AccessRevoked   bool      `json:"access_revoked"` // false when another paid purchase keeps access
+	OccurredAt      time.Time `json:"occurred_at"`
+}
+
+func (PurchaseRefunded) EventName() string { return "payment.purchase.refunded" }

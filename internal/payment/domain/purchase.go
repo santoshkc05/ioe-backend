@@ -17,9 +17,10 @@ type Money struct {
 type Status string
 
 const (
-	StatusPending Status = "pending"
-	StatusPaid    Status = "paid"
-	StatusFailed  Status = "failed"
+	StatusPending  Status = "pending"
+	StatusPaid     Status = "paid"
+	StatusFailed   Status = "failed"
+	StatusRefunded Status = "refunded"
 )
 
 // GatewayManual names purchases a root admin records for payments made outside any gateway.
@@ -41,22 +42,27 @@ const (
 // Purchase is one buyer's attempt to pay for one course through one gateway. A buyer may have
 // several; each is settled independently from the gateway's status.
 type Purchase struct {
-	ID           id.ID
-	UserID       id.ID
-	CourseID     id.ID
-	CourseTitle  string // snapshot taken when the purchase is created
-	Price        Money  // snapshot taken at checkout
-	Gateway      string // gateway name, such as "esewa"
-	GatewayRef   string // our reference at the gateway; for eSewa, transaction_uuid
-	GatewayTxn   string // the gateway's transaction id; set when paid
-	Status       Status
-	CreatedAt    time.Time
-	SettledAt    time.Time // zero while pending
-	GrantedAt    time.Time // zero until the enrollment grant succeeds
-	ManualMethod string    // one of the Method constants; empty unless Gateway is GatewayManual
-	RecordedBy   id.ID     // root admin who recorded a manual purchase; zero otherwise
-	Note         string    // admin's remark on a manual purchase; may be empty
-	Version      int64
+	ID              id.ID
+	UserID          id.ID
+	CourseID        id.ID
+	CourseTitle     string // snapshot taken when the purchase is created
+	Price           Money  // snapshot taken at checkout
+	Gateway         string // gateway name, such as "esewa"
+	GatewayRef      string // our reference at the gateway; for eSewa, transaction_uuid
+	GatewayTxn      string // the gateway's transaction id; set when paid
+	Status          Status
+	CreatedAt       time.Time
+	SettledAt       time.Time // zero while pending
+	GrantedAt       time.Time // zero until the enrollment grant succeeds
+	ManualMethod    string    // one of the Method constants; empty unless Gateway is GatewayManual
+	RecordedBy      id.ID     // root admin who recorded a manual purchase; zero otherwise
+	Note            string    // admin's remark on a manual purchase; may be empty
+	RefundedAt      time.Time // zero unless refunded
+	RefundedBy      id.ID     // root admin who recorded the refund; zero unless refunded
+	RefundReference string    // eSewa portal or bank reference of the refund
+	RefundNote      string    // admin's remark on the refund; may be empty
+	RevokedAt       time.Time // set once the refund's enrollment cancel succeeded or was not needed
+	Version         int64
 }
 
 // NewPurchase starts a pending purchase. Its gateway reference is the purchase ID.
@@ -117,12 +123,12 @@ func (p *Purchase) paidEvent(now time.Time) PurchasePaid {
 }
 
 // MarkPaid records the gateway's confirmation. A failed purchase can still become paid when the
-// gateway completes it late. Marking a paid purchase changes nothing and returns no event.
+// gateway completes it late. Marking a paid or refunded purchase changes nothing and returns no event.
 func (p *Purchase) MarkPaid(txn string, now time.Time) (Event, error) {
 	if txn == "" {
 		return nil, ErrInvalidPurchase
 	}
-	if p.Status == StatusPaid {
+	if p.Status == StatusPaid || p.Status == StatusRefunded {
 		return nil, nil
 	}
 	p.Status, p.GatewayTxn, p.SettledAt = StatusPaid, txn, now
@@ -147,7 +153,48 @@ func (p *Purchase) MarkGranted(now time.Time) {
 }
 
 // NeedsGrant reports whether the purchase is paid but the buyer is not yet known to be enrolled.
-func (p *Purchase) NeedsGrant() bool { return p.Status == StatusPaid && p.GrantedAt.IsZero() }
+func (p Purchase) NeedsGrant() bool { return p.Status == StatusPaid && p.GrantedAt.IsZero() }
+
+// AwaitsGateway reports whether only the gateway can settle the purchase.
+func (p Purchase) AwaitsGateway() bool { return p.Status == StatusPending || p.Status == StatusFailed }
+
+// Refund describes a refund a root admin records after paying the buyer back outside this system.
+type Refund struct {
+	Reference  string // eSewa portal or bank reference
+	Note       string
+	RefundedBy id.ID
+}
+
+// Refund records a full refund of a paid purchase. When otherPaid is true the buyer holds
+// another paid purchase of the course, so access is kept and no revocation is needed.
+func (p *Purchase) Refund(r Refund, otherPaid bool, now time.Time) (Event, error) {
+	if p.Status != StatusPaid {
+		return nil, ErrNotRefundable
+	}
+	ref, note := strings.TrimSpace(r.Reference), strings.TrimSpace(r.Note)
+	if ref == "" || len(ref) > maxReferenceLen || len(note) > maxNoteLen || r.RefundedBy == 0 {
+		return nil, ErrInvalidPurchase
+	}
+	p.Status, p.RefundedAt, p.RefundedBy, p.RefundReference, p.RefundNote = StatusRefunded, now, r.RefundedBy, ref, note
+	if otherPaid {
+		p.RevokedAt = now
+	}
+	return PurchaseRefunded{
+		PurchaseID: p.ID, UserID: p.UserID, CourseID: p.CourseID, CourseTitle: p.CourseTitle,
+		AmountMinor: p.Price.AmountMinor, Currency: p.Price.Currency, Gateway: p.Gateway,
+		ManualMethod: p.ManualMethod, RefundReference: ref, AccessRevoked: !otherPaid, OccurredAt: now,
+	}, nil
+}
+
+// NeedsRevoke reports whether the purchase is refunded but the buyer's enrollment is not yet canceled.
+func (p Purchase) NeedsRevoke() bool { return p.Status == StatusRefunded && p.RevokedAt.IsZero() }
+
+// MarkRevoked records that the buyer's enrollment was canceled. It changes only a purchase that needs it.
+func (p *Purchase) MarkRevoked(now time.Time) {
+	if p.NeedsRevoke() {
+		p.RevokedAt = now
+	}
+}
 
 // CanView reports whether pr is the buyer or a root admin.
 func (p *Purchase) CanView(pr auth.Principal) bool {

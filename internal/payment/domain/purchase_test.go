@@ -260,3 +260,111 @@ func TestRecordManualPurchaseRejects(t *testing.T) {
 		t.Fatalf("limits inclusive: %v", err)
 	}
 }
+
+func newPaid(t *testing.T) domain.Purchase {
+	t.Helper()
+	p := newPending(t)
+	if _, err := p.MarkPaid("T1", t0.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	p.MarkGranted(t0.Add(2 * time.Minute))
+	return p
+}
+
+var refund = domain.Refund{Reference: " RF-1 ", Note: " dup ", RefundedBy: 1}
+
+func TestRefund(t *testing.T) {
+	p := newPaid(t)
+	now := t0.Add(time.Hour)
+	ev, err := p.Refund(refund, false, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Status != domain.StatusRefunded || !p.RefundedAt.Equal(now) || p.RefundedBy != 1 ||
+		p.RefundReference != "RF-1" || p.RefundNote != "dup" || !p.RevokedAt.IsZero() {
+		t.Fatalf("purchase = %+v", p)
+	}
+	if !p.NeedsRevoke() || p.NeedsGrant() || p.AwaitsGateway() {
+		t.Fatalf("needsRevoke=%v needsGrant=%v awaits=%v", p.NeedsRevoke(), p.NeedsGrant(), p.AwaitsGateway())
+	}
+	want := domain.PurchaseRefunded{PurchaseID: 42, UserID: 200, CourseID: 10, CourseTitle: "Go", AmountMinor: 150000,
+		Currency: "NPR", Gateway: "esewa", RefundReference: "RF-1", AccessRevoked: true, OccurredAt: now}
+	if got, ok := ev.(domain.PurchaseRefunded); !ok || got != want {
+		t.Fatalf("event = %#v", ev)
+	}
+	if ev.EventName() != "payment.purchase.refunded" {
+		t.Fatalf("name = %s", ev.EventName())
+	}
+	p.MarkRevoked(now.Add(time.Minute))
+	if p.NeedsRevoke() || !p.RevokedAt.Equal(now.Add(time.Minute)) {
+		t.Fatalf("after revoke = %+v", p)
+	}
+	p.MarkRevoked(now.Add(time.Hour))
+	if !p.RevokedAt.Equal(now.Add(time.Minute)) {
+		t.Fatal("MarkRevoked changed an already revoked purchase")
+	}
+}
+
+func TestRefundWithOtherPaidKeepsAccess(t *testing.T) {
+	p := newPaid(t)
+	ev, err := p.Refund(refund, true, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.NeedsRevoke() || !p.RevokedAt.Equal(t0) || ev.(domain.PurchaseRefunded).AccessRevoked {
+		t.Fatalf("purchase=%+v event=%+v", p, ev)
+	}
+}
+
+func TestRefundRejects(t *testing.T) {
+	failed := newPending(t)
+	failed.MarkFailed(t0)
+	refunded := newPaid(t)
+	if _, err := refunded.Refund(refund, false, t0); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name string
+		p    domain.Purchase
+		r    domain.Refund
+		want error
+	}{
+		{"pending", newPending(t), refund, domain.ErrNotRefundable},
+		{"failed", failed, refund, domain.ErrNotRefundable},
+		{"already refunded", refunded, refund, domain.ErrNotRefundable},
+		{"blank reference", newPaid(t), domain.Refund{Reference: "  ", RefundedBy: 1}, domain.ErrInvalidPurchase},
+		{"long reference", newPaid(t), domain.Refund{Reference: strings.Repeat("r", 201), RefundedBy: 1}, domain.ErrInvalidPurchase},
+		{"long note", newPaid(t), domain.Refund{Reference: "r", Note: strings.Repeat("n", 1001), RefundedBy: 1}, domain.ErrInvalidPurchase},
+		{"no admin", newPaid(t), domain.Refund{Reference: "r"}, domain.ErrInvalidPurchase},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			before := c.p
+			ev, err := c.p.Refund(c.r, false, t0.Add(time.Hour))
+			if !errors.Is(err, c.want) || ev != nil || c.p != before {
+				t.Fatalf("err=%v ev=%v changed=%v", err, ev, c.p != before)
+			}
+		})
+	}
+}
+
+func TestMarkPaidIgnoresRefunded(t *testing.T) {
+	p := newPaid(t)
+	if _, err := p.Refund(refund, false, t0); err != nil {
+		t.Fatal(err)
+	}
+	before := p
+	ev, err := p.MarkPaid("T2", t0.Add(time.Hour))
+	if err != nil || ev != nil || p != before {
+		t.Fatalf("ev=%v err=%v p=%+v", ev, err, p)
+	}
+}
+
+func TestAwaitsGateway(t *testing.T) {
+	failed := newPending(t)
+	failed.MarkFailed(t0)
+	paid := newPaid(t)
+	if !newPending(t).AwaitsGateway() || !failed.AwaitsGateway() || paid.AwaitsGateway() {
+		t.Fatal("AwaitsGateway wrong")
+	}
+}
