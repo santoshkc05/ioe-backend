@@ -172,10 +172,10 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
   /v1/courses:
     get:
-      summary: List published courses, newest first
+      summary: List published courses, newest first, or search them by relevance
       description: >
         Public. An Authorization header is optional; when present it must carry a valid
-        bearer token. Rate-limited per client IP.
+        bearer token. Rate-limited per client IP. With q, results are ordered by relevance (title, then tags, then description), every word must match and the last word also matches as a prefix; next_cursor is then bound to that q.
       security: []
       parameters:
         - name: level
@@ -184,6 +184,18 @@ paths:
         - name: price
           in: query
           schema: { type: string, enum: [free, paid] }
+        - name: q
+          in: query
+          description: Search text, 1 to 200 characters after trimming.
+          schema: { type: string, maxLength: 200 }
+        - name: category
+          in: query
+          description: A category slug. An unknown slug matches no course.
+          schema: { type: string }
+        - name: tag
+          in: query
+          description: A tag; normalized before matching. A tag no course could carry matches none.
+          schema: { type: string }
         - name: limit
           in: query
           schema: { type: integer, minimum: 1, maximum: 50, default: 20 }
@@ -269,6 +281,7 @@ paths:
         "500": { $ref: "#/components/responses/InternalError" }
     patch:
       summary: Update course details
+      description: "Errors: unknown_category, too_many_categories, invalid_tag, too_many_tags (400) in addition to the existing ones."
       security:
         - bearer: []
       parameters:
@@ -287,6 +300,85 @@ paths:
         "409": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
         "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/categories:
+    get:
+      summary: List categories by name with their live course counts
+      description: Public. An Authorization header is optional. Rate-limited per client IP.
+      security: []
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CategoryList" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "429": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    post:
+      summary: Create a category (root admin)
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CategoryNameRequest" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/categories/{categoryID}:
+    parameters:
+      - name: categoryID
+        in: path
+        required: true
+        schema: { $ref: "#/components/schemas/ID" }
+    patch:
+      summary: Rename a category (root admin); the slug follows the name
+      security:
+        - bearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CategoryNameRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Category" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    delete:
+      summary: Delete a category (root admin); it is removed from every course and published version
+      security:
+        - bearer: []
+      responses:
+        "204": { description: No Content }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
   /v1/courses/{courseID}/price:
@@ -2439,7 +2531,7 @@ components:
         order: { type: integer }
     Course:
       type: object
-      required: [id, owner_id, title, description, status, price, is_free, sections, lectures, thumbnail_url, level, has_draft_changes, created_at, updated_at]
+      required: [id, owner_id, title, description, status, price, is_free, sections, lectures, thumbnail_url, level, categories, tags, has_draft_changes, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/ID" }
         owner_id: { $ref: "#/components/schemas/ID" }
@@ -2456,6 +2548,12 @@ components:
           items: { $ref: "#/components/schemas/Lecture" }
         thumbnail_url: { type: string }
         level: { type: string, enum: ["", beginner, intermediate, advanced] }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/Category" }
+        tags:
+          type: array
+          items: { type: string }
         latest_review_note: { type: string, description: The latest reviewer note while changes are requested. Omitted when empty. }
         submitted_at: { type: string, format: date-time, description: Omitted until first submitted. }
         reviewed_at: { type: string, format: date-time, description: Omitted until first reviewed. }
@@ -2506,7 +2604,7 @@ components:
         publishing_policy: { type: string, enum: [review_required, independent] }
     CourseSummary:
       type: object
-      required: [id, owner_id, title, description, level, thumbnail_url, price, is_free, lecture_count, section_count, created_at, updated_at]
+      required: [id, owner_id, title, description, level, thumbnail_url, price, is_free, categories, tags, lecture_count, section_count, created_at, updated_at]
       properties:
         id: { $ref: "#/components/schemas/ID" }
         owner_id: { $ref: "#/components/schemas/ID" }
@@ -2516,6 +2614,12 @@ components:
         thumbnail_url: { type: string }
         price: { $ref: "#/components/schemas/Price" }
         is_free: { type: boolean }
+        categories:
+          type: array
+          items: { $ref: "#/components/schemas/Category" }
+        tags:
+          type: array
+          items: { type: string }
         lecture_count: { type: integer }
         section_count: { type: integer }
         created_at: { type: string, format: date-time }
@@ -2748,6 +2852,44 @@ components:
         description: { type: string }
         thumbnail_url: { type: string }
         level: { type: string, enum: ["", beginner, intermediate, advanced] }
+        category_ids:
+          type: array
+          maxItems: 3
+          description: Replaces the course's categories; omit or send null to keep them.
+          items: { $ref: "#/components/schemas/ID" }
+        tags:
+          type: array
+          maxItems: 10
+          description: >
+            Replaces the course's tags; omit or send null to keep them. Each tag is trimmed,
+            lowercased and must be 1-32 characters of a-z, 0-9 and single hyphens.
+          items: { type: string }
+    Category:
+      type: object
+      required: [id, name, slug]
+      properties:
+        id: { $ref: "#/components/schemas/ID" }
+        name: { type: string }
+        slug: { type: string }
+    CategoryList:
+      type: object
+      required: [categories]
+      properties:
+        categories:
+          type: array
+          items:
+            allOf:
+              - $ref: "#/components/schemas/Category"
+              - type: object
+                required: [course_count]
+                properties:
+                  course_count: { type: integer }
+    CategoryNameRequest:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 60 }
     SetPriceRequest:
       type: object
       additionalProperties: false
