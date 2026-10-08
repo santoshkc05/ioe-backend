@@ -171,6 +171,24 @@ type BlogPostVersionBlock struct {
 	Payload       []byte
 }
 
+type CertificateCertificate struct {
+	ID          int64
+	Code        string
+	UserID      int64
+	CourseID    int64
+	StudentName string
+	CourseTitle string
+	IssuedAt    time.Time
+	RevokedAt   pgtype.Timestamptz
+}
+
+type CertificatePolicy struct {
+	CourseID  int64
+	Mode      string
+	ExamID    pgtype.Int8
+	UpdatedAt time.Time
+}
+
 type CourseauthoringCategory struct {
 	ID        int64
 	Name      string

@@ -12,6 +12,7 @@ import (
 	assessmentevents "github.com/santoshkc2200/ioe-backend/internal/assessment/adapters/events"
 	assessmentpg "github.com/santoshkc2200/ioe-backend/internal/assessment/adapters/postgres"
 	assessmentapp "github.com/santoshkc2200/ioe-backend/internal/assessment/app"
+	certificateevents "github.com/santoshkc2200/ioe-backend/internal/certificate/adapters/events"
 	courseauthoringhttp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/httpapi"
 	courseauthoringpg "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/postgres"
 	courseauthoringapp "github.com/santoshkc2200/ioe-backend/internal/courseauthoring/app"
@@ -86,10 +87,11 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 		mediaAssetCatalog{query: mediaapp.NewAssetQuery(mediaAssets)}, assessmentQ, assessmentHeads{query: assessmentQ}, identityHandler, ips, logger)
 	enrollments := registerEnrollment(router, enrollmentTx, courses, ids, clk, identityHandler.RequireAuth, logger)
 	payments := registerPayment(router, pool, courses, identityUsers{svc: identity}, enrollmentAccess, enrollments, ids, clk, cfg, identityHandler.RequireAuth, logger)
-	registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
+	progress := registerProgress(router, pool, courses, enrollmentAccess, clk, identityHandler.RequireAuth, logger)
 	registerMedia(router, mediaAssets, courses, contents, ids, clk, cfg, identityHandler.RequireAuth, logger)
 	registerAssessment(router, assessmentTx, courses, contents, enrollmentAccess, ids, clk, identityHandler.RequireAuth, logger)
 	registerBlog(router, pool, ids, clk, identityUsers{svc: identity}, identityHandler.RequireAuth, ips, logger)
+	certificates := registerCertificate(router, pool, courses, identityUsers{svc: identity}, enrollmentAccess, progress, assessmentQ, ids, clk, ips, identityHandler.RequireAuth, logger)
 
 	fw, err := outbox.NewForwarder(pool, logger)
 	if err != nil {
@@ -100,6 +102,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	}
 	fw.Handle(assessmentevents.DraftDiscardedTopic,
 		assessmentevents.New(assessmentapp.NewRestoreService(assessmentTx, clk)).DraftDiscarded)
+	fw.Handle(certificateevents.PurchaseRefundedTopic, certificateevents.New(certificates, logger).PurchaseRefunded)
 	return &application{handler: handler, forwarder: fw, payments: payments}, nil
 }
 

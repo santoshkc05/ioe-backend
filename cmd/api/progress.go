@@ -33,9 +33,8 @@ func (c progressCourseCatalog) CourseFacts(ctx context.Context, courseID id.ID) 
 	return progressdomain.CourseFacts{Published: f.Published, OwnerID: f.OwnerID, LectureIDs: f.LectureIDs}, nil
 }
 
-func registerProgress(r *httpserver.Router, pool *pgxpool.Pool, courses *courseauthoringapp.CourseService, enrollments progressapp.EnrollmentQuery, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) {
-	progresshttp.New(
-		progressapp.NewService(progresspg.NewTxRunner(pool), progressCourseCatalog{courses: courses}, enrollments, clk),
-		progresshttp.Config{RequireAuth: requireAuth, Logger: logger},
-	).Register(r)
+func registerProgress(r *httpserver.Router, pool *pgxpool.Pool, courses *courseauthoringapp.CourseService, enrollments progressapp.EnrollmentQuery, clk clock.Clock, requireAuth httpserver.Middleware, logger *slog.Logger) *progressapp.Service {
+	svc := progressapp.NewService(progresspg.NewTxRunner(pool), progressCourseCatalog{courses: courses}, enrollments, clk)
+	progresshttp.New(svc, progresshttp.Config{RequireAuth: requireAuth, Logger: logger}).Register(r)
+	return svc
 }

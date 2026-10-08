@@ -1756,3 +1756,101 @@ func TestCatalogSearchEndToEnd(t *testing.T) {
 		t.Fatalf("detail after delete = %v", detail)
 	}
 }
+
+func TestCertificateEndToEnd(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	pool := pgtest.New(t)
+	google := googletest.NewIssuer(t)
+	a, err := buildApp(ctx, baseConfig(t, google), slog.New(slog.NewJSONHandler(io.Discard, nil)), pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer a.forwarder.Close()
+	go func() { _ = a.forwarder.Run(ctx) }()
+	srv := httptest.NewServer(a.handler)
+	defer srv.Close()
+	c := client{t: t, base: srv.URL}
+	signIn := func(sub, email string) map[string]string {
+		t.Helper()
+		tok := google.Sign(t, googletest.Claims(sub, email, "web-client", time.Now()))
+		resp, body := c.do(http.MethodPost, "/v1/auth/google", `{"id_token":"`+tok+`"}`, nil)
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("sign in %s: %d %v", email, resp.StatusCode, body)
+		}
+		return map[string]string{"Authorization": "Bearer " + body["access_token"].(string)}
+	}
+	admin := signIn("sub-admin", "admin@example.com")
+	student := signIn("sub-student", "student@example.com")
+	_, me := c.do(http.MethodGet, "/v1/me", "", student)
+	studentID := me["id"].(string)
+
+	// A priced, published course with one lecture.
+	courseID := mustStatus(t, c, http.MethodPost, "/v1/courses", `{"title":"Go","description":"d"}`, admin, http.StatusCreated)["id"].(string)
+	mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/price", `{"amount_minor":150000,"currency":"NPR"}`, admin, http.StatusOK)
+	lectures := mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/lectures", `{"title":"L1","text_body":"<p>x</p>"}`, admin, http.StatusCreated)["lectures"].([]any)
+	lectureID := lectures[len(lectures)-1].(map[string]any)["id"].(string)
+	mustStatus(t, c, http.MethodPost, "/v1/courses/"+courseID+"/publish", "", admin, http.StatusNoContent)
+
+	claim := func(who map[string]string) (int, map[string]any) {
+		resp, body := c.do(http.MethodPost, "/v1/courses/"+courseID+"/certificate", "", who)
+		return resp.StatusCode, body
+	}
+	refused := func(who map[string]string, typ string) {
+		t.Helper()
+		if code, body := claim(who); code != http.StatusConflict || body["type"] != typ {
+			t.Fatalf("claim: %d %v, want 409 %s", code, body, typ)
+		}
+	}
+
+	refused(student, "certificates_disabled")
+	mustStatus(t, c, http.MethodPut, "/v1/courses/"+courseID+"/certificate-policy", `{"mode":"completion"}`, student, http.StatusForbidden)
+	mustStatus(t, c, http.MethodPut, "/v1/courses/"+courseID+"/certificate-policy", `{"mode":"completion_and_exam"}`, admin, http.StatusBadRequest)
+	policy := mustStatus(t, c, http.MethodPut, "/v1/courses/"+courseID+"/certificate-policy", `{"mode":"completion"}`, admin, http.StatusOK)
+	if policy["mode"] != "completion" {
+		t.Fatalf("policy = %v", policy)
+	}
+
+	refused(student, "not_enrolled")
+	record := `{"course_id":"` + courseID + `","amount_minor":150000,"currency":"NPR","method":"cash","reference":"R-1","note":"desk"}`
+	mustStatus(t, c, http.MethodPost, "/v1/users/"+studentID+"/purchases", record, admin, http.StatusCreated)
+	refused(student, "progress_incomplete")
+	mustStatus(t, c, http.MethodPut, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/progress/"+studentID,
+		`{"state":"completed","position_ms":0}`, student, http.StatusNoContent)
+
+	code, cert := claim(student)
+	if code != http.StatusCreated || cert["status"] != "valid" || cert["course_title"] != "Go" || cert["student_name"] == "" {
+		t.Fatalf("claim: %d %v", code, cert)
+	}
+	certCode := cert["code"].(string)
+	if code, again := claim(student); code != http.StatusOK || again["code"] != certCode {
+		t.Fatalf("second claim: %d %v", code, again)
+	}
+
+	// Verification needs no credentials and exposes no ids.
+	verify := mustStatus(t, c, http.MethodGet, "/v1/certificates/"+certCode, "", nil, http.StatusOK)
+	if verify["status"] != "valid" || verify["course_title"] != "Go" || len(verify) != 5 {
+		t.Fatalf("verify = %v", verify)
+	}
+	mustStatus(t, c, http.MethodGet, "/v1/certificates/"+strings.Repeat("A", 26), "", nil, http.StatusNotFound)
+	mustStatus(t, c, http.MethodGet, "/v1/certificates/not-a-code", "", nil, http.StatusNotFound)
+	if items := mustStatus(t, c, http.MethodGet, "/v1/me/certificates", "", student, http.StatusOK)["items"].([]any); len(items) != 1 {
+		t.Fatalf("my certificates = %v", items)
+	}
+	mustStatus(t, c, http.MethodGet, "/v1/courses/"+courseID+"/certificate", "", student, http.StatusOK)
+
+	// A refund that ends access revokes the certificate through the outbox.
+	purchases := mustStatus(t, c, http.MethodGet, "/v1/users/"+studentID+"/purchases", "", admin, http.StatusOK)["items"].([]any)
+	purchaseID := purchases[0].(map[string]any)["id"].(string)
+	mustStatus(t, c, http.MethodPost, "/v1/purchases/"+purchaseID+"/refund", `{"reference":"RF-1","note":"duplicate"}`, admin, http.StatusOK)
+	waitFor(t, func() bool {
+		_, body := c.do(http.MethodGet, "/v1/certificates/"+certCode, "", nil)
+		return body["status"] == "revoked"
+	})
+	mustStatus(t, c, http.MethodGet, "/v1/courses/"+courseID+"/certificate", "", student, http.StatusNotFound)
+	refused(student, "not_enrolled")
+	if items := mustStatus(t, c, http.MethodGet, "/v1/me/certificates", "", student, http.StatusOK)["items"].([]any); len(items) != 1 ||
+		items[0].(map[string]any)["status"] != "revoked" {
+		t.Fatalf("my certificates after refund = %v", items)
+	}
+}
