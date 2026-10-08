@@ -284,4 +284,3 @@ ORDER BY lower(k.name), k.id;
 
 -- name: CountCategories :one
 SELECT count(*) FROM courseauthoring.categories WHERE id = ANY(sqlc.arg(ids)::bigint[]);
-
