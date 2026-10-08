@@ -115,7 +115,7 @@ func TestRevokeThenReissue(t *testing.T) {
 	first, _ := issue(t, tx, 1, 200, 10)
 	revokedAt := t0.Add(time.Hour)
 	revoke := func() {
-		if err := tx.RunInTx(ctx, func(r app.Repository) error { return r.RevokeValid(ctx, 10, 200, revokedAt) }); err != nil {
+		if err := tx.RunInTx(ctx, func(r app.Repository) error { return r.RevokeValid(ctx, 10, 200, t0, revokedAt) }); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -161,6 +161,27 @@ func TestRevokeThenReissue(t *testing.T) {
 		return err
 	}); err != nil || unknown {
 		t.Fatalf("unknown code: found=%v err=%v", unknown, err)
+	}
+}
+
+func TestRevokeSparesCertificatesIssuedAfterTheRefund(t *testing.T) {
+	tx := newTx(t)
+	issue(t, tx, 1, 200, 10) // issued at t0
+	revoke := func(issuedBy time.Time) {
+		t.Helper()
+		if err := tx.RunInTx(ctx, func(r app.Repository) error {
+			return r.RevokeValid(ctx, 10, 200, issuedBy, t0.Add(time.Hour))
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	revoke(t0.Add(-time.Minute))
+	if _, ok := find(t, tx, 10, 200); !ok {
+		t.Fatal("certificate issued after the refund was revoked")
+	}
+	revoke(t0) // the bound is inclusive
+	if _, ok := find(t, tx, 10, 200); ok {
+		t.Fatal("certificate issued at the refund instant still valid")
 	}
 }
 

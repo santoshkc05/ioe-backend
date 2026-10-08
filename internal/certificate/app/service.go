@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/certificate/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
@@ -69,7 +70,8 @@ func (s *Service) SetPolicy(ctx context.Context, p auth.Principal, courseID id.I
 }
 
 // Claim issues the caller's certificate for the course when they meet the course's policy.
-// created is false when the caller already held a valid certificate. The eligibility
+// created is false when the caller already held a valid certificate. A policy whose exam is no
+// longer in the course cannot be met and reads as ErrCertificatesDisabled. The eligibility
 // lookups run outside any transaction: each takes its own pool connection.
 func (s *Service) Claim(ctx context.Context, p auth.Principal, courseID id.ID) (cert domain.Certificate, created bool, err error) {
 	var (
@@ -110,6 +112,13 @@ func (s *Service) Claim(ctx context.Context, p auth.Principal, courseID id.ID) (
 		return domain.Certificate{}, false, ErrProgressIncomplete
 	}
 	if policy.Mode == domain.ModeCompletionAndExam {
+		inCourse, err := s.exams.ExamInCourse(ctx, courseID, policy.ExamID)
+		if err != nil {
+			return domain.Certificate{}, false, err
+		}
+		if !inCourse {
+			return domain.Certificate{}, false, ErrCertificatesDisabled
+		}
 		passed, err := s.exams.HasPassed(ctx, courseID, p.UserID, policy.ExamID)
 		if err != nil {
 			return domain.Certificate{}, false, err
@@ -196,10 +205,11 @@ func (s *Service) Verify(ctx context.Context, code string) (domain.Certificate, 
 	return cert, err
 }
 
-// RevokeForRefund revokes the user's valid certificate for the course. It is idempotent and
-// does nothing when there is none.
-func (s *Service) RevokeForRefund(ctx context.Context, userID, courseID id.ID) error {
+// RevokeForRefund revokes the user's valid certificate for the course if it was issued by
+// refundedAt. A certificate issued later was earned again after the refund and stays valid. It
+// is idempotent and does nothing when there is none.
+func (s *Service) RevokeForRefund(ctx context.Context, userID, courseID id.ID, refundedAt time.Time) error {
 	return s.tx.RunInTx(ctx, func(r Repository) error {
-		return r.RevokeValid(ctx, courseID, userID, s.clock.Now())
+		return r.RevokeValid(ctx, courseID, userID, refundedAt, s.clock.Now())
 	})
 }

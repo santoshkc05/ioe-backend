@@ -102,7 +102,7 @@ func buildApp(ctx context.Context, cfg config.Config, logger *slog.Logger, pool 
 	}
 	fw.Handle(assessmentevents.DraftDiscardedTopic,
 		assessmentevents.New(assessmentapp.NewRestoreService(assessmentTx, clk)).DraftDiscarded)
-	fw.Handle(certificateevents.PurchaseRefundedTopic, certificateevents.New(certificates, logger).PurchaseRefunded)
+	fw.Handle(certificateevents.EnrollmentCanceledTopic, certificateevents.New(certificates, logger).EnrollmentCanceled)
 	return &application{handler: handler, forwarder: fw, payments: payments}, nil
 }
 

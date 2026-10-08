@@ -72,10 +72,10 @@ func (r repo) ListByUser(ctx context.Context, userID id.ID) ([]domain.Certificat
 	return out, nil
 }
 
-func (r repo) RevokeValid(ctx context.Context, courseID, userID id.ID, now time.Time) error {
+func (r repo) RevokeValid(ctx context.Context, courseID, userID id.ID, issuedBy, now time.Time) error {
 	utc := now.UTC()
 	return r.q.RevokeValidCertificate(ctx, sqlcgen.RevokeValidCertificateParams{
-		CourseID: int64(courseID), UserID: int64(userID), RevokedAt: &utc,
+		CourseID: int64(courseID), UserID: int64(userID), RevokedAt: &utc, IssuedBy: issuedBy.UTC(),
 	})
 }
 

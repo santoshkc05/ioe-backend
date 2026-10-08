@@ -144,17 +144,23 @@ func (q *Queries) ListCertificatesByUser(ctx context.Context, userID int64) ([]C
 
 const revokeValidCertificate = `-- name: RevokeValidCertificate :exec
 UPDATE certificate.certificates SET revoked_at = $3
-WHERE course_id = $1 AND user_id = $2 AND revoked_at IS NULL
+WHERE course_id = $1 AND user_id = $2 AND revoked_at IS NULL AND issued_at <= $4
 `
 
 type RevokeValidCertificateParams struct {
 	CourseID  int64
 	UserID    int64
 	RevokedAt *time.Time
+	IssuedBy  time.Time
 }
 
 func (q *Queries) RevokeValidCertificate(ctx context.Context, arg RevokeValidCertificateParams) error {
-	_, err := q.db.Exec(ctx, revokeValidCertificate, arg.CourseID, arg.UserID, arg.RevokedAt)
+	_, err := q.db.Exec(ctx, revokeValidCertificate,
+		arg.CourseID,
+		arg.UserID,
+		arg.RevokedAt,
+		arg.IssuedBy,
+	)
 	return err
 }
 

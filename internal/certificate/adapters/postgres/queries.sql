@@ -30,4 +30,4 @@ ORDER BY issued_at DESC, id DESC;
 
 -- name: RevokeValidCertificate :exec
 UPDATE certificate.certificates SET revoked_at = $3
-WHERE course_id = $1 AND user_id = $2 AND revoked_at IS NULL;
+WHERE course_id = $1 AND user_id = $2 AND revoked_at IS NULL AND issued_at <= sqlc.arg(issued_by);

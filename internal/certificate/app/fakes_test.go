@@ -78,9 +78,9 @@ func (m *memStore) ListByUser(_ context.Context, userID id.ID) ([]domain.Certifi
 	return out, nil
 }
 
-func (m *memStore) RevokeValid(_ context.Context, courseID, userID id.ID, now time.Time) error {
+func (m *memStore) RevokeValid(_ context.Context, courseID, userID id.ID, issuedBy, now time.Time) error {
 	for i, c := range m.certs {
-		if c.CourseID == courseID && c.UserID == userID && !c.Revoked() {
+		if c.CourseID == courseID && c.UserID == userID && !c.Revoked() && !c.IssuedAt.After(issuedBy) {
 			m.certs[i].RevokedAt = now
 		}
 	}

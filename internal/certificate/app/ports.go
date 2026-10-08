@@ -22,8 +22,9 @@ type Repository interface {
 	FindByCode(ctx context.Context, code string) (domain.Certificate, bool, error)
 	// ListByUser returns every certificate of the user, newest first.
 	ListByUser(ctx context.Context, userID id.ID) ([]domain.Certificate, error)
-	// RevokeValid revokes the user's valid certificate for the course; a no-op when there is none.
-	RevokeValid(ctx context.Context, courseID, userID id.ID, now time.Time) error
+	// RevokeValid revokes the user's valid certificate for the course when it was issued at or
+	// before issuedBy; a no-op otherwise.
+	RevokeValid(ctx context.Context, courseID, userID id.ID, issuedBy, now time.Time) error
 }
 
 // TxRunner commits when fn returns nil and rolls back otherwise.

@@ -134,6 +134,12 @@ func TestClaimEligibility(t *testing.T) {
 			f.setPolicy(t, domain.ModeCompletionAndExam, exam)
 			f.exams.passed[[3]id.ID{course, student.UserID, exam}] = true
 		}, app.ErrProgressIncomplete},
+		{"exam mode, exam since removed from the course", func(f fixture, t *testing.T) {
+			f.setPolicy(t, domain.ModeCompletionAndExam, exam)
+			f.done[pair{course, student.UserID}] = true
+			f.exams.passed[[3]id.ID{course, student.UserID, exam}] = true
+			delete(f.exams.inCourse, pair{course, exam})
+		}, app.ErrCertificatesDisabled},
 		{"exam mode, both met", func(f fixture, t *testing.T) {
 			f.setPolicy(t, domain.ModeCompletionAndExam, exam)
 			f.done[pair{course, student.UserID}] = true
@@ -214,17 +220,18 @@ func TestRevokeForRefund(t *testing.T) {
 	}
 
 	f.clock.now = t0.Add(time.Hour)
-	if err := f.svc.RevokeForRefund(ctx, other.UserID, course); err != nil {
+	refundedAt := t0.Add(time.Minute)
+	if err := f.svc.RevokeForRefund(ctx, other.UserID, course, refundedAt); err != nil {
 		t.Fatalf("revoke for a user without a certificate: %v", err)
 	}
-	if err := f.svc.RevokeForRefund(ctx, student.UserID, course+1); err != nil {
+	if err := f.svc.RevokeForRefund(ctx, student.UserID, course+1, refundedAt); err != nil {
 		t.Fatalf("revoke for another course: %v", err)
 	}
 	if _, ok, _ := f.store.FindValid(ctx, course, student.UserID); !ok {
 		t.Fatal("unrelated revokes touched the certificate")
 	}
 	for range 2 { // redelivery is safe
-		if err := f.svc.RevokeForRefund(ctx, student.UserID, course); err != nil {
+		if err := f.svc.RevokeForRefund(ctx, student.UserID, course, refundedAt); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -247,6 +254,14 @@ func TestRevokeForRefund(t *testing.T) {
 	list, err := f.svc.ListMine(ctx, student)
 	if err != nil || len(list) != 2 || list[0].Code != again.Code {
 		t.Fatalf("ListMine = %+v, %v", list, err)
+	}
+
+	// A late redelivery of the old refund leaves the certificate earned after it alone.
+	if err := f.svc.RevokeForRefund(ctx, student.UserID, course, refundedAt); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.svc.GetMine(ctx, student, course); err != nil || got.Code != again.Code {
+		t.Fatalf("GetMine after stale revoke = %+v, %v", got, err)
 	}
 }
 

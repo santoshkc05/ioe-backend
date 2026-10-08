@@ -56,15 +56,25 @@ func (d certificateDirectory) StudentName(ctx context.Context, userID id.ID) (st
 	return name, nil
 }
 
+// certificateProgress lets certificate ask progress whether a student completed a course,
+// translating progress's not-found into certificate's. svc is a *progressapp.Service.
+type certificateProgress struct{ svc certificateapp.Progress }
+
+func (p certificateProgress) IsComplete(ctx context.Context, courseID, userID id.ID) (bool, error) {
+	done, err := p.svc.IsComplete(ctx, courseID, userID)
+	if errors.Is(err, progressapp.ErrNotFound) {
+		return false, certificateapp.ErrNotFound
+	}
+	return done, err
+}
+
 // registerCertificate mounts certificates and returns the service the refund consumer calls.
-// progress and exams already have the methods certificate's ports ask for.
-func registerCertificate(r *httpserver.Router, pool *pgxpool.Pool, courses *courseauthoringapp.CourseService, users identityUsers, enrollments certificateapp.Enrollments, progress certificateapp.Progress, exams certificateapp.Exams, ids *id.Generator, clk clock.Clock, ips httpserver.IPResolver, requireAuth httpserver.Middleware, logger *slog.Logger) *certificateapp.Service {
+// exams already has the methods certificate's Exams port asks for.
+func registerCertificate(r *httpserver.Router, pool *pgxpool.Pool, courses *courseauthoringapp.CourseService, users identityUsers, enrollments certificateapp.Enrollments, progress *progressapp.Service, exams certificateapp.Exams, ids *id.Generator, clk clock.Clock, ips httpserver.IPResolver, requireAuth httpserver.Middleware, logger *slog.Logger) *certificateapp.Service {
 	dir := certificateDirectory{courses: courses, users: users}
-	svc := certificateapp.NewService(certificatepg.NewTxRunner(pool), dir, enrollments, progress, exams, dir, ids, clk)
+	svc := certificateapp.NewService(certificatepg.NewTxRunner(pool), dir, enrollments, certificateProgress{svc: progress}, exams, dir, ids, clk)
 	certificatehttp.New(svc, certificatehttp.Config{
 		RequireAuth: requireAuth, VerifyLimiter: httpserver.NewRateLimiter(120), IPs: ips, Logger: logger,
 	}).Register(r)
 	return svc
 }
-
-var _ certificateapp.Progress = (*progressapp.Service)(nil)
