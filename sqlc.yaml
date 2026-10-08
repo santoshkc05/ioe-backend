@@ -210,5 +210,3 @@ sql:
               import: time
               type: Time
               pointer: true
-
-
