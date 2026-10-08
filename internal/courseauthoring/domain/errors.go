@@ -18,4 +18,8 @@ var (
 	ErrApprovalRequired        = errors.New("course must be approved before publishing")
 	ErrReviewNoteRequired      = errors.New("note is required")
 	ErrReviewNoteTooLong       = errors.New("note is too long")
+	ErrInvalidCategoryName     = errors.New("category name must be 1-60 characters")
+	ErrTooManyCategories       = errors.New("a course has at most 3 categories")
+	ErrInvalidTag              = errors.New("tags must be 1-32 lowercase letters, digits and single hyphens")
+	ErrTooManyTags             = errors.New("a course has at most 10 tags")
 )

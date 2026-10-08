@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"errors"
 	"net/url"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/tags"
 )
 
 type Status string
@@ -57,6 +59,8 @@ type Course struct {
 	Level        string
 	ThumbnailURL string
 	Price        Price
+	Categories   []CategoryRef // ordered as the instructor chose; Name and Slug hydrated on read
+	Tags         []string      // normalized, ordered as the instructor chose
 	Status       Status
 	Sections     []Section   // ordered by Order
 	Lectures     []Lecture   // ordered by Order, dense from 0
@@ -134,6 +138,44 @@ func (c *Course) SetPrice(p Price, now time.Time) error {
 	}
 	c.Price, c.UpdatedAt = p, now
 	return nil
+}
+
+// MaxCourseCategories is the most categories a course is filed under.
+const MaxCourseCategories = 3
+
+// SetClassification replaces the course's categories and tags. Duplicate category IDs are
+// dropped keeping order; whether each ID names a category is the caller's check.
+func (c *Course) SetClassification(categoryIDs []id.ID, tagList []string, now time.Time) error {
+	if err := c.BeginEdit(); err != nil {
+		return err
+	}
+	refs := make([]CategoryRef, 0, len(categoryIDs))
+	for _, cid := range categoryIDs {
+		if !slices.ContainsFunc(refs, func(r CategoryRef) bool { return r.ID == cid }) {
+			refs = append(refs, CategoryRef{ID: cid})
+		}
+	}
+	if len(refs) > MaxCourseCategories {
+		return ErrTooManyCategories
+	}
+	normalized, err := tags.NewList(tagList)
+	switch {
+	case errors.Is(err, tags.ErrTooMany):
+		return ErrTooManyTags
+	case err != nil:
+		return ErrInvalidTag
+	}
+	c.Categories, c.Tags, c.UpdatedAt = refs, normalized, now
+	return nil
+}
+
+// CategoryIDs returns the IDs of the course's categories in order.
+func (c *Course) CategoryIDs() []id.ID {
+	out := make([]id.ID, len(c.Categories))
+	for i, r := range c.Categories {
+		out[i] = r.ID
+	}
+	return out
 }
 
 func (c *Course) Section(sectionID id.ID) (Section, bool) {
@@ -397,6 +439,8 @@ func (c *Course) DiscardDraft(live Course, now time.Time) error {
 		return ErrInvalidStatusTransition
 	}
 	c.Title, c.Description, c.Level, c.ThumbnailURL, c.Price = live.Title, live.Description, live.Level, live.ThumbnailURL, live.Price
+	c.Categories = append([]CategoryRef(nil), live.Categories...)
+	c.Tags = append([]string(nil), live.Tags...)
 	c.Sections = append([]Section(nil), live.Sections...)
 	c.Lectures = append([]Lecture(nil), live.Lectures...)
 	c.Status, c.ReviewNote, c.UpdatedAt = StatusPublished, "", now
