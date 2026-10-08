@@ -171,6 +171,13 @@ type BlogPostVersionBlock struct {
 	Payload       []byte
 }
 
+type CourseauthoringCategory struct {
+	ID        int64
+	Name      string
+	Slug      string
+	CreatedAt time.Time
+}
+
 type CourseauthoringCourse struct {
 	ID               int64
 	OwnerID          int64
@@ -189,6 +196,13 @@ type CourseauthoringCourse struct {
 	ReviewNote       string
 	LastVersion      int32
 	LiveVersion      pgtype.Int4
+	Tags             []string
+}
+
+type CourseauthoringCourseCategory struct {
+	CourseID   int64
+	CategoryID int64
+	Position   int32
 }
 
 type CourseauthoringCourseReview struct {
@@ -218,6 +232,8 @@ type CourseauthoringCourseVersion struct {
 	PriceCurrency    string
 	PublishedBy      int64
 	PublishedAt      time.Time
+	Tags             []string
+	Search           interface{}
 }
 
 type CourseauthoringCourseVersionAssessment struct {
@@ -237,6 +253,13 @@ type CourseauthoringCourseVersionBlock struct {
 	Position      int32
 	ClientBlockID string
 	Payload       []byte
+}
+
+type CourseauthoringCourseVersionCategory struct {
+	CourseID   int64
+	Number     int32
+	CategoryID int64
+	Position   int32
 }
 
 type CourseauthoringCourseVersionLecture struct {
