@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/certificate/domain"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/auth"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
@@ -28,4 +29,35 @@ type Repository interface {
 // TxRunner commits when fn returns nil and rolls back otherwise.
 type TxRunner interface {
 	RunInTx(ctx context.Context, fn func(Repository) error) error
+}
+
+// CourseManagement is backed by courseauthoring.
+type CourseManagement interface {
+	// CanManage returns nil when p manages the course; otherwise ErrNotFound or ErrForbidden.
+	CanManage(ctx context.Context, p auth.Principal, courseID id.ID) error
+}
+
+// Enrollments is backed by enrollment.
+type Enrollments interface {
+	IsActivelyEnrolled(ctx context.Context, courseID, userID id.ID) (bool, error)
+}
+
+// Progress is backed by progress.
+type Progress interface {
+	// IsComplete reports whether the user completed every lecture of the course.
+	IsComplete(ctx context.Context, courseID, userID id.ID) (bool, error)
+}
+
+// Exams is backed by assessment.
+type Exams interface {
+	ExamInCourse(ctx context.Context, courseID, examID id.ID) (bool, error)
+	HasPassed(ctx context.Context, courseID, userID, examID id.ID) (bool, error)
+}
+
+// Directory supplies the names a certificate snapshots, backed by identity and courseauthoring.
+type Directory interface {
+	// StudentName returns ErrNotFound when the user is unknown.
+	StudentName(ctx context.Context, userID id.ID) (string, error)
+	// CourseTitle returns ErrNotFound when the course is unknown.
+	CourseTitle(ctx context.Context, courseID id.ID) (string, error)
 }
