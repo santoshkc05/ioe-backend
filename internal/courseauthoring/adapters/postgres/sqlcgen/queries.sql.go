@@ -917,29 +917,92 @@ func (q *Queries) ListLecturesByCourseIDs(ctx context.Context, courseIds []int64
 	return items, nil
 }
 
+const listLiveCategoriesByCourseIDs = `-- name: ListLiveCategoriesByCourseIDs :many
+SELECT vc.course_id, k.id, k.name, k.slug
+FROM courseauthoring.course_version_categories vc
+JOIN courseauthoring.courses c ON c.id = vc.course_id AND c.live_version = vc.number
+JOIN courseauthoring.categories k ON k.id = vc.category_id
+WHERE vc.course_id = ANY($1::bigint[])
+ORDER BY vc.course_id, vc.position
+`
+
+type ListLiveCategoriesByCourseIDsRow struct {
+	CourseID int64
+	ID       int64
+	Name     string
+	Slug     string
+}
+
+func (q *Queries) ListLiveCategoriesByCourseIDs(ctx context.Context, courseIds []int64) ([]ListLiveCategoriesByCourseIDsRow, error) {
+	rows, err := q.db.Query(ctx, listLiveCategoriesByCourseIDs, courseIds)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLiveCategoriesByCourseIDsRow
+	for rows.Next() {
+		var i ListLiveCategoriesByCourseIDsRow
+		if err := rows.Scan(
+			&i.CourseID,
+			&i.ID,
+			&i.Name,
+			&i.Slug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listPublishedCourses = `-- name: ListPublishedCourses :many
-SELECT c.id, c.owner_id, v.title, v.description, v.level, v.thumbnail_url,
+SELECT c.id, c.owner_id, v.title, v.description, v.level, v.thumbnail_url, v.tags,
        v.price_amount_minor, v.price_currency, c.created_at, v.published_at AS updated_at,
        (SELECT count(*) FROM courseauthoring.course_version_lectures l
         WHERE l.course_id = v.course_id AND l.number = v.number) AS lecture_count,
        (SELECT count(*) FROM courseauthoring.course_version_sections s
-        WHERE s.course_id = v.course_id AND s.number = v.number) AS section_count
+        WHERE s.course_id = v.course_id AND s.number = v.number) AS section_count,
+       r.rank::real AS rank
 FROM courseauthoring.courses c
 JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
-WHERE ($1::bigint = 0 OR c.id < $1::bigint)
-  AND ($2::text = '' OR v.level = $2::text)
-  AND ($3::text = ''
-       OR ($3::text = 'free' AND v.price_amount_minor = 0)
-       OR ($3::text = 'paid' AND v.price_amount_minor > 0))
-ORDER BY c.id DESC
-LIMIT $4::integer
+CROSS JOIN (
+  SELECT websearch_to_tsquery('simple', $1::text) &&
+         CASE WHEN $2::text = '' THEN ''::tsquery
+              ELSE to_tsquery('simple', $2::text || ':*') END AS query
+) s
+CROSS JOIN LATERAL (
+  SELECT CASE WHEN $3::bool THEN ts_rank(v.search, s.query) ELSE 0 END AS rank
+) r
+WHERE (NOT $3::bool OR v.search @@ s.query)
+  AND ($4::text = '' OR v.level = $4::text)
+  AND ($5::text = ''
+       OR ($5::text = 'free' AND v.price_amount_minor = 0)
+       OR ($5::text = 'paid' AND v.price_amount_minor > 0))
+  AND ($6::text = '' OR v.tags @> ARRAY[$6::text])
+  AND ($7::text = '' OR EXISTS (
+        SELECT 1 FROM courseauthoring.course_version_categories vc
+        JOIN courseauthoring.categories k ON k.id = vc.category_id
+        WHERE vc.course_id = v.course_id AND vc.number = v.number AND k.slug = $7::text))
+  AND ($8::bigint = 0
+       OR (r.rank::real, c.id) < ($9::real, $8::bigint))
+ORDER BY r.rank DESC, c.id DESC
+LIMIT $10::integer
 `
 
 type ListPublishedCoursesParams struct {
-	After    int64
-	Level    string
-	Price    string
-	RowLimit int32
+	QHead     string
+	QPrefix   string
+	Search    bool
+	Level     string
+	Price     string
+	Tag       string
+	Category  string
+	After     int64
+	AfterRank float32
+	RowLimit  int32
 }
 
 type ListPublishedCoursesRow struct {
@@ -949,20 +1012,30 @@ type ListPublishedCoursesRow struct {
 	Description      string
 	Level            string
 	ThumbnailUrl     string
+	Tags             []string
 	PriceAmountMinor int64
 	PriceCurrency    string
 	CreatedAt        time.Time
 	UpdatedAt        time.Time
 	LectureCount     int64
 	SectionCount     int64
+	Rank             float32
 }
 
-// Lists live versions. updated_at is when the live version was published.
+// Lists live versions. updated_at is when the live version was published. With search set,
+// rows match q_head as websearch text and q_prefix as the prefix of one more word, and are
+// ordered by rank; otherwise rank is 0 and rows are ordered by ID alone.
 func (q *Queries) ListPublishedCourses(ctx context.Context, arg ListPublishedCoursesParams) ([]ListPublishedCoursesRow, error) {
 	rows, err := q.db.Query(ctx, listPublishedCourses,
-		arg.After,
+		arg.QHead,
+		arg.QPrefix,
+		arg.Search,
 		arg.Level,
 		arg.Price,
+		arg.Tag,
+		arg.Category,
+		arg.After,
+		arg.AfterRank,
 		arg.RowLimit,
 	)
 	if err != nil {
@@ -979,12 +1052,14 @@ func (q *Queries) ListPublishedCourses(ctx context.Context, arg ListPublishedCou
 			&i.Description,
 			&i.Level,
 			&i.ThumbnailUrl,
+			&i.Tags,
 			&i.PriceAmountMinor,
 			&i.PriceCurrency,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.LectureCount,
 			&i.SectionCount,
+			&i.Rank,
 		); err != nil {
 			return nil, err
 		}

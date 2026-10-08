@@ -171,22 +171,48 @@ WHERE b.lecture_id = sqlc.arg(lecture_id)::bigint
   AND b.position IS DISTINCT FROM (o.position - 1);
 
 -- name: ListPublishedCourses :many
--- Lists live versions. updated_at is when the live version was published.
-SELECT c.id, c.owner_id, v.title, v.description, v.level, v.thumbnail_url,
+-- Lists live versions. updated_at is when the live version was published. With search set,
+-- rows match q_head as websearch text and q_prefix as the prefix of one more word, and are
+-- ordered by rank; otherwise rank is 0 and rows are ordered by ID alone.
+SELECT c.id, c.owner_id, v.title, v.description, v.level, v.thumbnail_url, v.tags,
        v.price_amount_minor, v.price_currency, c.created_at, v.published_at AS updated_at,
        (SELECT count(*) FROM courseauthoring.course_version_lectures l
         WHERE l.course_id = v.course_id AND l.number = v.number) AS lecture_count,
        (SELECT count(*) FROM courseauthoring.course_version_sections s
-        WHERE s.course_id = v.course_id AND s.number = v.number) AS section_count
+        WHERE s.course_id = v.course_id AND s.number = v.number) AS section_count,
+       r.rank::real AS rank
 FROM courseauthoring.courses c
 JOIN courseauthoring.course_versions v ON v.course_id = c.id AND v.number = c.live_version
-WHERE (sqlc.arg(after)::bigint = 0 OR c.id < sqlc.arg(after)::bigint)
+CROSS JOIN (
+  SELECT websearch_to_tsquery('simple', sqlc.arg(q_head)::text) &&
+         CASE WHEN sqlc.arg(q_prefix)::text = '' THEN ''::tsquery
+              ELSE to_tsquery('simple', sqlc.arg(q_prefix)::text || ':*') END AS query
+) s
+CROSS JOIN LATERAL (
+  SELECT CASE WHEN sqlc.arg(search)::bool THEN ts_rank(v.search, s.query) ELSE 0 END AS rank
+) r
+WHERE (NOT sqlc.arg(search)::bool OR v.search @@ s.query)
   AND (sqlc.arg(level)::text = '' OR v.level = sqlc.arg(level)::text)
   AND (sqlc.arg(price)::text = ''
        OR (sqlc.arg(price)::text = 'free' AND v.price_amount_minor = 0)
        OR (sqlc.arg(price)::text = 'paid' AND v.price_amount_minor > 0))
-ORDER BY c.id DESC
+  AND (sqlc.arg(tag)::text = '' OR v.tags @> ARRAY[sqlc.arg(tag)::text])
+  AND (sqlc.arg(category)::text = '' OR EXISTS (
+        SELECT 1 FROM courseauthoring.course_version_categories vc
+        JOIN courseauthoring.categories k ON k.id = vc.category_id
+        WHERE vc.course_id = v.course_id AND vc.number = v.number AND k.slug = sqlc.arg(category)::text))
+  AND (sqlc.arg(after)::bigint = 0
+       OR (r.rank::real, c.id) < (sqlc.arg(after_rank)::real, sqlc.arg(after)::bigint))
+ORDER BY r.rank DESC, c.id DESC
 LIMIT sqlc.arg(row_limit)::integer;
+
+-- name: ListLiveCategoriesByCourseIDs :many
+SELECT vc.course_id, k.id, k.name, k.slug
+FROM courseauthoring.course_version_categories vc
+JOIN courseauthoring.courses c ON c.id = vc.course_id AND c.live_version = vc.number
+JOIN courseauthoring.categories k ON k.id = vc.category_id
+WHERE vc.course_id = ANY(sqlc.arg(course_ids)::bigint[])
+ORDER BY vc.course_id, vc.position;
 
 -- name: DeleteSubmittedAssessments :exec
 DELETE FROM courseauthoring.course_submitted_assessments WHERE course_id = $1;

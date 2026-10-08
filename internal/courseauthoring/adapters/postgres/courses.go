@@ -122,19 +122,35 @@ func (r courses) load(ctx context.Context, courseIDs []int64) ([]domain.Course, 
 }
 
 func (r courses) ListPublished(ctx context.Context, q app.CatalogQuery) ([]app.CourseSummary, error) {
+	head, prefix := searchTerms(q.Q)
 	rows, err := r.q.ListPublishedCourses(ctx, sqlcgen.ListPublishedCoursesParams{
-		After: int64(q.After), Level: q.Level, Price: string(q.Price),
+		Search: q.Q != "", QHead: head, QPrefix: prefix,
+		Level: q.Level, Price: string(q.Price), Tag: q.Tag, Category: q.Category,
+		After: int64(q.After), AfterRank: q.AfterRank,
 		RowLimit: int32(q.Limit), //nolint:gosec // the service bounds Limit to MaxCatalogLimit+1
 	})
 	if err != nil {
 		return nil, err
+	}
+	courseIDs := make([]int64, len(rows))
+	for i, row := range rows {
+		courseIDs[i] = row.ID
+	}
+	cats, err := r.q.ListLiveCategoriesByCourseIDs(ctx, courseIDs)
+	if err != nil {
+		return nil, err
+	}
+	byCourse := make(map[int64][]domain.CategoryRef, len(rows))
+	for _, k := range cats {
+		byCourse[k.CourseID] = append(byCourse[k.CourseID], categoryRef(k.ID, k.Name, k.Slug))
 	}
 	out := make([]app.CourseSummary, 0, len(rows))
 	for _, row := range rows {
 		out = append(out, app.CourseSummary{
 			ID: id.ID(row.ID), OwnerID: id.ID(row.OwnerID), Title: row.Title, Description: row.Description,
 			Level: row.Level, ThumbnailURL: row.ThumbnailUrl,
-			Price:        domain.Price{AmountMinor: row.PriceAmountMinor, Currency: row.PriceCurrency},
+			Price:      domain.Price{AmountMinor: row.PriceAmountMinor, Currency: row.PriceCurrency},
+			Categories: byCourse[row.ID], Tags: nonNilTags(row.Tags), Rank: row.Rank,
 			LectureCount: int(row.LectureCount), SectionCount: int(row.SectionCount),
 			CreatedAt: row.CreatedAt, UpdatedAt: row.UpdatedAt,
 		})
