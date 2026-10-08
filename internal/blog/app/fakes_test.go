@@ -299,6 +299,7 @@ type fixture struct {
 	clock    *clock.Fake
 	posts    *app.PostService
 	contents *app.ContentService
+	public   *app.PublicService
 }
 
 func newFixture(t *testing.T) fixture {
@@ -308,7 +309,8 @@ func newFixture(t *testing.T) fixture {
 		t.Fatal(err)
 	}
 	store, clk := newMemStore(), clock.NewFake(t0)
-	return fixture{ids: ids, store: store, clock: clk, posts: app.NewPostService(store, ids, clk), contents: app.NewContentService(store, ids)}
+	return fixture{ids: ids, store: store, clock: clk, posts: app.NewPostService(store, ids, clk),
+		contents: app.NewContentService(store, ids), public: app.NewPublicService(store, names{10: "Asha", 11: "Bikash"})}
 }
 
 func textBlock(cid, body string) app.BlockInput {
