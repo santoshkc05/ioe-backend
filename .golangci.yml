@@ -138,6 +138,8 @@ linters:
             - github.com/santoshkc2200/ioe-backend/internal/platform/auth
             - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
             - github.com/santoshkc2200/ioe-backend/internal/platform/id
+            - github.com/santoshkc2200/ioe-backend/internal/platform/slug
+            - github.com/santoshkc2200/ioe-backend/internal/platform/tags
         courseauthoring-app:
           list-mode: strict
           files:
@@ -150,6 +152,7 @@ linters:
             - github.com/santoshkc2200/ioe-backend/internal/platform/clock
             - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
             - github.com/santoshkc2200/ioe-backend/internal/platform/id
+            - github.com/santoshkc2200/ioe-backend/internal/platform/tags
         courseauthoring-independent:
           list-mode: lax
           files:
@@ -384,6 +387,8 @@ linters:
             - github.com/santoshkc2200/ioe-backend/internal/platform/auth
             - github.com/santoshkc2200/ioe-backend/internal/platform/contentblocks
             - github.com/santoshkc2200/ioe-backend/internal/platform/id
+            - github.com/santoshkc2200/ioe-backend/internal/platform/slug
+            - github.com/santoshkc2200/ioe-backend/internal/platform/tags
         blog-app:
           list-mode: strict
           files:

@@ -1,38 +1,31 @@
 package domain
 
-import "strings"
+import (
+	"errors"
 
-const (
-	maxTagLen = 32
-	MaxTags   = 10
+	"github.com/santoshkc2200/ioe-backend/internal/platform/tags"
 )
+
+// MaxTags is the most tags a post carries.
+const MaxTags = tags.Max
 
 // NewTag trims and lowercases raw and validates it.
 func NewTag(raw string) (string, error) {
-	v := strings.ToLower(strings.TrimSpace(raw))
-	if len(v) > maxTagLen || !kebab.MatchString(v) {
+	t, err := tags.New(raw)
+	if err != nil {
 		return "", ErrInvalidTag
 	}
-	return v, nil
+	return t, nil
 }
 
 // NewTags normalizes each tag and drops duplicates, keeping first occurrence order.
 func NewTags(raw []string) ([]string, error) {
-	out := make([]string, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-	for _, r := range raw {
-		t, err := NewTag(r)
-		if err != nil {
-			return nil, err
-		}
-		if _, dup := seen[t]; dup {
-			continue
-		}
-		seen[t] = struct{}{}
-		out = append(out, t)
-	}
-	if len(out) > MaxTags {
+	out, err := tags.NewList(raw)
+	switch {
+	case errors.Is(err, tags.ErrTooMany):
 		return nil, ErrTooManyTags
+	case err != nil:
+		return nil, ErrInvalidTag
 	}
 	return out, nil
 }

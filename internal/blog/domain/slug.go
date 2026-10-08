@@ -6,14 +6,13 @@ import (
 	"strings"
 
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
+	"github.com/santoshkc2200/ioe-backend/internal/platform/slug"
 )
 
 const maxSlugLen = 96
 
-// kebab is the shape shared by slugs and tags.
+// kebab is the slug shape.
 var kebab = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
-
-var nonSlugRun = regexp.MustCompile(`[^a-z0-9]+`)
 
 // Slug is a post's URL path segment. Every slug a post ever had stays reserved for it.
 type Slug struct{ value string }
@@ -31,18 +30,12 @@ func NewSlug(raw string) (Slug, error) {
 // characters (a Nepali or Japanese title, for example) fall back to "post-<id>": no
 // transliteration is attempted, and the author can set a slug explicitly.
 func SlugFromTitle(title string, postID id.ID) Slug {
-	v := strings.Trim(nonSlugRun.ReplaceAllString(strings.ToLower(removeDots(title)), "-"), "-")
-	if len(v) > maxSlugLen {
-		v = strings.TrimRight(v[:maxSlugLen], "-")
-	}
+	v := slug.From(title, maxSlugLen)
 	if len(v) < 3 {
 		return Slug{value: "post-" + postID.String()}
 	}
 	return Slug{value: v}
 }
-
-// removeDots keeps "1.27" as "127" rather than "1-27".
-func removeDots(s string) string { return strings.ReplaceAll(s, ".", "") }
 
 // WithSuffix appends "-n", truncating the base so the result stays within the limit.
 func (s Slug) WithSuffix(n int) Slug {
