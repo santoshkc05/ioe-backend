@@ -32,4 +32,3 @@ SET gateway_txn = $3, status = $4, settled_at = $5, granted_at = $6,
     refunded_at = $7, refunded_by = $8, refund_reference = $9, refund_note = $10, revoked_at = $11,
     version = version + 1
 WHERE id = $1 AND version = $2;
-
