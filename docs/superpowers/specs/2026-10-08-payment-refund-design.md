@@ -90,6 +90,9 @@ New `Purchase` fields: `RefundedAt time.Time`, `RefundedBy id.ID`, `RefundRefere
 `MarkPaid` on a refunded purchase must change nothing and return no event, so a late gateway report
 cannot undo a refund; `MarkFailed` already ignores non-pending purchases.
 
+**`AwaitsGateway() bool`**: status `pending` or `failed`. `settle` asks the gateway only when this is
+true, so confirming a refunded purchase (manual ones have no gateway) never calls a gateway.
+
 ```go
 // PurchaseRefunded is emitted when a root admin records a full refund.
 type PurchaseRefunded struct {
@@ -201,7 +204,9 @@ and `Update` carry the new columns. Regenerate sqlc.
 - `status` enum adds `refunded`.
 - New required, nullable fields: `refunded_at` (date-time), `refunded_by` (ID), `refund_reference`,
   `refund_note`.
-- New required boolean `access_revoked`: true once `RevokedAt` is set.
+- New required boolean `revoke_pending`: true while the purchase is refunded and the enrollment
+  cancel has not succeeded yet (`NeedsRevoke`). It stays false when another paid purchase kept
+  access, so it never claims access ended when it did not; the event's `access_revoked` carries that.
 
 Document the endpoint and fields in `api/openapi.yaml`.
 
