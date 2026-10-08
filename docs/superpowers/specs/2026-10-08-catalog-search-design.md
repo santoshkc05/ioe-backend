@@ -95,7 +95,7 @@ type Category struct {
   `"category-" + id.String()`.
 - `Rename(name)` applies the same rules and re-derives the slug.
 
-`Course` gains `CategoryIDs []id.ID` and `Tags []string`:
+`Course` gains `Categories []CategoryRef` (`ID`, `Name`, `Slug`; writes use only `ID`, reads hydrate `Name` and `Slug`, like `Lecture.HasText`) and `Tags []string`:
 
 - `SetClassification(categoryIDs []id.ID, tags []string, now)` calls `BeginEdit` (same status
   rules as `UpdateDetails`: a published course becomes a draft with changes, an archived course
@@ -196,8 +196,9 @@ Queries:
 
 - `ListPublishedCourses` gains `q`, `category_slug` and `tag` arguments. Text matching uses
   `websearch_to_tsquery('simple', q)` combined with `to_tsquery('simple', last_word || ':*')`
-  by `&&`, where the application passes `last_word` already reduced to `[a-z0-9]` characters
-  (empty means no prefix term). A `q` that yields an empty tsquery matches nothing. The tag
+  by `&&`, where the adapter splits off the last whitespace-separated word as the prefix term only when it
+  consists of Unicode letters and digits (otherwise the whole text goes to `websearch_to_tsquery`
+  and there is no prefix term). A `q` that yields an empty tsquery matches nothing. The tag
   filter is `v.tags @> ARRAY[tag]`; the category filter joins `course_version_categories` and
   `categories` on slug. Rank is `ts_rank(v.search, query)::real`.
 - Course and version saves write `tags`, `course_categories` and, at publish,
@@ -222,13 +223,13 @@ Root admin:
 - `PATCH /v1/categories/{categoryID}` `{"name"}` renames; `200` with the category.
 - `DELETE /v1/categories/{categoryID}` deletes; `204`.
 - Errors: `403 forbidden`, `404 not_found`, `409 category_exists`,
-  `422 invalid_category_name`.
+  `400 invalid_category_name`.
 
 Instructor:
 
 - `PATCH /v1/courses/{courseID}` accepts optional `category_ids` and `tags`. Errors:
-  `422 unknown_category`, `422 too_many_categories`, `422 invalid_tag`, `422 too_many_tags`,
-  plus the existing errors of that route.
+  `400 unknown_category`, `400 too_many_categories`, `400 invalid_tag`, `400 too_many_tags`,
+  plus the existing errors of that route. The repository uses 400 for every validation error and has no 422 responses.
 
 `api/openapi.yaml` documents all of the above.
 
