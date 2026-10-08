@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
@@ -48,4 +49,41 @@ func (q *AssessmentQuery) Heads(ctx context.Context, courseID id.ID) ([]Head, er
 		return nil
 	})
 	return out, err
+}
+
+// ExamInCourse reports whether the exam exists, is not deleted and belongs to courseID.
+func (q *AssessmentQuery) ExamInCourse(ctx context.Context, courseID, examID id.ID) (bool, error) {
+	var ok bool
+	err := q.tx.RunInTx(ctx, func(r Repos) error {
+		e, err := r.Exams.Find(ctx, examID, LockNone)
+		if errors.Is(err, ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		ok = e.CourseID == courseID
+		return nil
+	})
+	return ok, err
+}
+
+// HasPassed reports whether userID has a submitted, passing attempt on the exam. Attempts
+// are graded against the revision they were taken on, so later edits never change the answer.
+func (q *AssessmentQuery) HasPassed(ctx context.Context, courseID, userID, examID id.ID) (bool, error) {
+	var passed bool
+	err := q.tx.RunInTx(ctx, func(r Repos) error {
+		attempts, err := r.Exams.ListUserAttempts(ctx, courseID, userID)
+		if err != nil {
+			return err
+		}
+		for _, a := range attempts {
+			if a.ExamID == examID && a.SubmittedAt != nil && a.Passed != nil && *a.Passed {
+				passed = true
+				return nil
+			}
+		}
+		return nil
+	})
+	return passed, err
 }
