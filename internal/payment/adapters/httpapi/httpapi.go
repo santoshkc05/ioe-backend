@@ -24,6 +24,7 @@ type Service interface {
 	Get(ctx context.Context, p auth.Principal, purchaseID id.ID) (domain.Purchase, error)
 	ListByUser(ctx context.Context, p auth.Principal, userID, before id.ID, limit int) ([]domain.Purchase, id.ID, error)
 	RecordManual(ctx context.Context, p auth.Principal, in app.ManualInput) (domain.Purchase, error)
+	Refund(ctx context.Context, p auth.Principal, purchaseID id.ID, in app.RefundInput) (domain.Purchase, error)
 }
 
 type Config struct {
@@ -47,6 +48,7 @@ func (h *Handler) Register(r *httpserver.Router) {
 	r.Handle("GET /v1/me/purchases", a(h.listMine))
 	r.Handle("GET /v1/users/{userID}/purchases", a(h.listUser))
 	r.Handle("POST /v1/users/{userID}/purchases", a(h.recordManual))
+	r.Handle("POST /v1/purchases/{purchaseID}/refund", a(h.refund))
 }
 
 func (h *Handler) checkout(w http.ResponseWriter, r *http.Request) {
@@ -168,6 +170,23 @@ func (h *Handler) recordManual(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, http.StatusCreated, purchaseResponse{Purchase: toWire(p)})
 }
 
+func (h *Handler) refund(w http.ResponseWriter, r *http.Request) {
+	purchaseID, ok := pathID(w, r, "purchaseID")
+	if !ok {
+		return
+	}
+	var req refundRequest
+	if !httpserver.DecodeJSON(w, r, &req) {
+		return
+	}
+	p, err := h.svc.Refund(r.Context(), principal(r), purchaseID, app.RefundInput{Reference: req.Reference, Note: req.Note})
+	if err != nil {
+		h.writeError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, http.StatusOK, purchaseResponse{Purchase: toWire(p)})
+}
+
 // pathID parses a path value. A malformed ID names no resource, so it is a 404.
 func pathID(w http.ResponseWriter, r *http.Request, name string) (id.ID, bool) {
 	v, err := id.Parse(r.PathValue(name))
@@ -199,6 +218,7 @@ var errorMappings = []errorMapping{
 	{app.ErrAlreadyPurchased, http.StatusConflict, "already_purchased", "Already Purchased"},
 	{app.ErrConcurrentModification, http.StatusConflict, "concurrent_modification", "Concurrent Modification"},
 	{app.ErrGatewayUnavailable, http.StatusServiceUnavailable, "payment_unavailable", "Payment Unavailable"},
+	{app.ErrNotRefundable, http.StatusConflict, "not_refundable", "Not Refundable"},
 }
 
 func (h *Handler) writeError(w http.ResponseWriter, r *http.Request, err error) {

@@ -25,6 +25,12 @@ type purchaseWire struct {
 	Reference    *string `json:"reference"`     // manual purchases only
 	Note         *string `json:"note"`          // manual purchases only
 	RecordedBy   *id.ID  `json:"recorded_by"`   // manual purchases only
+
+	RefundedAt      *time.Time `json:"refunded_at"`      // null unless refunded
+	RefundedBy      *id.ID     `json:"refunded_by"`      // null unless refunded
+	RefundReference *string    `json:"refund_reference"` // null unless refunded
+	RefundNote      *string    `json:"refund_note"`      // null unless refunded
+	RevokePending   bool       `json:"revoke_pending"`   // refunded, enrollment cancel not done yet
 }
 
 type checkoutWire struct {
@@ -50,7 +56,7 @@ func toWire(p domain.Purchase) purchaseWire {
 	w := purchaseWire{
 		ID: p.ID, CourseID: p.CourseID, UserID: p.UserID, AmountMinor: p.Price.AmountMinor, Currency: p.Price.Currency,
 		Gateway: p.Gateway, Status: string(p.Status), CreatedAt: p.CreatedAt, Granted: !p.GrantedAt.IsZero(),
-		CourseTitle: p.CourseTitle,
+		CourseTitle: p.CourseTitle, RevokePending: p.NeedsRevoke(),
 	}
 	if p.Gateway == domain.GatewayManual {
 		method, ref, note, by := p.ManualMethod, p.GatewayTxn, p.Note, p.RecordedBy
@@ -59,6 +65,10 @@ func toWire(p domain.Purchase) purchaseWire {
 	if !p.SettledAt.IsZero() {
 		at := p.SettledAt
 		w.SettledAt = &at
+	}
+	if p.Status == domain.StatusRefunded {
+		at, by, ref, note := p.RefundedAt, p.RefundedBy, p.RefundReference, p.RefundNote
+		w.RefundedAt, w.RefundedBy, w.RefundReference, w.RefundNote = &at, &by, &ref, &note
 	}
 	return w
 }
@@ -69,6 +79,11 @@ func toCheckoutWire(c app.Checkout) checkoutWire {
 		fields = map[string]string{}
 	}
 	return checkoutWire{Method: c.Method, URL: c.URL, Fields: fields}
+}
+
+type refundRequest struct {
+	Reference string `json:"reference"`
+	Note      string `json:"note"`
 }
 
 type manualRequest struct {

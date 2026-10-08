@@ -40,6 +40,12 @@ type stub struct {
 	before id.ID
 	limit  int
 	manual app.ManualInput
+	refund app.RefundInput
+}
+
+func (s *stub) Refund(_ context.Context, p auth.Principal, purchaseID id.ID, in app.RefundInput) (domain.Purchase, error) {
+	s.principal, s.purchaseID, s.refund = p, purchaseID, in
+	return s.purchase, s.err
 }
 
 func (s *stub) ListByUser(_ context.Context, p auth.Principal, userID, before id.ID, limit int) ([]domain.Purchase, id.ID, error) {
@@ -121,7 +127,8 @@ func TestCheckoutStatusAndShape(t *testing.T) {
 	}](t, body)
 	want := map[string]any{"id": "1", "course_id": "10", "user_id": "200", "amount_minor": float64(150000), "currency": "NPR",
 		"gateway": "esewa", "status": "pending", "created_at": "2026-10-07T00:00:00Z", "settled_at": nil, "granted": false,
-		"course_title": "", "manual_method": nil, "reference": nil, "note": nil, "recorded_by": nil}
+		"course_title": "", "manual_method": nil, "reference": nil, "note": nil, "recorded_by": nil,
+		"refunded_at": nil, "refunded_by": nil, "refund_reference": nil, "refund_note": nil, "revoke_pending": false}
 	if len(got.Purchase) != len(want) {
 		t.Fatalf("purchase keys = %v", got.Purchase)
 	}
@@ -195,6 +202,7 @@ func TestErrorMapping(t *testing.T) {
 		{app.ErrAlreadyPurchased, http.StatusConflict, "already_purchased"},
 		{fmt.Errorf("%w: timeout", app.ErrGatewayUnavailable), http.StatusServiceUnavailable, "payment_unavailable"},
 		{app.ErrConcurrentModification, http.StatusConflict, "concurrent_modification"},
+		{fmt.Errorf("%w: status paid", app.ErrNotRefundable), http.StatusConflict, "not_refundable"},
 		{errors.New("boom"), http.StatusInternalServerError, problem.TypeInternal},
 	}
 	for _, c := range cases {
@@ -277,5 +285,29 @@ func TestRecordManual(t *testing.T) {
 		if code, _ := call(newServer(&stub{}), http.MethodPost, "/v1/users/300/purchases", b); code != http.StatusBadRequest {
 			t.Fatalf("%s: %d", b, code)
 		}
+	}
+}
+
+func TestRefund(t *testing.T) {
+	refunded := domain.Purchase{ID: 9, UserID: 200, CourseID: 11, Price: domain.Money{AmountMinor: 150000, Currency: "NPR"},
+		Gateway: "esewa", GatewayRef: "9", GatewayTxn: "T", Status: domain.StatusRefunded, CreatedAt: t0, SettledAt: t0,
+		GrantedAt: t0, RefundedAt: t0.Add(time.Hour), RefundedBy: 1, RefundReference: "RF-1"}
+	s := &stub{purchase: refunded}
+	code, body := call(newServer(s), http.MethodPost, "/v1/purchases/9/refund", `{"reference":"RF-1","note":"dup"}`)
+	if code != http.StatusOK || s.purchaseID != 9 || s.refund != (app.RefundInput{Reference: "RF-1", Note: "dup"}) {
+		t.Fatalf("code=%d stub=%+v body=%s", code, s, body)
+	}
+	p := decode[map[string]any](t, body)["purchase"].(map[string]any)
+	if p["status"] != "refunded" || p["refunded_at"] != "2026-10-07T01:00:00Z" || p["refunded_by"] != "1" ||
+		p["refund_reference"] != "RF-1" || p["refund_note"] != "" || p["revoke_pending"] != true {
+		t.Fatalf("purchase = %v", p)
+	}
+	for _, b := range []string{`{"reference":"r","extra":1}`, `not json`} {
+		if code, _ := call(newServer(&stub{}), http.MethodPost, "/v1/purchases/9/refund", b); code != http.StatusBadRequest {
+			t.Fatalf("%s: %d", b, code)
+		}
+	}
+	if code, _ := call(newServer(&stub{}), http.MethodPost, "/v1/purchases/x/refund", `{"reference":"r"}`); code != http.StatusNotFound {
+		t.Fatalf("malformed id: %d", code)
 	}
 }

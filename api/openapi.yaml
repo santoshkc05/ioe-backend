@@ -1909,6 +1909,38 @@ paths:
         "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/InternalError" }
+  /v1/purchases/{purchaseID}/refund:
+    post:
+      summary: Record a full refund
+      description: >
+        Root admin only; anyone else gets 404. Records that a paid purchase was refunded in full
+        outside this system (eSewa merchant portal or bank) and cancels the buyer's enrollment with
+        reason `refunded`, unless the buyer holds another paid purchase of the course. Sends the
+        refund email. 409 `not_refundable` when the purchase is not `paid`, including one already
+        refunded.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/PurchaseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RefundRequest" }
+      responses:
+        "200":
+          description: The refunded purchase
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PurchaseResponse" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "413": { $ref: "#/components/responses/Problem" }
+        "415": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
   /v1/me/purchases:
     get:
       summary: List the caller's purchases
@@ -2663,7 +2695,7 @@ components:
         gateway: { type: string, enum: [esewa] }
     Purchase:
       type: object
-      required: [id, course_id, course_title, user_id, amount_minor, currency, gateway, status, created_at, settled_at, granted, manual_method, reference, note, recorded_by]
+      required: [id, course_id, course_title, user_id, amount_minor, currency, gateway, status, created_at, settled_at, granted, manual_method, reference, note, recorded_by, refunded_at, refunded_by, refund_reference, refund_note, revoke_pending]
       properties:
         id: { $ref: "#/components/schemas/ID" }
         course_id: { $ref: "#/components/schemas/ID" }
@@ -2671,7 +2703,7 @@ components:
         amount_minor: { type: integer, format: int64, minimum: 1, description: Price snapshot in the currency's minor unit }
         currency: { type: string, description: ISO 4217 code }
         gateway: { type: string, enum: [esewa, manual] }
-        status: { type: string, enum: [pending, paid, failed] }
+        status: { type: string, enum: [pending, paid, failed, refunded] }
         created_at: { type: string, format: date-time }
         settled_at: { type: [string, "null"], format: date-time, description: Null while pending }
         granted: { type: boolean, description: True once the buyer is enrolled }
@@ -2682,6 +2714,13 @@ components:
         recorded_by:
           oneOf: [{ $ref: "#/components/schemas/ID" }, { type: "null" }]
           description: Root admin who recorded a manual purchase
+        refunded_at: { type: [string, "null"], format: date-time, description: Null unless refunded }
+        refunded_by:
+          oneOf: [{ $ref: "#/components/schemas/ID" }, { type: "null" }]
+          description: Root admin who recorded the refund
+        refund_reference: { type: [string, "null"], description: eSewa portal or bank reference of the refund }
+        refund_note: { type: [string, "null"] }
+        revoke_pending: { type: boolean, description: True while a refunded purchase's enrollment cancel has not succeeded yet }
     PurchasePage:
       type: object
       required: [items]
@@ -2699,6 +2738,13 @@ components:
         amount_minor: { type: integer, format: int64, minimum: 1 }
         currency: { type: string }
         method: { type: string, enum: [bank_transfer, cash, other] }
+        reference: { type: string, minLength: 1, maxLength: 200 }
+        note: { type: string, maxLength: 1000 }
+    RefundRequest:
+      type: object
+      additionalProperties: false
+      required: [reference]
+      properties:
         reference: { type: string, minLength: 1, maxLength: 200 }
         note: { type: string, maxLength: 1000 }
     Checkout:
