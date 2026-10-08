@@ -158,6 +158,18 @@ sql:
             go_type:
               type: int64
               pointer: true
+          - column: payment.purchases.refunded_by
+            go_type:
+              type: int64
+              pointer: true
+          - column: payment.purchases.refund_reference
+            go_type:
+              type: string
+              pointer: true
+          - column: payment.purchases.refund_note
+            go_type:
+              type: string
+              pointer: true
   - engine: postgresql
     schema: migrations
     queries: internal/blog/adapters/postgres/queries.sql

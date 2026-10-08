@@ -44,11 +44,11 @@ func newFixture(t *testing.T) fixture {
 // samePurchase compares purchases field by field, using time.Equal for timestamps.
 func samePurchase(a, b domain.Purchase) bool {
 	return a.CreatedAt.Equal(b.CreatedAt) && a.SettledAt.Equal(b.SettledAt) && a.GrantedAt.Equal(b.GrantedAt) &&
-		withoutTimes(a) == withoutTimes(b)
+		a.RefundedAt.Equal(b.RefundedAt) && a.RevokedAt.Equal(b.RevokedAt) && withoutTimes(a) == withoutTimes(b)
 }
 
 func withoutTimes(p domain.Purchase) domain.Purchase {
-	p.CreatedAt, p.SettledAt, p.GrantedAt = time.Time{}, time.Time{}, time.Time{}
+	p.CreatedAt, p.SettledAt, p.GrantedAt, p.RefundedAt, p.RevokedAt = time.Time{}, time.Time{}, time.Time{}, time.Time{}, time.Time{}
 	return p
 }
 
@@ -314,5 +314,95 @@ func TestMigrationBackfillsCourseTitle(t *testing.T) {
 	var title string
 	if err := f.pool.QueryRow(ctx, "SELECT course_title FROM payment.purchases WHERE id = 900").Scan(&title); err != nil || title != "Backfilled" {
 		t.Fatalf("title = %q err=%v", title, err)
+	}
+}
+
+func (f fixture) paid(t *testing.T, userID, courseID id.ID, txn string) domain.Purchase {
+	t.Helper()
+	p := f.insert(t, userID, courseID, f.now)
+	if _, err := p.MarkPaid(txn, f.now); err != nil {
+		t.Fatal(err)
+	}
+	p.MarkGranted(f.now)
+	if err := f.update(t, &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestRefundRoundTrip(t *testing.T) {
+	f := newFixture(t)
+	p := f.paid(t, 200, 10, "T1")
+	if _, err := p.Refund(domain.Refund{Reference: "RF-1", RefundedBy: 1}, false, f.now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.update(t, &p); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := f.find(t, p.ID)
+	if !samePurchase(got, p) || got.RefundNote != "" || !got.RevokedAt.IsZero() {
+		t.Fatalf("got=%+v want=%+v", got, p)
+	}
+	p.MarkRevoked(f.now.Add(2 * time.Minute))
+	if err := f.update(t, &p); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ = f.find(t, p.ID); !samePurchase(got, p) {
+		t.Fatalf("after revoke got=%+v want=%+v", got, p)
+	}
+}
+
+func TestRefundConstraints(t *testing.T) {
+	f := newFixture(t)
+	p := f.paid(t, 200, 10, "T1")
+	pending := f.insert(t, 201, 10, f.now)
+	stmts := []struct {
+		sql string
+		id  id.ID
+	}{
+		{"UPDATE payment.purchases SET status = 'refunded' WHERE id = $1", p.ID},                                                                     // refunded without refund fields
+		{"UPDATE payment.purchases SET refunded_at = now(), refunded_by = 1, refund_reference = 'r' WHERE id = $1", p.ID},                            // refund fields while paid
+		{"UPDATE payment.purchases SET revoked_at = now() WHERE id = $1", p.ID},                                                                      // revoked while paid
+		{"UPDATE payment.purchases SET status = 'refunded', refunded_at = now(), refunded_by = 1, refund_reference = 'r' WHERE id = $1", pending.ID}, // refunded without txn
+	}
+	for _, s := range stmts {
+		if _, err := f.pool.Exec(ctx, s.sql, int64(s.id)); err == nil {
+			t.Fatalf("accepted: %s", s.sql)
+		}
+	}
+}
+
+func TestListUnsettledReturnsUnrevokedRefunds(t *testing.T) {
+	f := newFixture(t)
+	unrevoked := f.paid(t, 200, 10, "T1")
+	if _, err := unrevoked.Refund(domain.Refund{Reference: "RF-1", RefundedBy: 1}, false, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.update(t, &unrevoked); err != nil {
+		t.Fatal(err)
+	}
+	revoked := f.paid(t, 201, 10, "T2")
+	if _, err := revoked.Refund(domain.Refund{Reference: "RF-2", RefundedBy: 1}, true, f.now); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.update(t, &revoked); err != nil {
+		t.Fatal(err)
+	}
+	var (
+		list  []domain.Purchase
+		count int
+	)
+	if err := f.tx.RunInTx(ctx, func(r app.Repos) error {
+		var err error
+		if list, err = r.Purchases.ListUnsettled(ctx, f.now.Add(-15*time.Minute), 0, 10); err != nil {
+			return err
+		}
+		count, err = r.Purchases.CountPaid(ctx, 200, 10)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 1 || list[0].ID != unrevoked.ID || count != 0 {
+		t.Fatalf("list=%+v count=%d", list, count)
 	}
 }

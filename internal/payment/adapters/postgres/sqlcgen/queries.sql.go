@@ -27,7 +27,7 @@ func (q *Queries) CountPaidPurchases(ctx context.Context, arg CountPaidPurchases
 }
 
 const getPurchase = `-- name: GetPurchase :one
-SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note FROM payment.purchases WHERE id = $1
+SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note, refunded_at, refunded_by, refund_reference, refund_note, revoked_at FROM payment.purchases WHERE id = $1
 `
 
 func (q *Queries) GetPurchase(ctx context.Context, id int64) (PaymentPurchase, error) {
@@ -51,6 +51,11 @@ func (q *Queries) GetPurchase(ctx context.Context, id int64) (PaymentPurchase, e
 		&i.ManualMethod,
 		&i.RecordedBy,
 		&i.Note,
+		&i.RefundedAt,
+		&i.RefundedBy,
+		&i.RefundReference,
+		&i.RefundNote,
+		&i.RevokedAt,
 	)
 	return i, err
 }
@@ -104,7 +109,7 @@ func (q *Queries) InsertPurchase(ctx context.Context, arg InsertPurchaseParams) 
 }
 
 const listPurchasesByUser = `-- name: ListPurchasesByUser :many
-SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note FROM payment.purchases
+SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note, refunded_at, refunded_by, refund_reference, refund_note, revoked_at FROM payment.purchases
 WHERE user_id = $1::bigint
   AND ($2::bigint = 0 OR id < $2::bigint)
 ORDER BY id DESC
@@ -144,6 +149,11 @@ func (q *Queries) ListPurchasesByUser(ctx context.Context, arg ListPurchasesByUs
 			&i.ManualMethod,
 			&i.RecordedBy,
 			&i.Note,
+			&i.RefundedAt,
+			&i.RefundedBy,
+			&i.RefundReference,
+			&i.RefundNote,
+			&i.RevokedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -156,10 +166,11 @@ func (q *Queries) ListPurchasesByUser(ctx context.Context, arg ListPurchasesByUs
 }
 
 const listUnsettledPurchases = `-- name: ListUnsettledPurchases :many
-SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note FROM payment.purchases
+SELECT id, user_id, course_id, amount_minor, currency, gateway, gateway_ref, gateway_txn, status, created_at, settled_at, granted_at, version, course_title, manual_method, recorded_by, note, refunded_at, refunded_by, refund_reference, refund_note, revoked_at FROM payment.purchases
 WHERE id > $1::bigint
   AND ((status = 'pending' AND created_at < $2::timestamptz)
-       OR (status = 'paid' AND granted_at IS NULL))
+       OR (status = 'paid' AND granted_at IS NULL)
+       OR (status = 'refunded' AND revoked_at IS NULL))
 ORDER BY id
 LIMIT $3::bigint
 `
@@ -197,6 +208,11 @@ func (q *Queries) ListUnsettledPurchases(ctx context.Context, arg ListUnsettledP
 			&i.ManualMethod,
 			&i.RecordedBy,
 			&i.Note,
+			&i.RefundedAt,
+			&i.RefundedBy,
+			&i.RefundReference,
+			&i.RefundNote,
+			&i.RevokedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -210,17 +226,24 @@ func (q *Queries) ListUnsettledPurchases(ctx context.Context, arg ListUnsettledP
 
 const updatePurchase = `-- name: UpdatePurchase :execrows
 UPDATE payment.purchases
-SET gateway_txn = $3, status = $4, settled_at = $5, granted_at = $6, version = version + 1
+SET gateway_txn = $3, status = $4, settled_at = $5, granted_at = $6,
+    refunded_at = $7, refunded_by = $8, refund_reference = $9, refund_note = $10, revoked_at = $11,
+    version = version + 1
 WHERE id = $1 AND version = $2
 `
 
 type UpdatePurchaseParams struct {
-	ID         int64
-	Version    int64
-	GatewayTxn string
-	Status     string
-	SettledAt  *time.Time
-	GrantedAt  *time.Time
+	ID              int64
+	Version         int64
+	GatewayTxn      string
+	Status          string
+	SettledAt       *time.Time
+	GrantedAt       *time.Time
+	RefundedAt      *time.Time
+	RefundedBy      *int64
+	RefundReference *string
+	RefundNote      *string
+	RevokedAt       *time.Time
 }
 
 func (q *Queries) UpdatePurchase(ctx context.Context, arg UpdatePurchaseParams) (int64, error) {
@@ -231,6 +254,11 @@ func (q *Queries) UpdatePurchase(ctx context.Context, arg UpdatePurchaseParams) 
 		arg.Status,
 		arg.SettledAt,
 		arg.GrantedAt,
+		arg.RefundedAt,
+		arg.RefundedBy,
+		arg.RefundReference,
+		arg.RefundNote,
+		arg.RevokedAt,
 	)
 	if err != nil {
 		return 0, err

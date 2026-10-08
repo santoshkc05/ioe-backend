@@ -8,7 +8,8 @@ SELECT count(*) FROM payment.purchases WHERE user_id = $1 AND course_id = $2 AND
 SELECT * FROM payment.purchases
 WHERE id > sqlc.arg(after_id)::bigint
   AND ((status = 'pending' AND created_at < sqlc.arg(pending_before)::timestamptz)
-       OR (status = 'paid' AND granted_at IS NULL))
+       OR (status = 'paid' AND granted_at IS NULL)
+       OR (status = 'refunded' AND revoked_at IS NULL))
 ORDER BY id
 LIMIT sqlc.arg(page_limit)::bigint;
 
@@ -27,5 +28,8 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, 1
 
 -- name: UpdatePurchase :execrows
 UPDATE payment.purchases
-SET gateway_txn = $3, status = $4, settled_at = $5, granted_at = $6, version = version + 1
+SET gateway_txn = $3, status = $4, settled_at = $5, granted_at = $6,
+    refunded_at = $7, refunded_by = $8, refund_reference = $9, refund_note = $10, revoked_at = $11,
+    version = version + 1
 WHERE id = $1 AND version = $2;
+

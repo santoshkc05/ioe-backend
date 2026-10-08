@@ -79,6 +79,9 @@ func (r purchases) Update(ctx context.Context, p *domain.Purchase) error {
 	n, err := r.q.UpdatePurchase(ctx, sqlcgen.UpdatePurchaseParams{
 		ID: int64(p.ID), Version: p.Version, GatewayTxn: p.GatewayTxn, Status: string(p.Status),
 		SettledAt: optionalTime(p.SettledAt), GrantedAt: optionalTime(p.GrantedAt),
+		RefundedAt: optionalTime(p.RefundedAt), RefundedBy: optionalID(p.RefundedBy),
+		RefundReference: optionalString(p.RefundReference), RefundNote: optionalString(p.RefundNote),
+		RevokedAt: optionalTime(p.RevokedAt),
 	})
 	if err != nil {
 		return err
@@ -109,6 +112,21 @@ func toDomain(r sqlcgen.PaymentPurchase) domain.Purchase {
 	}
 	if r.GrantedAt != nil {
 		p.GrantedAt = r.GrantedAt.UTC()
+	}
+	if r.RefundedAt != nil {
+		p.RefundedAt = r.RefundedAt.UTC()
+	}
+	if r.RefundedBy != nil {
+		p.RefundedBy = id.ID(*r.RefundedBy)
+	}
+	if r.RefundReference != nil {
+		p.RefundReference = *r.RefundReference
+	}
+	if r.RefundNote != nil {
+		p.RefundNote = *r.RefundNote
+	}
+	if r.RevokedAt != nil {
+		p.RevokedAt = r.RevokedAt.UTC()
 	}
 	return p
 }
