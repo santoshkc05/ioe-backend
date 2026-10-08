@@ -22,9 +22,10 @@ func (f *fakeMailer) Enqueue(_ context.Context, email app.Email, key string) err
 }
 
 type fakeRenderer struct {
-	name string
-	err  error
-	paid app.PurchasePaidEmail
+	name     string
+	err      error
+	paid     app.PurchasePaidEmail
+	refunded app.PurchaseRefundedEmail
 }
 
 func (f *fakeRenderer) Welcome(name string) (string, string, string, error) {
@@ -35,6 +36,11 @@ func (f *fakeRenderer) Welcome(name string) (string, string, string, error) {
 func (f *fakeRenderer) PurchasePaid(e app.PurchasePaidEmail) (string, string, string, error) {
 	f.paid = e
 	return "Paid", "Text", "<p>HTML</p>", f.err
+}
+
+func (f *fakeRenderer) PurchaseRefunded(e app.PurchaseRefundedEmail) (string, string, string, error) {
+	f.refunded = e
+	return "Refunded", "Text", "<p>HTML</p>", f.err
 }
 
 func TestSendWelcomeRendersAndEnqueues(t *testing.T) {

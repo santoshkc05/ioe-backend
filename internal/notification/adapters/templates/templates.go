@@ -11,20 +11,23 @@ import (
 	"github.com/santoshkc2200/ioe-backend/internal/notification/app"
 )
 
-//go:embed welcome.txt.tmpl welcome.html.tmpl purchase_paid.txt.tmpl purchase_paid.html.tmpl
+//go:embed welcome.txt.tmpl welcome.html.tmpl purchase_paid.txt.tmpl purchase_paid.html.tmpl purchase_refunded.txt.tmpl purchase_refunded.html.tmpl
 var files embed.FS
 
 const (
-	welcomeSubject = "Welcome to IOE"
-	paidSubject    = "Payment received"
+	welcomeSubject  = "Welcome to IOE"
+	paidSubject     = "Payment received"
+	refundedSubject = "Refund issued"
 )
 
 // Renderer renders every email. It is safe for concurrent use.
 type Renderer struct {
-	welcomeText *texttemplate.Template
-	welcomeHTML *htmltemplate.Template
-	paidText    *texttemplate.Template
-	paidHTML    *htmltemplate.Template
+	welcomeText  *texttemplate.Template
+	welcomeHTML  *htmltemplate.Template
+	paidText     *texttemplate.Template
+	paidHTML     *htmltemplate.Template
+	refundedText *texttemplate.Template
+	refundedHTML *htmltemplate.Template
 }
 
 // New parses the embedded templates.
@@ -41,6 +44,12 @@ func New() (*Renderer, error) {
 		return nil, err
 	}
 	if r.paidHTML, err = htmltemplate.ParseFS(files, "purchase_paid.html.tmpl"); err != nil {
+		return nil, err
+	}
+	if r.refundedText, err = texttemplate.ParseFS(files, "purchase_refunded.txt.tmpl"); err != nil {
+		return nil, err
+	}
+	if r.refundedHTML, err = htmltemplate.ParseFS(files, "purchase_refunded.html.tmpl"); err != nil {
 		return nil, err
 	}
 	return r, nil
@@ -62,6 +71,17 @@ func (r *Renderer) PurchasePaid(e app.PurchasePaidEmail) (subject, text, html st
 		subject += ": " + e.CourseTitle
 	}
 	text, html, err = execute(r.paidText, r.paidHTML, e)
+	return subject, text, html, err
+}
+
+// PurchaseRefunded renders the refund-issued email. Blank name and title are omitted.
+func (r *Renderer) PurchaseRefunded(e app.PurchaseRefundedEmail) (subject, text, html string, err error) {
+	e.Name, e.CourseTitle = strings.TrimSpace(e.Name), strings.TrimSpace(e.CourseTitle)
+	subject = refundedSubject
+	if e.CourseTitle != "" {
+		subject += ": " + e.CourseTitle
+	}
+	text, html, err = execute(r.refundedText, r.refundedHTML, e)
 	return subject, text, html, err
 }
 

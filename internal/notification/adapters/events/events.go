@@ -19,6 +19,7 @@ import (
 type Sender interface {
 	SendWelcome(ctx context.Context, in app.WelcomeInput) error
 	SendPurchasePaid(ctx context.Context, in app.PurchasePaidInput) error
+	SendPurchaseRefunded(ctx context.Context, in app.PurchaseRefundedInput) error
 }
 
 // Handlers holds one outbox handler per consumed event.
@@ -82,6 +83,39 @@ func (h *Handlers) PurchasePaid(msg *message.Message) error {
 		EventID: msg.UUID, UserID: ev.UserID, CourseID: ev.CourseID, CourseTitle: ev.CourseTitle,
 		AmountMinor: ev.AmountMinor, Currency: ev.Currency, Gateway: ev.Gateway, ManualMethod: ev.ManualMethod,
 		PaidAt: ev.OccurredAt,
+	})
+	if errors.Is(err, app.ErrPermanent) {
+		h.drop(msg, "permanent", err)
+		return nil
+	}
+	return err
+}
+
+// purchaseRefunded mirrors the payment.purchase.refunded payload this context relies on.
+type purchaseRefunded struct {
+	UserID          string    `json:"user_id"`
+	CourseID        string    `json:"course_id"`
+	CourseTitle     string    `json:"course_title"`
+	AmountMinor     int64     `json:"amount_minor"`
+	Currency        string    `json:"currency"`
+	Gateway         string    `json:"gateway"`
+	ManualMethod    string    `json:"manual_method"`
+	RefundReference string    `json:"refund_reference"`
+	AccessRevoked   bool      `json:"access_revoked"`
+	OccurredAt      time.Time `json:"occurred_at"`
+}
+
+// PurchaseRefunded handles payment.purchase.refunded with the same retry and drop rules as Welcome.
+func (h *Handlers) PurchaseRefunded(msg *message.Message) error {
+	var ev purchaseRefunded
+	if err := json.Unmarshal(msg.Payload, &ev); err != nil {
+		h.drop(msg, "invalid_payload", err)
+		return nil
+	}
+	err := h.sender.SendPurchaseRefunded(msg.Context(), app.PurchaseRefundedInput{
+		EventID: msg.UUID, UserID: ev.UserID, CourseID: ev.CourseID, CourseTitle: ev.CourseTitle,
+		AmountMinor: ev.AmountMinor, Currency: ev.Currency, Gateway: ev.Gateway, ManualMethod: ev.ManualMethod,
+		Reference: ev.RefundReference, AccessRevoked: ev.AccessRevoked, RefundedAt: ev.OccurredAt,
 	})
 	if errors.Is(err, app.ErrPermanent) {
 		h.drop(msg, "permanent", err)

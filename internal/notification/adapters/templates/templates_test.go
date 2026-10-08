@@ -119,3 +119,50 @@ func TestPurchasePaidEscapesHTMLOnly(t *testing.T) {
 		t.Fatalf("html not escaped: %s", html)
 	}
 }
+
+var refundedEmail = app.PurchaseRefundedEmail{Name: "Sita", CourseTitle: "Go", Amount: "NPR 1,500.00", Method: "eSewa",
+	Reference: "RF-1", RefundedOn: "8 October 2026, 10:00 NPT", AccessRevoked: true}
+
+func renderRefunded(t *testing.T, e app.PurchaseRefundedEmail) (string, string, string) {
+	t.Helper()
+	r, err := templates.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	subject, text, html, err := r.PurchaseRefunded(e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return subject, text, html
+}
+
+func TestPurchaseRefunded(t *testing.T) {
+	subject, text, html := renderRefunded(t, refundedEmail)
+	if subject != "Refund issued: Go" {
+		t.Fatalf("subject %q", subject)
+	}
+	for _, want := range []string{"Hello, Sita,", "Go", "NPR 1,500.00", "eSewa", "RF-1", "8 October 2026, 10:00 NPT", "access to this course has ended"} {
+		if !strings.Contains(text, want) || !strings.Contains(html, want) {
+			t.Fatalf("missing %q\ntext=%s\nhtml=%s", want, text, html)
+		}
+	}
+}
+
+func TestPurchaseRefundedKeptAccessAndBlanks(t *testing.T) {
+	e := refundedEmail
+	e.AccessRevoked, e.CourseTitle, e.Name = false, "", " "
+	subject, text, html := renderRefunded(t, e)
+	if subject != "Refund issued" || !strings.HasPrefix(text, "Hello,\n") ||
+		strings.Contains(text, "has ended") || strings.Contains(html, "has ended") {
+		t.Fatalf("subject=%q text=%s html=%s", subject, text, html)
+	}
+}
+
+func TestPurchaseRefundedEscapesHTMLOnly(t *testing.T) {
+	e := refundedEmail
+	e.Reference = "<b>RF</b>"
+	_, text, html := renderRefunded(t, e)
+	if !strings.Contains(text, "<b>RF</b>") || strings.Contains(html, "<b>") {
+		t.Fatalf("text=%s html=%s", text, html)
+	}
+}

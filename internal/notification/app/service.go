@@ -29,6 +29,7 @@ type Mailer interface {
 type Renderer interface {
 	Welcome(name string) (subject, text, html string, err error)
 	PurchasePaid(e PurchasePaidEmail) (subject, text, html string, err error)
+	PurchaseRefunded(e PurchaseRefundedEmail) (subject, text, html string, err error)
 }
 
 // WelcomeInput is the data needed to welcome a newly registered user.

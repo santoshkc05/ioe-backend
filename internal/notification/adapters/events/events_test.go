@@ -24,6 +24,9 @@ type fakeSender struct {
 
 	paidCalls int
 	paid      app.PurchasePaidInput
+
+	refundedCalls int
+	refunded      app.PurchaseRefundedInput
 }
 
 func (f *fakeSender) SendWelcome(_ context.Context, in app.WelcomeInput) error {
@@ -35,6 +38,12 @@ func (f *fakeSender) SendWelcome(_ context.Context, in app.WelcomeInput) error {
 func (f *fakeSender) SendPurchasePaid(_ context.Context, in app.PurchasePaidInput) error {
 	f.paidCalls++
 	f.paid = in
+	return f.err
+}
+
+func (f *fakeSender) SendPurchaseRefunded(_ context.Context, in app.PurchaseRefundedInput) error {
+	f.refundedCalls++
+	f.refunded = in
 	return f.err
 }
 
@@ -141,5 +150,43 @@ func TestPurchasePaidReturnsRetryableFailure(t *testing.T) {
 	h, _ := newHandlers(t, &fakeSender{err: errDown})
 	if err := h.PurchasePaid(message.NewMessage("ev-1", []byte(paidPayload))); !errors.Is(err, errDown) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+const refundedPayload = `{"purchase_id":"9","user_id":"200","course_id":"11","course_title":"Go","amount_minor":150000,
+"currency":"NPR","gateway":"manual","manual_method":"cash","refund_reference":"RF-1","access_revoked":true,
+"occurred_at":"2026-10-08T04:15:00Z"}`
+
+func TestPurchaseRefundedSends(t *testing.T) {
+	s := &fakeSender{}
+	h, _ := newHandlers(t, s)
+	if err := h.PurchaseRefunded(message.NewMessage("ev-7", []byte(refundedPayload))); err != nil {
+		t.Fatal(err)
+	}
+	want := app.PurchaseRefundedInput{EventID: "ev-7", UserID: "200", CourseID: "11", CourseTitle: "Go", AmountMinor: 150000,
+		Currency: "NPR", Gateway: "manual", ManualMethod: "cash", Reference: "RF-1", AccessRevoked: true,
+		RefundedAt: time.Date(2026, 10, 8, 4, 15, 0, 0, time.UTC)}
+	if s.refundedCalls != 1 || s.refunded != want {
+		t.Fatalf("calls=%d in=%+v", s.refundedCalls, s.refunded)
+	}
+}
+
+func TestPurchaseRefundedDropsAndRetries(t *testing.T) {
+	s := &fakeSender{}
+	h, logs := newHandlers(t, s)
+	if err := h.PurchaseRefunded(message.NewMessage("ev-1", []byte("not json"))); err != nil || s.refundedCalls != 0 {
+		t.Fatalf("err=%v calls=%d", err, s.refundedCalls)
+	}
+	s.err = fmt.Errorf("%w: unknown user", app.ErrPermanent)
+	if err := h.PurchaseRefunded(message.NewMessage("ev-2", []byte(refundedPayload))); err != nil {
+		t.Fatalf("permanent err = %v", err)
+	}
+	if !strings.Contains(logs.String(), "invalid_payload") || !strings.Contains(logs.String(), "permanent") {
+		t.Fatalf("logs = %s", logs)
+	}
+	errDown := errors.New("down")
+	s.err = errDown
+	if err := h.PurchaseRefunded(message.NewMessage("ev-3", []byte(refundedPayload))); !errors.Is(err, errDown) {
+		t.Fatalf("retryable err = %v", err)
 	}
 }

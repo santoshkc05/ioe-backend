@@ -1,0 +1,4 @@
+<p>Hello{{with .Name}}, {{.}}{{end}},</p>
+<p>Your payment{{with .CourseTitle}} for {{.}}{{end}} was refunded.{{if .AccessRevoked}} Your access to this course has ended.{{end}}</p>
+<p>Amount: {{.Amount}}<br>Method: {{.Method}}<br>Reference: {{.Reference}}<br>Date: {{.RefundedOn}}</p>
+<p>The IOE team</p>

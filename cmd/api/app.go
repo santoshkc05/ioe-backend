@@ -121,6 +121,7 @@ func registerNotifications(fw *outbox.Forwarder, cfg config.Config, users notifi
 	}
 	fw.Handle(identitydomain.UserRegistered{}.EventName(), handlers.Welcome)
 	fw.Handle(paymentdomain.PurchasePaid{}.EventName(), handlers.PurchasePaid)
+	fw.Handle(paymentdomain.PurchaseRefunded{}.EventName(), handlers.PurchaseRefunded)
 	return nil
 }
 

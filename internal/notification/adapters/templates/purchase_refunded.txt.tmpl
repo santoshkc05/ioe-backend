@@ -1,0 +1,10 @@
+Hello{{with .Name}}, {{.}}{{end}},
+
+Your payment{{with .CourseTitle}} for {{.}}{{end}} was refunded.{{if .AccessRevoked}} Your access to this course has ended.{{end}}
+
+Amount:    {{.Amount}}
+Method:    {{.Method}}
+Reference: {{.Reference}}
+Date:      {{.RefundedOn}}
+
+The IOE team
