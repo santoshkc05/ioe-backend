@@ -1605,19 +1605,45 @@ func TestManualPaymentEndToEnd(t *testing.T) {
 		t.Fatalf("student reads admin list: %d", resp.StatusCode)
 	}
 
+	purchaseID := body["items"].([]any)[0].(map[string]any)["id"].(string)
+	refund := `{"reference":"RF-77","note":"duplicate"}`
+	if resp, body = c.do(http.MethodPost, "/v1/purchases/"+purchaseID+"/refund", refund, student); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("student refund: %d %v", resp.StatusCode, body)
+	}
+	resp, body = c.do(http.MethodPost, "/v1/purchases/"+purchaseID+"/refund", refund, admin)
+	if p := body["purchase"].(map[string]any); resp.StatusCode != http.StatusOK || p["status"] != "refunded" ||
+		p["refund_reference"] != "RF-77" || p["revoke_pending"] != false {
+		t.Fatalf("refund: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/purchases/"+purchaseID+"/refund", refund, admin); resp.StatusCode != http.StatusConflict || body["type"] != "not_refundable" {
+		t.Fatalf("second refund: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodGet, "/v1/courses/"+courseID+"/lectures/"+lectureID+"/content", "", student); resp.StatusCode != http.StatusForbidden || body["type"] != "enrollment_required" {
+		t.Fatalf("read after refund: %d %v", resp.StatusCode, body)
+	}
+	if resp, body = c.do(http.MethodPost, "/v1/purchases/"+purchaseID+"/confirm", "", student); resp.StatusCode != http.StatusOK {
+		t.Fatalf("confirm refunded manual purchase: %d %v", resp.StatusCode, body)
+	}
+
 	deadline := time.After(30 * time.Second)
-	for {
+	var paidSeen, refundedSeen bool
+	for !paidSeen || !refundedSeen {
 		select {
 		case got := <-sent:
-			if !strings.HasPrefix(got.key, "ioe:payment.purchase.paid:") {
-				continue // welcome emails
+			switch {
+			case strings.HasPrefix(got.key, "ioe:payment.purchase.paid:"):
+				if got.recipient != "student@example.com" || got.subject != "Payment received: Go" || !strings.HasSuffix(got.key, ":paid-v1") {
+					t.Fatalf("paid email %+v", got)
+				}
+				paidSeen = true
+			case strings.HasPrefix(got.key, "ioe:payment.purchase.refunded:"):
+				if got.recipient != "student@example.com" || got.subject != "Refund issued: Go" || !strings.HasSuffix(got.key, ":refunded-v1") {
+					t.Fatalf("refund email %+v", got)
+				}
+				refundedSeen = true
 			}
-			if got.recipient != "student@example.com" || got.subject != "Payment received: Go" || !strings.HasSuffix(got.key, ":paid-v1") {
-				t.Fatalf("paid email %+v", got)
-			}
-			return
 		case <-deadline:
-			t.Fatal("paid email not enqueued")
+			t.Fatalf("emails not enqueued: paid=%v refunded=%v", paidSeen, refundedSeen)
 		}
 	}
 }
