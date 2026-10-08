@@ -184,3 +184,36 @@ func TestUserProgress(t *testing.T) {
 		}
 	}
 }
+
+func TestIsComplete(t *testing.T) {
+	f := newFixture(t)
+	complete := func(who id.ID) bool {
+		t.Helper()
+		ok, err := f.svc.IsComplete(ctx, course, who)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return ok
+	}
+	if complete(student.UserID) {
+		t.Fatal("complete before any progress")
+	}
+	if err := f.svc.RecordLecture(ctx, student, course, 50, student.UserID, domain.LectureStateCompleted, 0); err != nil {
+		t.Fatal(err)
+	}
+	if complete(student.UserID) {
+		t.Fatal("complete with one of two lectures done")
+	}
+	if err := f.svc.RecordLecture(ctx, student, course, 51, student.UserID, domain.LectureStateCompleted, 0); err != nil {
+		t.Fatal(err)
+	}
+	if !complete(student.UserID) {
+		t.Fatal("not complete with both lectures done")
+	}
+	if complete(other.UserID) {
+		t.Fatal("another user's progress counted")
+	}
+	if _, err := f.svc.IsComplete(ctx, missing, student.UserID); !errors.Is(err, app.ErrNotFound) {
+		t.Fatalf("missing course error = %v", err)
+	}
+}

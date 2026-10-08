@@ -79,6 +79,28 @@ func (s *Service) CourseProgress(ctx context.Context, p auth.Principal, courseID
 	return cp, nil
 }
 
+// IsComplete reports whether userID completed every lecture of the course. It applies no
+// authorization: callers decide who may ask. ErrNotFound when the course does not exist.
+func (s *Service) IsComplete(ctx context.Context, courseID, userID id.ID) (bool, error) {
+	c, err := s.courses.CourseFacts(ctx, courseID)
+	if err != nil {
+		return false, err
+	}
+	var (
+		cp    domain.CourseProgress
+		found bool
+	)
+	err = s.tx.RunInTx(ctx, func(r Repository) error {
+		var err error
+		cp, found, err = r.FindCourse(ctx, courseID, userID)
+		return err
+	})
+	if err != nil || !found {
+		return false, err
+	}
+	return cp.CompletedAll(c.LectureIDs), nil
+}
+
 // UserProgress returns userID's progress in every course and their daily activity.
 func (s *Service) UserProgress(ctx context.Context, p auth.Principal, userID id.ID) ([]domain.CourseProgress, []domain.ActivityDay, error) {
 	if err := domain.AuthorizeReadUser(p, userID); err != nil {

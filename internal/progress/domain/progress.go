@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"slices"
 	"time"
 
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
@@ -55,6 +56,21 @@ func (p CourseProgress) CompletedLectureIDs() []id.ID {
 		}
 	}
 	return out
+}
+
+// CompletedAll reports whether every lecture in lectureIDs is completed. A course without
+// lectures is never complete.
+func (p CourseProgress) CompletedAll(lectureIDs []id.ID) bool {
+	if len(lectureIDs) == 0 {
+		return false
+	}
+	done := p.CompletedLectureIDs()
+	for _, l := range lectureIDs {
+		if !slices.Contains(done, l) {
+			return false
+		}
+	}
+	return true
 }
 
 // ActivityDay counts the distinct lectures whose latest write fell on Date (UTC midnight).
