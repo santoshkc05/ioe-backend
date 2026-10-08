@@ -36,7 +36,7 @@ func (r *TxRunner) RunInTx(ctx context.Context, fn func(app.Repos) error) error 
 			Courses:    courses{q: q},
 			Contents:   contents{q: q, clock: r.clock},
 			Events:     events{tx: tx},
-			Categories: categories{tx: tx, q: q},
+			Categories: categories{q: q},
 		})
 	})
 }

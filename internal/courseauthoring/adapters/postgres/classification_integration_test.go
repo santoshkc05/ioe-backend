@@ -82,39 +82,25 @@ func TestCategoryRepository(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	web := f.seedCategory(t, "Web")
-	err := f.tx.RunInTx(ctx, func(r app.Repos) error {
-		dupName, _ := domain.NewCategory(f.ids.New(), "WEB", f.now)
-		dupName.Slug = "other"
-		if err := r.Categories.Insert(ctx, dupName); !errors.Is(err, app.ErrCategoryExists) {
-			t.Errorf("duplicate name = %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	// A conflict aborts the transaction, so each case runs in its own and returns the error.
+	insert := func(name, slug string) error {
+		k, _ := domain.NewCategory(f.ids.New(), name, f.now)
+		k.Slug = slug
+		return f.tx.RunInTx(ctx, func(r app.Repos) error { return r.Categories.Insert(ctx, k) })
 	}
-	err = f.tx.RunInTx(ctx, func(r app.Repos) error {
-		dupSlug, _ := domain.NewCategory(f.ids.New(), "Other", f.now)
-		dupSlug.Slug = "web"
-		if err := r.Categories.Insert(ctx, dupSlug); !errors.Is(err, app.ErrCategoryExists) {
-			t.Errorf("duplicate slug = %v", err)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
+	if err := insert("WEB", "other"); !errors.Is(err, app.ErrCategoryExists) {
+		t.Errorf("duplicate name = %v", err)
+	}
+	if err := insert("Other", "web"); !errors.Is(err, app.ErrCategoryExists) {
+		t.Errorf("duplicate slug = %v", err)
 	}
 	data := f.seedCategory(t, "Data")
-	if err := f.tx.RunInTx(ctx, func(r app.Repos) error {
-		if err := data.Rename("web"); err != nil {
-			return err
-		}
-		if err := r.Categories.Update(ctx, data); !errors.Is(err, app.ErrCategoryExists) {
-			t.Errorf("rename onto taken = %v", err)
-		}
-		return nil
-	}); err != nil {
+	taken := data
+	if err := taken.Rename("web"); err != nil {
 		t.Fatal(err)
+	}
+	if err := f.tx.RunInTx(ctx, func(r app.Repos) error { return r.Categories.Update(ctx, taken) }); !errors.Is(err, app.ErrCategoryExists) {
+		t.Errorf("rename onto taken = %v", err)
 	}
 	if err := f.tx.RunInTx(ctx, func(r app.Repos) error {
 		if err := data.Rename("Data Science"); err != nil {

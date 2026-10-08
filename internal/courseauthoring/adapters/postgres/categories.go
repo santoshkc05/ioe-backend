@@ -3,18 +3,13 @@ package postgres
 import (
 	"context"
 
-	"github.com/jackc/pgx/v5"
-
 	"github.com/santoshkc2200/ioe-backend/internal/courseauthoring/adapters/postgres/sqlcgen"
 	"github.com/santoshkc2200/ioe-backend/internal/courseauthoring/app"
 	"github.com/santoshkc2200/ioe-backend/internal/courseauthoring/domain"
 	"github.com/santoshkc2200/ioe-backend/internal/platform/id"
 )
 
-type categories struct {
-	tx pgx.Tx
-	q  *sqlcgen.Queries
-}
+type categories struct{ q *sqlcgen.Queries }
 
 // categoryConflict maps a unique violation on name or slug to app.ErrCategoryExists.
 func categoryConflict(err error) error {
@@ -25,33 +20,19 @@ func categoryConflict(err error) error {
 }
 
 func (r categories) Insert(ctx context.Context, c domain.Category) error {
-	sp, err := r.tx.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = sp.Rollback(ctx) }()
-	if err := r.q.WithTx(sp).InsertCategory(ctx, sqlcgen.InsertCategoryParams{
-		ID: int64(c.ID), Name: c.Name, Slug: c.Slug, CreatedAt: c.CreatedAt,
-	}); err != nil {
-		return categoryConflict(err)
-	}
-	return sp.Commit(ctx)
+	return categoryConflict(r.q.InsertCategory(ctx, sqlcgen.InsertCategoryParams{
+		ID: int64(c.ID), Name: c.Name, Slug: c.Slug, CreatedAt: c.CreatedAt}))
 }
 
 func (r categories) Update(ctx context.Context, c domain.Category) error {
-	sp, err := r.tx.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = sp.Rollback(ctx) }()
-	n, err := r.q.WithTx(sp).UpdateCategory(ctx, sqlcgen.UpdateCategoryParams{ID: int64(c.ID), Name: c.Name, Slug: c.Slug})
+	n, err := r.q.UpdateCategory(ctx, sqlcgen.UpdateCategoryParams{ID: int64(c.ID), Name: c.Name, Slug: c.Slug})
 	if err != nil {
 		return categoryConflict(err)
 	}
 	if n == 0 {
 		return app.ErrNotFound
 	}
-	return sp.Commit(ctx)
+	return nil
 }
 
 func (r categories) Delete(ctx context.Context, categoryID id.ID) error {
