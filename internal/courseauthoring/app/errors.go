@@ -19,6 +19,8 @@ var (
 	ErrDuplicateClientBlockID = contentblocks.ErrDuplicateClientBlockID
 	ErrInvalidMediaReference  = errors.New("invalid media reference")
 	ErrInvalidQuizReference   = errors.New("invalid quiz reference")
+	ErrCategoryExists         = errors.New("category name or slug already exists")
+	ErrUnknownCategory        = errors.New("unknown category")
 )
 
 // RevisionConflictError is returned when base_revision is stale. Current is the

@@ -34,6 +34,8 @@ type CreateCourseInput struct {
 
 type DetailsInput struct {
 	Title, Description, Level, ThumbnailURL string
+	CategoryIDs                             *[]id.ID  // nil leaves the course's categories unchanged
+	Tags                                    *[]string // nil leaves the course's tags unchanged
 }
 
 type AddLectureInput struct {
@@ -246,8 +248,32 @@ func (s *CourseService) UpdateDetails(ctx context.Context, p auth.Principal, cou
 	if err != nil {
 		return err
 	}
-	_, err = s.mutate(ctx, p, courseID, func(_ Repos, c *domain.Course) error {
-		return c.UpdateDetails(title, in.Description, in.Level, in.ThumbnailURL, s.clock.Now())
+	_, err = s.mutate(ctx, p, courseID, func(r Repos, c *domain.Course) error {
+		now := s.clock.Now()
+		if err := c.UpdateDetails(title, in.Description, in.Level, in.ThumbnailURL, now); err != nil {
+			return err
+		}
+		if in.CategoryIDs == nil && in.Tags == nil {
+			return nil
+		}
+		categoryIDs, tagList := c.CategoryIDs(), c.Tags
+		if in.CategoryIDs != nil {
+			categoryIDs = *in.CategoryIDs
+		}
+		if in.Tags != nil {
+			tagList = *in.Tags
+		}
+		if err := c.SetClassification(categoryIDs, tagList, now); err != nil {
+			return err
+		}
+		ok, err := r.Categories.ExistAll(ctx, c.CategoryIDs())
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return ErrUnknownCategory
+		}
+		return nil
 	})
 	return err
 }

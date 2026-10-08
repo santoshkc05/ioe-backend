@@ -13,11 +13,12 @@ import (
 // CourseRepository stores the Course aggregate. FindByID returns ErrNotFound;
 // Update returns ErrConcurrentModification when c.Version is stale and increments
 // c.Version on success. Insert sets c.Version to 1. ListPublished returns up to q.Limit
-// published courses with ID below q.After (any ID when q.After is zero) matching the
-// filters from their live versions, ordered by ID descending. ListInReview returns
-// in_review courses, longest waiting first. LockForUpdate locks the course row until the
-// transaction ends; it returns ErrNotFound when the course does not exist. ListReviews
-// returns a course's review trail oldest first.
+// published courses matching the filters and, when q.Q is set, the search text, from their
+// live versions. Without q.Q they are ordered by ID descending and start below q.After; with
+// q.Q they are ordered by rank then ID, descending, and start below (q.AfterRank, q.After).
+// Any start when q.After is zero. ListInReview returns in_review courses, longest waiting
+// first. LockForUpdate locks the course row until the transaction ends; it returns ErrNotFound
+// when the course does not exist. ListReviews returns a course's review trail oldest first.
 //
 // FindVersion returns the course as published version number: details, sections and
 // lectures from the snapshot, identity, Live and CreatedAt from the course, UpdatedAt the
@@ -88,11 +89,32 @@ type EventPublisher interface {
 	Publish(ctx context.Context, events ...domain.Event) error
 }
 
+// CategoryRepository stores categories. Insert and Update return ErrCategoryExists when the
+// name (ignoring case) or the slug is taken. Update, Delete and Get return ErrNotFound for an
+// unknown category. Delete also removes the category from every course and published version.
+// List orders by name and counts, per category, the courses whose live version has it.
+// ExistAll reports whether every ID names a category; it is true for no IDs.
+type CategoryRepository interface {
+	Insert(ctx context.Context, c domain.Category) error
+	Update(ctx context.Context, c domain.Category) error
+	Delete(ctx context.Context, categoryID id.ID) error
+	Get(ctx context.Context, categoryID id.ID) (domain.Category, error)
+	List(ctx context.Context) ([]CategoryWithCount, error)
+	ExistAll(ctx context.Context, ids []id.ID) (bool, error)
+}
+
+// CategoryWithCount is a category and how many live courses are filed under it.
+type CategoryWithCount struct {
+	domain.Category
+	CourseCount int
+}
+
 // Repos are bound to one transaction.
 type Repos struct {
-	Courses  CourseRepository
-	Contents LectureContentRepository
-	Events   EventPublisher
+	Courses    CourseRepository
+	Contents   LectureContentRepository
+	Events     EventPublisher
+	Categories CategoryRepository
 }
 
 // TxRunner commits when fn returns nil and rolls back otherwise.
