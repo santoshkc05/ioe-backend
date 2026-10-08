@@ -299,3 +299,27 @@ func TestEnrollPurchasedSurvivesConcurrentFirstEnrollment(t *testing.T) {
 		t.Fatalf("events = %v", f.store.published)
 	}
 }
+
+func TestCancelPurchased(t *testing.T) {
+	f := newFixture(t)
+	if err := f.svc.EnrollPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.svc.CancelPurchased(ctx, paidCourse, student.UserID); err != nil {
+		t.Fatal(err)
+	}
+	e, found, _ := f.store.find(paidCourse, student.UserID)
+	if !found || e.Status != domain.StatusCanceled || e.CancelReason != app.RefundedReason {
+		t.Fatalf("e=%+v found=%v", e, found)
+	}
+	events := len(f.store.published)
+	if err := f.svc.CancelPurchased(ctx, paidCourse, student.UserID); err != nil || len(f.store.published) != events {
+		t.Fatalf("repeat err=%v events=%d", err, len(f.store.published))
+	}
+	if err := f.svc.CancelPurchased(ctx, paidCourse, other.UserID); err != nil {
+		t.Fatalf("missing enrollment err = %v", err)
+	}
+	if err := f.svc.CancelPurchased(ctx, 404, student.UserID); err != nil {
+		t.Fatalf("missing course err = %v", err)
+	}
+}

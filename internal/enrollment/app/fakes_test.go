@@ -29,6 +29,19 @@ type memStore struct {
 
 func newMemStore() *memStore { return &memStore{rows: map[key]domain.Enrollment{}} }
 
+func (m *memStore) find(courseID, userID id.ID) (domain.Enrollment, bool, error) {
+	var (
+		e     domain.Enrollment
+		found bool
+	)
+	err := m.RunInTx(context.Background(), func(r app.Repos) error {
+		var err error
+		e, found, err = r.Enrollments.FindByCourseAndUser(context.Background(), courseID, userID)
+		return err
+	})
+	return e, found, err
+}
+
 func (m *memStore) RunInTx(_ context.Context, fn func(app.Repos) error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()

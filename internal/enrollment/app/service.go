@@ -96,6 +96,9 @@ func (s *Service) enroll(ctx context.Context, courseID, userID id.ID) (domain.En
 	return e, activated, nil
 }
 
+// RefundedReason is the cancel reason of an enrollment ended by a refund.
+const RefundedReason = "refunded"
+
 // Cancel ends userID's enrollment. The enrolled user may always cancel their own;
 // anyone else must manage the course.
 func (s *Service) Cancel(ctx context.Context, p auth.Principal, courseID, userID id.ID, reason string) (domain.Enrollment, error) {
@@ -108,6 +111,20 @@ func (s *Service) Cancel(ctx context.Context, p auth.Principal, courseID, userID
 			return domain.Enrollment{}, err
 		}
 	}
+	return s.cancel(ctx, courseID, userID, reason)
+}
+
+// CancelPurchased ends userID's enrollment after the payment context recorded a refund. It
+// applies no principal check. A missing or already canceled enrollment is success.
+func (s *Service) CancelPurchased(ctx context.Context, courseID, userID id.ID) error {
+	_, err := s.cancel(ctx, courseID, userID, RefundedReason)
+	if errors.Is(err, ErrNotFound) {
+		return nil
+	}
+	return err
+}
+
+func (s *Service) cancel(ctx context.Context, courseID, userID id.ID, reason string) (domain.Enrollment, error) {
 	var e domain.Enrollment
 	err := s.tx.RunInTx(ctx, func(r Repos) error {
 		var (
