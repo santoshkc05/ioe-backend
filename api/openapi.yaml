@@ -1939,7 +1939,129 @@ paths:
         "409": { $ref: "#/components/responses/Problem" }
         "413": { $ref: "#/components/responses/Problem" }
         "415": { $ref: "#/components/responses/Problem" }
+  /v1/courses/{courseID}/certificate-policy:
+    get:
+      summary: Read a course's certificate policy
+      description: Course managers only. A course without a policy reports `off`.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "200":
+          description: The policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificatePolicy" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    put:
+      summary: Set a course's certificate policy
+      description: >
+        Course managers only. `completion_and_exam` requires an `exam_id` that belongs to the
+        course; the other modes reject `exam_id`. Certificates already issued are unaffected.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/CertificatePolicyRequest" }
+      responses:
+        "200":
+          description: The stored policy
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificatePolicy" }
+        "400": { $ref: "#/components/responses/Problem" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "403": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/courses/{courseID}/certificate:
+    post:
+      summary: Claim the caller's certificate for a course
+      description: >
+        Issues a certificate when the caller is actively enrolled and meets the course's policy.
+        Returns 201 for a new certificate and 200 with the existing one on a repeat claim.
+        Refusals are 409 with a problem `type` of `certificates_disabled`, `not_enrolled`,
+        `progress_incomplete` or `exam_not_passed`.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "200":
+          description: The caller already held a valid certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "201":
+          description: Certificate issued
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "409": { $ref: "#/components/responses/Problem" }
+        "500": { $ref: "#/components/responses/InternalError" }
+    get:
+      summary: Read the caller's valid certificate for a course
+      description: 404 when the caller holds no valid certificate, including after a refund revoked it.
+      security:
+        - bearer: []
+      parameters:
+        - $ref: "#/components/parameters/CourseID"
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Certificate" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/me/certificates:
+    get:
+      summary: List the caller's certificates
+      description: Newest first, revoked ones included.
+      security:
+        - bearer: []
+      responses:
+        "200":
+          description: The caller's certificates
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateList" }
+        "401": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/InternalError" }
+  /v1/certificates/{code}:
+    get:
+      summary: Verify a certificate by code
+      description: >
+        Public; no credentials. Reports whether the certificate is valid or revoked and shows
+        only the student name, course title and issue time. Rate limited per client IP.
+        A malformed or unknown code is 404.
+      parameters:
+        - { name: code, in: path, required: true, schema: { type: string, pattern: "^[A-Z2-7]{26}$" } }
+      responses:
+        "200":
+          description: The certificate
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CertificateVerification" }
+        "404": { $ref: "#/components/responses/Problem" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "429": { $ref: "#/components/responses/Problem" }
         "500": { $ref: "#/components/responses/InternalError" }
   /v1/me/purchases:
     get:
@@ -2721,6 +2843,46 @@ components:
         refund_reference: { type: [string, "null"], description: eSewa portal or bank reference of the refund }
         refund_note: { type: [string, "null"] }
         revoke_pending: { type: boolean, description: True while a refunded purchase's enrollment cancel has not succeeded yet }
+    CertificatePolicyRequest:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [off, completion, completion_and_exam] }
+        exam_id: { type: [string, "null"], description: Required with completion_and_exam; the exam must belong to the course }
+    CertificatePolicy:
+      type: object
+      required: [mode]
+      properties:
+        mode: { type: string, enum: [off, completion, completion_and_exam] }
+        exam_id: { type: string, description: Present only with completion_and_exam }
+    Certificate:
+      type: object
+      required: [id, code, course_id, course_title, student_name, issued_at, status]
+      properties:
+        id: { type: string }
+        code: { type: string, pattern: "^[A-Z2-7]{26}$" }
+        course_id: { type: string }
+        course_title: { type: string, description: Snapshot at issue time }
+        student_name: { type: string, description: Snapshot at issue time }
+        issued_at: { type: string, format: date-time }
+        status: { type: string, enum: [valid, revoked] }
+    CertificateList:
+      type: object
+      required: [items]
+      properties:
+        items:
+          type: array
+          items: { $ref: "#/components/schemas/Certificate" }
+    CertificateVerification:
+      type: object
+      required: [code, student_name, course_title, issued_at, status]
+      properties:
+        code: { type: string }
+        student_name: { type: string }
+        course_title: { type: string }
+        issued_at: { type: string, format: date-time }
+        status: { type: string, enum: [valid, revoked] }
     PurchasePage:
       type: object
       required: [items]
